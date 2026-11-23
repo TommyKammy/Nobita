@@ -67,6 +67,8 @@ export const icon = {
   more: wrap('<circle cx="4.5" cy="10" r="1.2" fill="currentColor" stroke="none"/><circle cx="10" cy="10" r="1.2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10" r="1.2" fill="currentColor" stroke="none"/>'),
   arrowLeft: wrap('<path d="M16 10H4M8.5 5.5 4 10l4.5 4.5"/>'),
   arrowRight: wrap('<path d="M4 10h12M11.5 5.5 16 10l-4.5 4.5"/>'),
+  arrowUp: wrap('<path d="M10 16V4M5.5 8.5 10 4l4.5 4.5"/>'),
+  arrowDown: wrap('<path d="M10 4v12M5.5 11.5 10 16l4.5-4.5"/>'),
   x: wrap('<path d="m5 5 10 10M15 5 5 15"/>'),
   external: wrap('<path d="M11 4h5v5M16 4l-7 7M8 5H5.5A1.5 1.5 0 0 0 4 6.5v8A1.5 1.5 0 0 0 5.5 16h8a1.5 1.5 0 0 0 1.5-1.5V12"/>'),
   table: wrap('<rect x="2.5" y="3.5" width="15" height="13" rx="2.5"/><path d="M2.5 8h15M8 3.5v13M13 3.5v13M2.5 12.5h15"/>'),

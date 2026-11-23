@@ -2,7 +2,7 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **41.7 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **42.2 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
 > `Mod-Backspace` are now implemented. Statuses below reflect that pass.
@@ -78,8 +78,8 @@ in Nobita's toolbar or block menu.
 | Align left / center / right | `Mod-Shift-L/E/R` | ✅ | Toolbar + slash + hotkeys |
 | Bold / Italic / Underline / Strikethrough | `Mod-B/I/U`, `Mod-Shift-S` | 🟡 | Available in toolbar/hotkeys, not in `/` |
 | Today / Tomorrow / Yesterday / Now | — | ✅ | Inserts local `YYYY-MM-DD` / `YYYY-MM-DD HH:mm` |
-| Move Up / Move Down | — | 🟡 | Hotkeys and block menu exist; not in `/` |
-| Copy / Duplicate / Delete line | — | 🟡 | Duplicate/Delete/Copy as Markdown in block menu |
+| Move Up / Move Down | — | ✅ | Hotkeys and `/` |
+| Copy / Duplicate / Delete line | — | ✅ | Copy in `/` and block menu; Duplicate/Delete and Copy as Markdown in block menu |
 
 ### 1.2 Page, media, embeds and math
 
@@ -160,7 +160,7 @@ in Nobita's toolbar or block menu.
 | Create Table from selected blocks | ❌ | Convert selection to database rows |
 | Create Linked Doc | ❌ | Page-level feature |
 | Comment | ❌ | No comment model |
-| Copy block | 🟡 | "Copy as Markdown"; no standard block clipboard action |
+| Copy block | ✅ | Standard text/HTML copy in the block menu and `/`; Copy as Markdown remains |
 | Duplicate | ✅ | Block menu |
 | Delete | ✅ | Block menu |
 | Indent / outdent | ✅ | Block menu + Tab |
@@ -299,14 +299,15 @@ the editor core just for parity:
 - ✅ **Heading 4–6** in slash menu, block menu, `Mod-Alt-4..6`, CSS, Markdown
   and HTML.
 - ✅ **`Mod-Backspace`** dedents the focused block to the document root.
+- ✅ **Move Up / Move Down** in `/`, reusing the sibling-aware `moveBlock`
+  command.
+- ✅ **Standard block Copy** in `/` and the block menu, using the same
+  text/HTML/private-JSON serialization as selection copy.
 
 ### P0 — remaining small wins
 
 1. **Divider + conversion aliases.**
    - `Mod-Alt-D`, `Mod-Shift-D`; add `Mod-Shift-0–6`, `8`, `9` aliases.
-   - Est. <0.5 KB.
-2. **Move Up / Move Down in `/`, and standard block Copy.**
-   - Reuse existing `moveBlock` and clipboard serialization.
    - Est. <0.5 KB.
 
 ### P1 — convenient, moderate work
@@ -335,8 +336,6 @@ the editor core just for parity:
 7. **Bracket auto-pair and backtick-wrap-selection.**
    - Text-only, small but edge-case heavy.
    - Est. 1–2 KB.
-8. **Block Copy (standard clipboard) in the block menu.**
-   - Est. <0.5 KB.
 
 ### P2 — large or scope expansion
 
@@ -359,6 +358,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 41.7 KB gzip. The four implemented P0 items added about
-1.2 KB gzip; the remaining two small wins should stay under ~1 KB. That keeps
-the bundle in the low-40s while closing the most visible interaction gaps.
+The current editor is 42.2 KB gzip. The implemented P0 items added about
+1.7 KB gzip; the remaining divider/alias item should stay under ~0.5 KB. That
+keeps the bundle in the low-40s while closing the most visible interaction gaps.

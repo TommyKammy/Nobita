@@ -106,6 +106,8 @@ interface DragState {
 
 const SANS = 'Inter, ui-sans-serif, system-ui, sans-serif';
 
+type ClipboardPayload = ReturnType<typeof serializeBlocksForClipboard>;
+
 function shortcutLabel(mod: boolean, key: string): string {
   return `${mod ? '⌘' : ''}${key}`;
 }
@@ -1571,19 +1573,110 @@ export class NobitaEditor implements BlockHost {
     }
   }
 
-  #moveBlockVertically(blockId: string, direction: 'before' | 'after'): void {
+  #moveBlockVertically(
+    blockId: string,
+    direction: 'before' | 'after',
+    offset?: number
+  ): void {
     const location = locateBlock(this.store.doc.blocks, blockId);
     if (!location) return;
+    const point: Point = {
+      blockId,
+      offset: offset ?? this.#pointFromCaret(blockId).offset,
+    };
     const sibling = location.siblings[location.index + (direction === 'before' ? -1 : 1)];
-    if (!sibling) return;
-    const point = this.#pointFromCaret(blockId);
+    if (!sibling) {
+      this.#focusBlock(blockId, point.offset);
+      return;
+    }
     this.#commit(moveBlock(this.store.doc, blockId, sibling.id, direction), {
       anchor: point,
       focus: point,
     });
+    this.#focusBlock(blockId, point.offset);
   }
 
-  #indent(blockId: string): void {    const next = indentBlock(this.store.doc, blockId);
+  #copyBlockToClipboard(blockId: string, offset: number): void {
+    const block = findBlock(this.store.doc.blocks, blockId);
+    if (!block) return;
+    const copy = duplicateBlockTree(block);
+    void this.#writeBlocksToClipboard([copy])
+      .catch(() => undefined)
+      .finally(() => {
+        this.#focusBlock(blockId, offset);
+      });
+  }
+
+  async #writeBlocksToClipboard(blocks: Block[]): Promise<void> {
+    const payload = serializeBlocksForClipboard(blocks);
+    if (await this.#writeModernClipboard(payload, true)) return;
+    if (this.#writeLegacyClipboard(payload)) return;
+    if (await this.#writeModernClipboard(payload, false)) return;
+    try {
+      await navigator.clipboard?.writeText(payload.text);
+    } catch {
+      // Clipboard access can be denied; leave the document untouched.
+    }
+  }
+
+  async #writeModernClipboard(
+    payload: ClipboardPayload,
+    includeJson: boolean
+  ): Promise<boolean> {
+    const clipboard = navigator.clipboard;
+    if (!clipboard?.write || typeof ClipboardItem === 'undefined') return false;
+    const data: Record<string, Blob> = {
+      'text/plain': new Blob([payload.text], { type: 'text/plain' }),
+      'text/html': new Blob([payload.html], { type: 'text/html' }),
+    };
+    if (includeJson) {
+      data['application/x-nobita+json'] = new Blob([payload.json], {
+        type: 'application/x-nobita+json',
+      });
+    }
+    try {
+      await clipboard.write([new ClipboardItem(data)]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  #writeLegacyClipboard(payload: ClipboardPayload): boolean {
+    if (typeof document.execCommand !== 'function' || !document.body) {
+      return false;
+    }
+    const field = document.createElement('textarea');
+    field.value = payload.text;
+    field.setAttribute('readonly', '');
+    field.style.position = 'fixed';
+    field.style.left = '-9999px';
+    field.style.top = '0';
+    field.style.opacity = '0';
+    field.style.pointerEvents = 'none';
+    const onCopy = (event: ClipboardEvent): void => {
+      if (!event.clipboardData) return;
+      event.preventDefault();
+      event.clipboardData.setData('text/plain', payload.text);
+      event.clipboardData.setData('text/html', payload.html);
+      event.clipboardData.setData('application/x-nobita+json', payload.json);
+    };
+    document.addEventListener('copy', onCopy, true);
+    document.body.append(field);
+    try {
+      field.focus();
+      field.select();
+      return document.execCommand('copy');
+    } catch {
+      return false;
+    } finally {
+      field.remove();
+      document.removeEventListener('copy', onCopy, true);
+    }
+  }
+
+  #indent(blockId: string): void {
+    const next = indentBlock(this.store.doc, blockId);
     if (next === this.store.doc) return;
     const point = this.#pointFromCaret(blockId);
     this.#commit(next, { anchor: point, focus: point });
@@ -2147,7 +2240,8 @@ export class NobitaEditor implements BlockHost {
       {
         id: 'table',
         label: 'Table',
-        description: 'Simple rows and columns',        icon: icon.table,
+        description: 'Simple rows and columns',
+        icon: icon.table,
         group: 'Data',
         keywords: ['grid', 'spreadsheet', 'sheet', 'rows'],
         action: () => {
@@ -2169,6 +2263,46 @@ export class NobitaEditor implements BlockHost {
           this.#convertBlock(blockId, 'database', {
             database: createDatabaseData({ variant: 'database' }),
           });
+        },
+      }
+    );
+
+    const slashOffset = slash?.start ?? this.#pointFromCaret(blockId).offset;
+    items.push(
+      {
+        id: 'move-up',
+        label: 'Move Up',
+        description: 'Move this block one position up',
+        icon: icon.arrowUp,
+        group: 'Actions',
+        keywords: ['move', 'up', 'moveup', 'shift', 'reorder'],
+        action: () => {
+          if (slash) this.#removeSlashQuery(slash);
+          this.#moveBlockVertically(blockId, 'before', slashOffset);
+        },
+      },
+      {
+        id: 'move-down',
+        label: 'Move Down',
+        description: 'Move this block one position down',
+        icon: icon.arrowDown,
+        group: 'Actions',
+        keywords: ['move', 'down', 'movedown', 'shift', 'reorder'],
+        action: () => {
+          if (slash) this.#removeSlashQuery(slash);
+          this.#moveBlockVertically(blockId, 'after', slashOffset);
+        },
+      },
+      {
+        id: 'copy',
+        label: 'Copy',
+        description: 'Copy this block to the clipboard',
+        icon: icon.copy,
+        group: 'Actions',
+        keywords: ['copy', 'clipboard', 'duplicate'],
+        action: () => {
+          if (slash) this.#removeSlashQuery(slash);
+          this.#copyBlockToClipboard(blockId, slashOffset);
         },
       }
     );
@@ -2215,6 +2349,17 @@ export class NobitaEditor implements BlockHost {
 
     items.push(
       {
+        id: 'copy',
+        label: 'Copy',
+        description: 'Copy this block to the clipboard',
+        icon: icon.copy,
+        group: 'Actions',
+        action: () => {
+          const offset = this.#pointFromCaret(blockId).offset;
+          this.#copyBlockToClipboard(blockId, offset);
+        },
+      },
+      {
         id: 'duplicate',
         label: 'Duplicate',
         icon: icon.duplicate,
@@ -2229,7 +2374,7 @@ export class NobitaEditor implements BlockHost {
         },
       },
       {
-        id: 'copy',
+        id: 'copy-markdown',
         label: 'Copy as Markdown',
         icon: icon.copy,
         group: 'Actions',

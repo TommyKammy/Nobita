@@ -209,6 +209,11 @@ Copy writes three representations:
 - `text/html` — semantic HTML with inline marks.
 - `application/x-nobita+json` — exact blocks, including nesting and props.
 
+Selection copy, the block menu Copy and `/copy` share this serializer. The
+async clipboard attempts all three types, then text/plain + text/html when the
+browser rejects custom MIME types; a legacy `execCommand` fallback keeps the
+custom format where the platform supports it.
+
 Paste prefers the private format for lossless round-trips, then HTML (parsed
 into blocks with heading/list/quote/code/image support), then Markdown, then
 plain text. HTML paste uses `DOMParser`; links are restricted to safe schemes.
