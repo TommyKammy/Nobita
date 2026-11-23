@@ -1,0 +1,33 @@
+{
+  "name": "@nobita/element",
+  "version": "0.1.0",
+  "description": "Embeddable Notion-like block editor as a zero-dependency web component.",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": true,
+  "exports": {
+    ".": {
+      "nobita-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles": {
+      "nobita-source": "./src/styles.ts",
+      "types": "./dist/styles.d.ts",
+      "import": "./dist/styles.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "unpkg": "./dist/nobita.global.js",
+  "jsdelivr": "./dist/nobita.global.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && pnpm run bundle",
+    "bundle": "esbuild src/index.ts --bundle --format=esm --minify --target=es2022 --conditions=nobita-source --outfile=dist/nobita.js --sourcemap && esbuild src/global.ts --bundle --format=iife --minify --target=es2022 --conditions=nobita-source --outfile=dist/nobita.global.js --sourcemap"
+  },
+  "dependencies": {
+    "@nobita/core": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

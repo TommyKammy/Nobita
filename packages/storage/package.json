@@ -1,0 +1,31 @@
+{
+  "name": "@nobita/storage",
+  "version": "0.1.0",
+  "description": "Optional persistence adapters for Nobita plain-JSON documents.",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "nobita-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./sql": {
+      "nobita-source": "./src/sql.ts",
+      "types": "./dist/sql.d.ts",
+      "import": "./dist/sql.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@nobita/core": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}

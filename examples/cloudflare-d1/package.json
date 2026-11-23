@@ -1,0 +1,19 @@
+{
+  "name": "@nobita/example-cloudflare-d1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy",
+    "db:init": "npx wrangler d1 execute nobita --local --file=./schema.sql",
+    "db:init:remote": "npx wrangler d1 execute nobita --remote --file=./schema.sql",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@nobita/core": "workspace:*",
+    "@nobita/storage": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

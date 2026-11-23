@@ -1,0 +1,24 @@
+{
+  "name": "nobita",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
+  "scripts": {
+    "dev": "pnpm --filter @nobita/demo dev",
+    "build": "tsc -b tsconfig.json && pnpm --filter @nobita/element run bundle && pnpm --filter @nobita/demo build",
+    "typecheck": "tsc -b tsconfig.json && pnpm --filter @nobita/demo exec tsc -p tsconfig.json && pnpm --filter @nobita/example-cloudflare-d1 typecheck",
+    "test": "pnpm --filter @nobita/core --filter @nobita/storage test",
+    "preview": "pnpm --filter @nobita/demo preview"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vite": "^7.1.7",
+    "vitest": "^3.2.4"
+  }
+}

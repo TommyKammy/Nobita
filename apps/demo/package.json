@@ -1,0 +1,19 @@
+{
+  "name": "@nobita/demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@nobita/core": "workspace:*",
+    "@nobita/element": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vite": "^7.1.7"
+  }
+}
