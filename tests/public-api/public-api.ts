@@ -17,11 +17,13 @@ import {
   blocksToMarkdown,
   createBlock,
   createDoc,
+  createTableData,
   markdownToBlocks,
   parseDoc,
   type Doc,
   type EditorSelection,
   type PageInfo,
+  type TableData,
 } from '@nobita/core';
 
 /**
@@ -55,6 +57,8 @@ export function publicApiFixture(host: HTMLElement): void {
   const editor = createEditor(host, options);
   void editor.insertPageLink({ id: 'p1', title: 'Page' });
   editor.refreshPageLinks();
+  const table: TableData = createTableData({ rows: 2, columns: 2 });
+  void table;
   const element = new NobitaEditorElement();
   defineNobitaEditor('public-api-editor');
   void element;

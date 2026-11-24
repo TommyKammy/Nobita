@@ -2,12 +2,19 @@ import {
   createDatabaseColumn,
   createDatabaseRow,
   createId,
+  DATABASE_STAT_LABELS,
+  DATABASE_STAT_TYPES,
+  createDatabaseView,
   databaseCellDisplay,
   databaseCellText,
+  databaseSorts,
+  databaseStatValue,
   databaseView,
+  databaseViews,
   filteredDatabaseRows,
   groupedDatabaseRows,
   safeHref,
+  searchDatabaseRows,
   sortedDatabaseRows,
 } from '@nobita/core';
 import type {
@@ -20,6 +27,7 @@ import type {
   DatabaseFile,
   DatabasePerson,
   DatabaseRow,
+  DatabaseStatType,
   DatabaseView as DatabaseViewConfig,
 } from '@nobita/core';
 import { nativeSelection } from './dom.js';
@@ -67,13 +75,59 @@ const TYPE_ICON: Record<DatabaseColumnType, string> = {
   people: icon.user,
 };
 
-const FILTER_OPERATORS: readonly [DatabaseFilterOperator, string][] = [
-  ['contains', 'contains'],
-  ['is', 'is'],
-  ['isNot', 'is not'],
-  ['isEmpty', 'is empty'],
-  ['isNotEmpty', 'is not empty'],
-];
+const FILTER_LABELS: Record<DatabaseFilterOperator, string> = {
+  contains: 'contains',
+  doesNotContain: 'does not contain',
+  startsWith: 'starts with',
+  endsWith: 'ends with',
+  is: 'is',
+  isNot: 'is not',
+  isEmpty: 'is empty',
+  isNotEmpty: 'is not empty',
+  equal: 'equals',
+  notEqual: 'does not equal',
+  greaterThan: 'greater than',
+  lessThan: 'less than',
+  greaterThanOrEqual: 'greater than or equal',
+  lessThanOrEqual: 'less than or equal',
+  before: 'before',
+  after: 'after',
+  isChecked: 'is checked',
+  isUnchecked: 'is not checked',
+  isAnyOf: 'is any of',
+  isNoneOf: 'is none of',
+  containsAny: 'contains any of',
+  containsAll: 'contains all of',
+  doesNotContainAny: 'does not contain any of',
+  doesNotContainAll: 'does not contain all of',
+};
+
+function filterOperators(type: DatabaseColumnType): DatabaseFilterOperator[] {
+  const empty: DatabaseFilterOperator[] = ['isEmpty', 'isNotEmpty'];
+  if (type === 'checkbox') return ['isChecked', 'isUnchecked', 'is', 'isNot'];
+  if (type === 'number') {
+    return [
+      'equal',
+      'notEqual',
+      'greaterThan',
+      'lessThan',
+      'greaterThanOrEqual',
+      'lessThanOrEqual',
+      ...empty,
+    ];
+  }
+  if (type === 'date') return ['before', 'after', 'is', 'isNot', ...empty];
+  if (type === 'select') return ['is', 'isNot', 'isAnyOf', 'isNoneOf', ...empty];
+  if (type === 'multi-select') {
+    return ['containsAny', 'containsAll', 'doesNotContainAny', 'doesNotContainAll', ...empty];
+  }
+  if (type === 'files' || type === 'people') return empty;
+  return ['contains', 'doesNotContain', 'startsWith', 'endsWith', 'is', 'isNot', ...empty];
+}
+
+function defaultFilterOperator(type: DatabaseColumnType): DatabaseFilterOperator {
+  return filterOperators(type)[0] ?? 'is';
+}
 
 const cellKey = (rowId: string, columnId: string): string => `${rowId}\u0000${columnId}`;
 
@@ -182,6 +236,9 @@ export class DatabaseView {
   #suppressClick = false;
   #boardBlurTimer: number | null = null;
   #instanceId = createId('db');
+  #searchQuery = '';
+  #searchFocusPending = false;
+  #collapsedGroups = new Set<string>();
 
   constructor(host: DatabaseHost, data: DatabaseData) {
     this.#host = host;
@@ -227,9 +284,9 @@ export class DatabaseView {
   }
 
   focusFirstCell(): void {
-    const rows = sortedDatabaseRows(this.#data);
+    const rows = this.#rowsFor(this.#activeView());
     const row = rows[0];
-    const column = this.#data.columns[0];
+    const column = this.#visibleColumns(this.#activeView())[0];
     if (!row || !column) {
       if (this.#data.columns.length === 0) this.#addColumn();
       else this.#addRow();
@@ -260,8 +317,64 @@ export class DatabaseView {
 
   /** ---- rendering ---- */
 
+  #views(): (DatabaseViewConfig & { id: string; name: string })[] {
+    return databaseViews(this.#data).map((view, index) => ({
+      ...view,
+      id: view.id ?? (index === 0 ? 'view-default' : `view-${index}`),
+      name: view.name ?? (view.type === 'board' ? 'Board' : 'Table'),
+      filters: view.filters ?? [],
+    }));
+  }
+
+  #activeView(): DatabaseViewConfig & { id: string; name: string } {
+    const views = this.#views();
+    return views.find(view => view.id === this.#data.activeViewId) ?? views[0]!;
+  }
+
+  #updateActiveView(patch: Partial<DatabaseViewConfig>): void {
+    const active = this.#activeView();
+    const views = this.#views().map(view =>
+      view.id === active.id
+        ? { ...view, ...patch, id: active.id, name: patch.name ?? view.name }
+        : view
+    );
+    const { view: _legacyView, sort: _legacySort, ...rest } = this.#data;
+    this.#host.commit({
+      ...rest,
+      views,
+      activeViewId: active.id,
+    });
+  }
+
+  #setActiveView(id: string): void {
+    if (id === this.#activeView().id) return;
+    const { view: _legacyView, sort: _legacySort, ...rest } = this.#data;
+    this.#host.commit({ ...rest, views: this.#views(), activeViewId: id });
+  }
+
+  #visibleColumns(view: DatabaseViewConfig = this.#activeView()): DatabaseColumn[] {
+    const hidden = new Set(view.hiddenColumns ?? []);
+    return this.#data.columns.filter(column => !hidden.has(column.id));
+  }
+
+  #rowsFor(view: DatabaseViewConfig = this.#activeView()): DatabaseRow[] {
+    return searchDatabaseRows(
+      this.#data,
+      filteredDatabaseRows(this.#data, view),
+      this.#searchQuery
+    );
+  }
+
+  #groupsFor(view: DatabaseViewConfig = this.#activeView()): { key: string; label: string; rows: DatabaseRow[] }[] {
+    const allowed = new Set(this.#rowsFor(view).map(row => row.id));
+    return groupedDatabaseRows(this.#data, view).map(group => ({
+      ...group,
+      rows: group.rows.filter(row => allowed.has(row.id)),
+    }));
+  }
+
   #keyFor(data: DatabaseData): string {
-    const view = databaseView(data);
+    const views = data.views ?? (data.view ? [data.view] : []);
     return JSON.stringify({
       readonly: this.#readonly,
       variant: data.variant,
@@ -272,12 +385,18 @@ export class DatabaseView {
         column.options?.join('\u0001') ?? '',
       ]),
       rows: data.rows.map(row => row.id),
-      view: {
+      activeViewId: data.activeViewId ?? null,
+      views: views.map(view => ({
+        id: view.id ?? null,
+        name: view.name ?? null,
         type: view.type,
         filters: view.filters,
+        filterMode: view.filterMode ?? 'and',
         groupBy: view.groupBy ?? null,
-        sort: view.sort ?? null,
-      },
+        sorts: view.sorts ?? (view.sort ? [view.sort] : []),
+        hiddenColumns: view.hiddenColumns ?? [],
+        stats: view.stats ?? {},
+      })),
       sort: data.sort ?? null,
     });
   }
@@ -286,14 +405,15 @@ export class DatabaseView {
     data: DatabaseData,
     view: DatabaseViewConfig = databaseView(data)
   ): string {
-    if (view.type === 'board') {
+    const allowed = new Set(
+      searchDatabaseRows(data, filteredDatabaseRows(data, view), this.#searchQuery).map(row => row.id)
+    );
+    if (view.type === 'board' || view.groupBy) {
       return groupedDatabaseRows(data, view)
-        .map(group => `${group.key}:${group.rows.map(row => row.id).join(',')}`)
+        .map(group => `${group.key}:${group.rows.filter(row => allowed.has(row.id)).map(row => row.id).join(',')}`)
         .join('\u0001');
     }
-    return filteredDatabaseRows(data, view)
-      .map(row => row.id)
-      .join('\u0001');
+    return [...allowed].join('\u0001');
   }
 
   render(): void {
@@ -310,7 +430,7 @@ export class DatabaseView {
     this.#colElements = [];
     const root = this.element.getRootNode() as ShadowRoot;
     const hadFocus = this.element.contains(root.activeElement);
-    const view = databaseView(this.#data);
+    const view = this.#activeView();
     this.#structureKey = this.#keyFor(this.#data);
     this.#visibleKey = this.#visibleKeyFor(this.#data, view);
     this.element.dataset.readonly = String(this.#readonly);
@@ -319,6 +439,8 @@ export class DatabaseView {
 
     const head = document.createElement('div');
     head.className = 'nb-db-head';
+    const headTop = document.createElement('div');
+    headTop.className = 'nb-db-head-top';
     const title = document.createElement('span');
     title.className = 'nb-db-title';
     const titleIcon = document.createElement('span');
@@ -333,7 +455,7 @@ export class DatabaseView {
 
     const tools = document.createElement('div');
     tools.className = 'nb-db-tools';
-    this.#renderViewControls(view, tools);
+    this.#renderToolButtons(view, tools);
     if (!this.#readonly) {
       const addRow = document.createElement('button');
       addRow.type = 'button';
@@ -349,7 +471,8 @@ export class DatabaseView {
       addColumn.addEventListener('click', () => this.#addColumn(), { signal: this.#events.signal });
       tools.append(addRow, addColumn);
     }
-    head.append(title, count, tools);
+    headTop.append(title, count, tools);
+    head.append(headTop, this.#renderViewBar(view));
 
     const scroll = document.createElement('div');
     scroll.className = 'nb-db-scroll';
@@ -368,6 +491,15 @@ export class DatabaseView {
       this.element.append(addRow);
     }
 
+    if (this.#searchFocusPending) {
+      this.#searchFocusPending = false;
+      requestAnimationFrame(() => {
+        const input = this.element.querySelector<HTMLInputElement>('.nb-db-search');
+        if (!input) return;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      });
+    }
     if (view.type === 'table' && this.#pendingFocus) {
       const pending = this.#pendingFocus;
       this.#pendingFocus = null;
@@ -377,38 +509,70 @@ export class DatabaseView {
     }
   }
 
-  #renderViewControls(view: DatabaseViewConfig, tools: HTMLElement): void {
-    if (this.#readonly) return;
-    const group = document.createElement('div');
-    group.className = 'nb-db-viewswitch';
-    group.setAttribute('role', 'group');
-    group.setAttribute('aria-label', 'Data view');
-    for (const type of ['table', 'board'] as const) {
+  #renderViewBar(view: DatabaseViewConfig): HTMLElement {
+    const bar = document.createElement('div');
+    bar.className = 'nb-db-viewbar';
+    bar.setAttribute('role', 'tablist');
+    bar.setAttribute('aria-label', 'Database views');
+    for (const item of this.#views()) {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'nb-db-viewbtn';
-      button.dataset.view = type;
-      button.dataset.active = String(view.type === type);
-      button.setAttribute('aria-pressed', String(view.type === type));
-      button.textContent = type === 'table' ? 'Table' : 'Board';
+      button.className = 'nb-db-viewtab';
+      button.dataset.active = String(item.id === view.id);
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', String(item.id === view.id));
+      button.title = item.name;
+      const typeIcon = document.createElement('span');
+      typeIcon.className = 'nb-db-viewtab-icon';
+      typeIcon.innerHTML = item.type === 'board' ? icon.database : icon.table;
+      const label = document.createElement('span');
+      label.textContent = item.name;
+      button.append(typeIcon, label);
       button.addEventListener(
         'click',
-        () => {
-          const groupBy =
-            type === 'board' && !view.groupBy
-              ? this.#defaultGroupColumn()
-              : view.groupBy;
-          this.#setView({
-            type,
-            ...(groupBy ? { groupBy } : {}),
-          });
-        },
+        () => this.#setActiveView(item.id),
         { signal: this.#events.signal }
       );
-      group.append(button);
+      bar.append(button);
     }
-    tools.append(group);
+    if (!this.#readonly) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'nb-db-viewtab nb-db-viewmore';
+      more.textContent = '⋯';
+      more.title = 'View actions';
+      more.addEventListener('click', () => this.#openViewMenu(more), {
+        signal: this.#events.signal,
+      });
+      bar.append(more);
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'nb-db-viewtab nb-db-viewadd';
+      add.textContent = '+';
+      add.title = 'Add view';
+      add.addEventListener('click', () => this.#openAddViewMenu(add), {
+        signal: this.#events.signal,
+      });
+      bar.append(add);
+    }
+    return bar;
+  }
 
+  #renderToolButtons(view: DatabaseViewConfig, tools: HTMLElement): void {
+    const search = document.createElement('input');
+    search.className = 'nb-db-search';
+    search.type = 'search';
+    search.placeholder = 'Search';
+    search.value = this.#searchQuery;
+    search.setAttribute('aria-label', 'Search rows');
+    search.addEventListener('input', () => {
+      this.#searchQuery = search.value;
+      this.#searchFocusPending = true;
+      this.render();
+    }, { signal: this.#events.signal });
+    tools.append(search);
+
+    if (this.#readonly) return;
     const filter = document.createElement('button');
     filter.type = 'button';
     filter.className = 'nb-db-btn';
@@ -420,25 +584,371 @@ export class DatabaseView {
     });
     tools.append(filter);
 
-    if (view.type === 'board') {
-      const groupButton = document.createElement('button');
-      groupButton.type = 'button';
-      groupButton.className = 'nb-db-btn';
-      const column = view.groupBy
-        ? this.#data.columns.find(item => item.id === view.groupBy)
-        : undefined;
-      groupButton.textContent = column ? `Group: ${column.name}` : 'Group';
-      groupButton.title = 'Group board columns';
-      groupButton.addEventListener(
-        'click',
-        () => this.#openGroupPopover(groupButton),
-        { signal: this.#events.signal }
-      );
-      tools.append(groupButton);
-    }
+    const sortCount = (view.sorts ?? (view.sort ? [view.sort] : [])).length;
+    const sort = document.createElement('button');
+    sort.type = 'button';
+    sort.className = 'nb-db-btn';
+    sort.dataset.active = String(sortCount > 0);
+    sort.textContent = sortCount > 0 ? `Sort (${sortCount})` : 'Sort';
+    sort.title = 'Sort rows';
+    sort.addEventListener('click', () => this.#openSortPopover(sort), {
+      signal: this.#events.signal,
+    });
+    tools.append(sort);
+
+    const columns = document.createElement('button');
+    columns.type = 'button';
+    columns.className = 'nb-db-btn';
+    columns.textContent = 'Columns';
+    columns.title = 'Show or hide columns';
+    columns.addEventListener('click', () => this.#openColumnsPopover(columns), {
+      signal: this.#events.signal,
+    });
+    tools.append(columns);
+
+    const group = document.createElement('button');
+    group.type = 'button';
+    group.className = 'nb-db-btn';
+    const groupColumn = view.groupBy
+      ? this.#data.columns.find(item => item.id === view.groupBy)
+      : undefined;
+    group.dataset.active = String(Boolean(groupColumn));
+    group.textContent = groupColumn ? `Group: ${groupColumn.name}` : 'Group';
+    group.title = 'Group rows';
+    group.addEventListener('click', () => this.#openGroupPopover(group), {
+      signal: this.#events.signal,
+    });
+    tools.append(group);
   }
 
-  #renderTable(view: DatabaseViewConfig): HTMLTableElement {
+  #nextViewName(type: 'table' | 'board'): string {
+    const base = type === 'board' ? 'Board' : 'Table';
+    const names = new Set(this.#views().map(view => view.name));
+    if (!names.has(base)) return base;
+    let index = 2;
+    while (names.has(`${base} ${index}`)) index += 1;
+    return `${base} ${index}`;
+  }
+
+  #addView(type: 'table' | 'board'): void {
+    const view = createDatabaseView(type, this.#nextViewName(type));
+    if (type === 'board') {
+      const groupBy = this.#defaultGroupColumn();
+      if (groupBy) view.groupBy = groupBy;
+    }
+    const views = [...this.#views(), view];
+    const { view: _legacyView, sort: _legacySort, ...rest } = this.#data;
+    this.#host.commit({ ...rest, views, activeViewId: view.id });
+  }
+
+  #openAddViewMenu(anchor: HTMLElement): void {
+    const content = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'nb-db-pop-title';
+    title.textContent = 'Add view';
+    content.append(title);
+    const actions = document.createElement('div');
+    actions.className = 'nb-db-pop-actions';
+    for (const type of ['table', 'board'] as const) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = type === 'board' ? 'Board view' : 'Table view';
+      button.addEventListener('click', () => {
+        this.#closePopover();
+        this.#addView(type);
+      });
+      actions.append(button);
+    }
+    content.append(actions);
+    this.#showPopover(anchor, content);
+  }
+
+  #openViewMenu(anchor: HTMLElement): void {
+    const view = this.#activeView();
+    const content = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'nb-db-pop-title';
+    title.textContent = view.name;
+    content.append(title);
+    const actions = document.createElement('div');
+    actions.className = 'nb-db-pop-actions';
+    const add = (label: string, action: () => void, danger = false): void => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = danger ? 'danger' : '';
+      button.textContent = label;
+      button.addEventListener('click', action);
+      actions.append(button);
+    };
+    add('Rename view', () => {
+      this.#closePopover();
+      this.#openRenameView(anchor);
+    });
+    add('Duplicate view', () => {
+      this.#closePopover();
+      const active = this.#activeView();
+      const views = this.#views();
+      const index = views.findIndex(item => item.id === active.id);
+      const copy = {
+        ...active,
+        id: createId('v'),
+        name: `${active.name} copy`,
+        filters: active.filters.map(filter => ({ ...filter })),
+        ...(active.sorts ? { sorts: active.sorts.map(sort => ({ ...sort })) } : {}),
+        ...(active.hiddenColumns ? { hiddenColumns: [...active.hiddenColumns] } : {}),
+        ...(active.stats ? { stats: { ...active.stats } } : {}),
+      } satisfies DatabaseViewConfig;
+      const next = [...views];
+      next.splice(index + 1, 0, copy);
+      const { view: _legacyView, sort: _legacySort, ...rest } = this.#data;
+      this.#host.commit({ ...rest, views: next, activeViewId: copy.id });
+    });
+    if (this.#views().length > 1) {
+      add('Delete view', () => {
+        this.#closePopover();
+        const active = this.#activeView();
+        const views = this.#views().filter(view => view.id !== active.id);
+        const { view: _legacyView, sort: _legacySort, ...rest } = this.#data;
+        const nextActive = views[0]?.id;
+        this.#host.commit({ ...rest, views, ...(nextActive ? { activeViewId: nextActive } : {}) });
+      }, true);
+    }
+    content.append(actions);
+    this.#showPopover(anchor, content);
+  }
+
+  #openRenameView(anchor: HTMLElement): void {
+    const view = this.#activeView();
+    const content = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'nb-db-pop-title';
+    title.textContent = 'Rename view';
+    const field = document.createElement('label');
+    field.className = 'nb-db-field';
+    const label = document.createElement('span');
+    label.textContent = 'Name';
+    const input = document.createElement('input');
+    input.value = view.name;
+    field.append(label, input);
+    const actions = document.createElement('div');
+    actions.className = 'nb-db-pop-actions';
+    const apply = document.createElement('button');
+    apply.type = 'button';
+    apply.textContent = 'Done';
+    apply.addEventListener('click', () => {
+      const name = input.value.trim();
+      if (name) this.#updateActiveView({ name });
+      this.#closePopover();
+    });
+    actions.append(apply);
+    input.addEventListener('keydown', event => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      apply.click();
+    });
+    content.append(title, field, actions);
+    this.#showPopover(anchor, content);
+    input.focus();
+    input.select();
+  }
+
+  #openSortPopover(anchor: HTMLElement): void {
+    const view = this.#activeView();
+    const draft = (view.sorts ?? (view.sort ? [view.sort] : [])).map(sort => ({ ...sort }));
+    const content = document.createElement('div');
+    content.className = 'nb-db-sort-popover';
+    const title = document.createElement('div');
+    title.className = 'nb-db-pop-title';
+    title.textContent = 'Sort';
+    const list = document.createElement('div');
+    list.className = 'nb-db-filter-list';
+    const render = (): void => {
+      list.replaceChildren();
+      if (draft.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'nb-db-filter-empty';
+        empty.textContent = 'No sort keys.';
+        list.append(empty);
+      }
+      draft.forEach((sort, index) => {
+        const row = document.createElement('div');
+        row.className = 'nb-db-filter-row';
+        const column = document.createElement('select');
+        column.setAttribute('aria-label', 'Sort column');
+        for (const item of this.#data.columns) {
+          const option = document.createElement('option');
+          option.value = item.id;
+          option.textContent = item.name;
+          option.selected = item.id === sort.columnId;
+          column.append(option);
+        }
+        column.addEventListener('change', () => {
+          sort.columnId = column.value;
+        });
+        const direction = document.createElement('select');
+        direction.setAttribute('aria-label', 'Sort direction');
+        for (const [value, label] of [['asc', 'Ascending'], ['desc', 'Descending']] as const) {
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = label;
+          option.selected = sort.direction === value;
+          direction.append(option);
+        }
+        direction.addEventListener('change', () => {
+          sort.direction = direction.value === 'desc' ? 'desc' : 'asc';
+        });
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'nb-db-filter-remove';
+        remove.innerHTML = icon.x;
+        remove.title = 'Remove sort';
+        remove.addEventListener('click', () => {
+          draft.splice(index, 1);
+          render();
+        });
+        row.append(column, direction, remove);
+        list.append(row);
+      });
+    };
+    const footer = document.createElement('div');
+    footer.className = 'nb-db-pop-actions';
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.textContent = '+ Add sort';
+    add.addEventListener('click', () => {
+      const first = this.#data.columns[0];
+      if (!first) return;
+      draft.push({ columnId: first.id, direction: 'asc' });
+      render();
+    });
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.textContent = 'Clear';
+    clear.addEventListener('click', () => {
+      draft.length = 0;
+      render();
+    });
+    const apply = document.createElement('button');
+    apply.type = 'button';
+    apply.textContent = 'Apply';
+    apply.addEventListener('click', () => {
+      this.#updateActiveView({
+        sorts: draft.filter(sort => this.#data.columns.some(column => column.id === sort.columnId)),
+        sort: null,
+      });
+      this.#closePopover();
+    });
+    footer.append(add, clear, apply);
+    content.append(title, list, footer);
+    render();
+    this.#showPopover(anchor, content);
+  }
+
+  #openColumnsPopover(anchor: HTMLElement): void {
+    const view = this.#activeView();
+    const hidden = new Set(view.hiddenColumns ?? []);
+    const content = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'nb-db-pop-title';
+    title.textContent = 'Columns';
+    content.append(title);
+    const list = document.createElement('div');
+    list.className = 'nb-db-column-list';
+    const render = (): void => {
+      list.replaceChildren();
+      for (const column of this.#data.columns) {
+        const label = document.createElement('label');
+        label.className = 'nb-db-column-toggle';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = !hidden.has(column.id);
+        input.addEventListener('change', () => {
+          if (input.checked) hidden.delete(column.id);
+          else hidden.add(column.id);
+        });
+        const name = document.createElement('span');
+        name.textContent = column.name;
+        label.append(input, name);
+        list.append(label);
+      }
+    };
+    const actions = document.createElement('div');
+    actions.className = 'nb-db-pop-actions';
+    const showAll = document.createElement('button');
+    showAll.type = 'button';
+    showAll.textContent = 'Show all';
+    showAll.addEventListener('click', () => {
+      hidden.clear();
+      render();
+    });
+    const apply = document.createElement('button');
+    apply.type = 'button';
+    apply.textContent = 'Apply';
+    apply.addEventListener('click', () => {
+      this.#updateActiveView({ hiddenColumns: [...hidden] });
+      this.#closePopover();
+    });
+    actions.append(showAll, apply);
+    content.append(list, actions);
+    render();
+    this.#showPopover(anchor, content);
+  }
+
+  #renderTable(view: DatabaseViewConfig): HTMLElement {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'nb-db-table-area';
+    const columns = this.#visibleColumns(view);
+    if (view.groupBy) {
+      const groups = this.#groupsFor(view);
+      if (groups.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'nb-db-empty';
+        empty.textContent = 'No groups';
+        wrapper.append(empty);
+        return wrapper;
+      }
+      for (const group of groups) {
+        const section = document.createElement('section');
+        section.className = 'nb-db-group';
+        section.dataset.group = group.key;
+        const heading = document.createElement('button');
+        heading.type = 'button';
+        heading.className = 'nb-db-group-head';
+        const collapsed = this.#collapsedGroups.has(`${view.id}:${group.key}`);
+        heading.setAttribute('aria-expanded', String(!collapsed));
+        const chevron = document.createElement('span');
+        chevron.className = 'nb-db-group-chevron';
+        chevron.textContent = collapsed ? '▸' : '▾';
+        const label = document.createElement('span');
+        label.className = 'nb-db-group-label';
+        label.textContent = group.label || 'No value';
+        const count = document.createElement('span');
+        count.className = 'nb-db-group-count';
+        count.textContent = String(group.rows.length);
+        heading.append(chevron, label, count);
+        heading.addEventListener('click', () => {
+          const key = `${view.id}:${group.key}`;
+          if (this.#collapsedGroups.has(key)) this.#collapsedGroups.delete(key);
+          else this.#collapsedGroups.add(key);
+          this.render();
+        }, { signal: this.#events.signal });
+        section.append(heading);
+        if (!collapsed) {
+          section.append(this.#renderTableGrid(view, columns, group.rows));
+        }
+        wrapper.append(section);
+      }
+      return wrapper;
+    }
+    wrapper.append(this.#renderTableGrid(view, columns, this.#rowsFor(view)));
+    return wrapper;
+  }
+
+  #renderTableGrid(
+    view: DatabaseViewConfig,
+    columns: readonly DatabaseColumn[],
+    rows: readonly DatabaseRow[]
+  ): HTMLTableElement {
     const table = document.createElement('table');
     table.className = 'nb-db-table';
     table.setAttribute(
@@ -449,7 +959,7 @@ export class DatabaseView {
     const handleCol = document.createElement('col');
     handleCol.style.width = '28px';
     colgroup.append(handleCol);
-    this.#data.columns.forEach((column, index) => {
+    columns.forEach((column, index) => {
       const col = document.createElement('col');
       col.style.width = column.width
         ? `${column.width}px`
@@ -466,7 +976,7 @@ export class DatabaseView {
     const corner = document.createElement('th');
     corner.className = 'nb-db-handle';
     headRow.append(corner);
-    for (const column of this.#data.columns) {
+    for (const column of columns) {
       const th = document.createElement('th');
       th.className = 'nb-db-th';
       th.scope = 'col';
@@ -482,10 +992,13 @@ export class DatabaseView {
       name.className = 'nb-db-colname';
       name.textContent = column.name;
       button.append(typeIcon, name);
-      if (view.sort?.columnId === column.id) {
+      const sorts = databaseSorts(view);
+      const sortIndex = sorts.findIndex(sort => sort.columnId === column.id);
+      if (sortIndex >= 0) {
         const sort = document.createElement('span');
         sort.className = 'nb-db-sort';
-        sort.textContent = view.sort.direction === 'asc' ? '↑' : '↓';
+        const direction = sorts[sortIndex]?.direction === 'desc' ? '↓' : '↑';
+        sort.textContent = sorts.length > 1 ? `${sortIndex + 1}${direction}` : direction;
         button.append(sort);
       }
       const chevron = document.createElement('span');
@@ -515,7 +1028,6 @@ export class DatabaseView {
     table.append(thead);
 
     const tbody = document.createElement('tbody');
-    const rows = filteredDatabaseRows(this.#data, view);
     for (const row of rows) {
       const tr = document.createElement('tr');
       tr.dataset.rowId = row.id;
@@ -534,7 +1046,7 @@ export class DatabaseView {
         handle.append(menu);
       }
       tr.append(handle);
-      for (const column of this.#data.columns) {
+      for (const column of columns) {
         tr.append(this.#createCell(row, column));
       }
       tbody.append(tr);
@@ -543,20 +1055,93 @@ export class DatabaseView {
       const empty = document.createElement('tr');
       const td = document.createElement('td');
       td.className = 'nb-db-empty';
-      td.colSpan = Math.max(1, this.#data.columns.length + 1);
+      td.colSpan = Math.max(1, columns.length + 1);
       td.textContent = this.#readonly ? 'No rows' : 'No rows yet. Add one below.';
       empty.append(td);
       tbody.append(empty);
     }
     table.append(tbody);
+
+    if (columns.length > 0) {
+      const tfoot = document.createElement('tfoot');
+      const footRow = document.createElement('tr');
+      const cornerFoot = document.createElement('td');
+      cornerFoot.className = 'nb-db-handle nb-db-foot-handle';
+      footRow.append(cornerFoot);
+      for (const column of columns) {
+        const td = document.createElement('td');
+        td.className = 'nb-db-foot';
+        const stat = view.stats?.[column.id];
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'nb-db-stat';
+        button.dataset.statColumn = column.id;
+        button.dataset.calculated = String(Boolean(stat));
+        button.textContent = stat
+          ? `${DATABASE_STAT_LABELS[stat]}: ${databaseStatValue(rows, column, stat)}`
+          : 'Calculate';
+        button.disabled = this.#readonly;
+        button.addEventListener('click', () => this.#openStatPopover(column.id, button, rows), {
+          signal: this.#events.signal,
+        });
+        td.append(button);
+        footRow.append(td);
+      }
+      tfoot.append(footRow);
+      table.append(tfoot);
+    }
     return table;
+  }
+
+  #openStatPopover(
+    columnId: string,
+    anchor: HTMLElement,
+    rows: readonly DatabaseRow[]
+  ): void {
+    const column = this.#data.columns.find(item => item.id === columnId);
+    if (!column) return;
+    const content = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'nb-db-pop-title';
+    title.textContent = `Calculate ${column.name}`;
+    content.append(title);
+    const list = document.createElement('div');
+    list.className = 'nb-db-stat-list';
+    const current = this.#activeView().stats?.[columnId];
+    const add = (label: string, type: DatabaseStatType | null): void => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'nb-db-stat-option';
+      button.dataset.active = String((current ?? null) === type);
+      button.textContent = type
+        ? `${label} (${databaseStatValue(rows, column, type)})`
+        : 'None';
+      button.addEventListener('click', () => {
+        const stats = { ...(this.#activeView().stats ?? {}) };
+        if (type) stats[columnId] = type;
+        else delete stats[columnId];
+        this.#updateActiveView({ stats });
+        this.#closePopover();
+      });
+      list.append(button);
+    };
+    add('None', null);
+    const available = column.type === 'number'
+      ? DATABASE_STAT_TYPES
+      : DATABASE_STAT_TYPES.filter(type => type === 'count' || type === 'countValues');
+    for (const type of available) {
+      add(DATABASE_STAT_LABELS[type], type);
+    }
+    content.append(list);
+    this.#showPopover(anchor, content);
   }
 
   #renderBoard(view: DatabaseViewConfig): HTMLElement {
     const board = document.createElement('div');
     board.className = 'nb-db-board';
-    const groups = groupedDatabaseRows(this.#data, view);
-    const titleColumn = this.#data.columns[0];
+    const groups = this.#groupsFor(view);
+    const columns = this.#visibleColumns(view);
+    const titleColumn = columns[0];
     for (const group of groups) {
       const column = document.createElement('section');
       column.className = 'nb-db-board-column';
@@ -602,7 +1187,7 @@ export class DatabaseView {
       const cards = document.createElement('div');
       cards.className = 'nb-db-board-cards';
       for (const row of group.rows) {
-        cards.append(this.#renderBoardCard(row, titleColumn, view));
+        cards.append(this.#renderBoardCard(row, titleColumn, view, columns));
       }
       if (group.rows.length === 0) {
         const empty = document.createElement('div');
@@ -619,7 +1204,8 @@ export class DatabaseView {
   #renderBoardCard(
     row: DatabaseRow,
     titleColumn: DatabaseColumn | undefined,
-    view: DatabaseViewConfig
+    view: DatabaseViewConfig,
+    columns: readonly DatabaseColumn[]
   ): HTMLElement {
     const card = document.createElement('article');
     card.className = 'nb-db-card';
@@ -718,7 +1304,7 @@ export class DatabaseView {
       );
     }
     card.append(title);
-    const fields = this.#boardFields(row, titleColumn, view);
+    const fields = this.#boardFields(row, titleColumn, view, columns);
     if (fields) card.append(fields);
     return card;
   }
@@ -726,11 +1312,12 @@ export class DatabaseView {
   #boardFields(
     row: DatabaseRow,
     titleColumn: DatabaseColumn | undefined,
-    view: DatabaseViewConfig
+    view: DatabaseViewConfig,
+    columns: readonly DatabaseColumn[]
   ): HTMLElement | null {
     const fields = document.createElement('div');
     fields.className = 'nb-db-card-fields';
-    for (const column of this.#data.columns) {
+    for (const column of columns) {
       if (column.id === titleColumn?.id || column.id === view.groupBy) continue;
       const display = databaseCellDisplay(row.cells[column.id], column.type);
       if (!display) continue;
@@ -749,11 +1336,12 @@ export class DatabaseView {
   }
 
   #syncBoardValues(force = false): void {
-    const view = databaseView(this.#data);
+    const view = this.#activeView();
     if (view.type !== 'board') return;
     const root = this.element.getRootNode() as ShadowRoot;
     const activeElement = root.activeElement;
-    const titleColumn = this.#data.columns[0];
+    const columns = this.#visibleColumns(view);
+    const titleColumn = columns[0];
     for (const card of this.element.querySelectorAll<HTMLElement>('.nb-db-card[data-row-id]')) {
       const row = this.#data.rows.find(item => item.id === card.dataset.rowId);
       if (!row) continue;
@@ -767,37 +1355,25 @@ export class DatabaseView {
         if (title.textContent !== nextText) title.textContent = nextText;
       }
       const previous = card.querySelector('.nb-db-card-fields');
-      const next = this.#boardFields(row, titleColumn, view);
+      const next = this.#boardFields(row, titleColumn, view, columns);
       if (previous && next) previous.replaceWith(next);
       else if (previous) previous.remove();
       else if (next) card.append(next);
     }
   }
 
-  #setView(patch: Partial<DatabaseViewConfig> & { groupBy?: string | null }): void {
-    const current = databaseView(this.#data);
-    const next: DatabaseViewConfig = {
-      type: patch.type ?? current.type,
-      filters: patch.filters ?? current.filters,
-    };
-    const groupBy = 'groupBy' in patch ? patch.groupBy : current.groupBy;
-    if (groupBy) next.groupBy = groupBy;
-    const sort = 'sort' in patch ? patch.sort : current.sort;
-    if (sort) next.sort = sort;
-    this.#host.commit({ ...this.#data, view: next });
-  }
-
   #defaultGroupColumn(): string | undefined {
+    const columns = this.#visibleColumns();
     return (
-      this.#data.columns.find(column =>
+      columns.find(column =>
         ['select', 'multi-select', 'checkbox'].includes(column.type)
-      )?.id ?? this.#data.columns[0]?.id
+      )?.id ?? columns[0]?.id
     );
   }
 
   #startColumnResize(event: PointerEvent, column: DatabaseColumn): void {
     if (this.#readonly) return;
-    const index = this.#data.columns.findIndex(item => item.id === column.id);
+    const index = this.#visibleColumns(this.#activeView()).findIndex(item => item.id === column.id);
     const col = this.#colElements[index];
     if (!col) return;
     event.preventDefault();
@@ -833,14 +1409,30 @@ export class DatabaseView {
   }
 
   #openFilterPopover(anchor: HTMLElement): void {
-    const view = databaseView(this.#data);
+    const view = this.#activeView();
     const draft: DatabaseFilter[] = view.filters.map(filter => ({ ...filter }));
+    const mode = view.filterMode === 'or' ? 'or' : 'and';
     const content = document.createElement('div');
     content.className = 'nb-db-filter-popover';
     const title = document.createElement('div');
     title.className = 'nb-db-pop-title';
     title.textContent = 'Filters';
     content.append(title);
+    const modeRow = document.createElement('label');
+    modeRow.className = 'nb-db-field';
+    const modeLabel = document.createElement('span');
+    modeLabel.textContent = 'Match';
+    const modeSelect = document.createElement('select');
+    modeSelect.setAttribute('aria-label', 'Filter mode');
+    for (const [value, label] of [['and', 'All filters'], ['or', 'Any filter']] as const) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      option.selected = mode === value;
+      modeSelect.append(option);
+    }
+    modeRow.append(modeLabel, modeSelect);
+    content.append(modeRow);
 
     const list = document.createElement('div');
     list.className = 'nb-db-filter-list';
@@ -870,36 +1462,85 @@ export class DatabaseView {
           columnSelect.append(option);
         }
         columnSelect.addEventListener('change', () => {
-          filter.columnId = columnSelect.value;
-          const next = this.#data.columns.find(item => item.id === filter.columnId);
-          filter.value = next?.type === 'checkbox' ? 'true' : '';
+          const next = this.#data.columns.find(item => item.id === columnSelect.value);
+          if (!next) return;
+          filter.columnId = next.id;
+          filter.operator = defaultFilterOperator(next.type);
+          filter.value = '';
           render();
         });
 
         const operatorSelect = document.createElement('select');
         operatorSelect.setAttribute('aria-label', 'Filter operator');
-        for (const [value, label] of FILTER_OPERATORS) {
+        const operators = filterOperators(column.type);
+        if (!operators.includes(filter.operator)) {
+          operators.unshift(filter.operator);
+        }
+        for (const value of operators) {
           const option = document.createElement('option');
           option.value = value;
-          option.textContent = label;
+          option.textContent = FILTER_LABELS[value];
           option.selected = filter.operator === value;
           operatorSelect.append(option);
         }
         operatorSelect.addEventListener('change', () => {
           filter.operator = operatorSelect.value as DatabaseFilterOperator;
-          if (
-            column.type === 'checkbox' &&
-            (filter.operator === 'is' || filter.operator === 'isNot') &&
-            !filter.value
-          ) {
-            filter.value = 'true';
-          }
           render();
         });
 
         row.append(columnSelect, operatorSelect);
-        if (filter.operator !== 'isEmpty' && filter.operator !== 'isNotEmpty') {
-          if (column.type === 'checkbox') {
+        const needsValue =
+          filter.operator !== 'isEmpty' &&
+          filter.operator !== 'isNotEmpty' &&
+          filter.operator !== 'isChecked' &&
+          filter.operator !== 'isUnchecked';
+        if (needsValue) {
+          if (column.type === 'select') {
+            const select = document.createElement('select');
+            select.setAttribute('aria-label', 'Filter value');
+            const single = document.createElement('option');
+            single.value = '';
+            single.textContent = 'Choose…';
+            select.append(single);
+            for (const optionValue of column.options ?? []) {
+              const option = document.createElement('option');
+              option.value = optionValue;
+              option.textContent = optionValue;
+              option.selected = filter.value === optionValue;
+              select.append(option);
+            }
+            select.addEventListener('change', () => {
+              filter.value = select.value;
+            });
+            row.append(select);
+          } else if (column.type === 'multi-select') {
+            const input = document.createElement('input');
+            input.value = filter.value ?? '';
+            input.placeholder = 'Option, Option';
+            input.setAttribute('aria-label', 'Filter value');
+            input.addEventListener('input', () => {
+              filter.value = input.value;
+            });
+            row.append(input);
+          } else if (column.type === 'number') {
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.value = filter.value ?? '';
+            input.setAttribute('aria-label', 'Filter value');
+            input.addEventListener('input', () => {
+              filter.value = input.value;
+            });
+            row.append(input);
+          } else if (column.type === 'date') {
+            const input = document.createElement('input');
+            input.type = 'date';
+            input.value = filter.value ?? '';
+            input.setAttribute('aria-label', 'Filter value');
+            input.addEventListener('input', () => {
+              filter.value = input.value;
+            });
+            row.append(input);
+          } else if (column.type === 'checkbox') {
             const select = document.createElement('select');
             select.setAttribute('aria-label', 'Filter value');
             for (const value of ['true', 'false']) {
@@ -949,8 +1590,8 @@ export class DatabaseView {
       if (!first) return;
       draft.push({
         columnId: first.id,
-        operator: 'contains',
-        value: first.type === 'checkbox' ? 'true' : '',
+        operator: defaultFilterOperator(first.type),
+        ...(first.type === 'checkbox' ? { value: 'true' } : {}),
       });
       render();
     });
@@ -965,18 +1606,16 @@ export class DatabaseView {
     apply.type = 'button';
     apply.textContent = 'Apply';
     apply.addEventListener('click', () => {
-      const filters = draft.map(filter => {
-        const column = this.#data.columns.find(item => item.id === filter.columnId);
-        if (
-          column?.type === 'checkbox' &&
-          (filter.operator === 'is' || filter.operator === 'isNot') &&
-          !filter.value
-        ) {
-          return { ...filter, value: 'true' };
-        }
-        return filter;
+      this.#updateActiveView({
+        filters: draft.map(filter => {
+          const column = this.#data.columns.find(item => item.id === filter.columnId);
+          if (column?.type === 'checkbox' && !filter.value) {
+            return { ...filter, value: 'true' };
+          }
+          return filter;
+        }),
+        filterMode: modeSelect.value === 'or' ? 'or' : 'and',
       });
-      this.#setView({ filters });
       this.#closePopover();
     });
     footer.append(add, clear, apply);
@@ -986,7 +1625,7 @@ export class DatabaseView {
   }
 
   #openGroupPopover(anchor: HTMLElement): void {
-    const view = databaseView(this.#data);
+    const view = this.#activeView();
     const content = document.createElement('div');
     const title = document.createElement('div');
     title.className = 'nb-db-pop-title';
@@ -999,8 +1638,11 @@ export class DatabaseView {
     none.textContent = 'None';
     none.selected = !view.groupBy;
     select.append(none);
+    const groupable = view.type === 'board'
+      ? ['select', 'multi-select', 'checkbox']
+      : ['text', 'number', 'date', 'select', 'multi-select', 'checkbox'];
     for (const column of this.#data.columns) {
-      if (!['select', 'multi-select', 'checkbox'].includes(column.type)) continue;
+      if (!groupable.includes(column.type)) continue;
       const option = document.createElement('option');
       option.value = column.id;
       option.textContent = column.name;
@@ -1008,7 +1650,7 @@ export class DatabaseView {
       select.append(option);
     }
     select.addEventListener('change', () => {
-      this.#setView({ groupBy: select.value || null });
+      this.#updateActiveView({ groupBy: select.value || null });
       this.#closePopover();
     });
     content.append(select);
@@ -1034,10 +1676,10 @@ export class DatabaseView {
     this.#commitCell(rowId, columnId, next, `db:${rowId}:${columnId}`);
   }
 
-  #updateCount(view: DatabaseViewConfig = databaseView(this.#data)): void {
+  #updateCount(view: DatabaseViewConfig = this.#activeView()): void {
     if (!this.#countElement) return;
     const total = this.#data.rows.length;
-    const shown = filteredDatabaseRows(this.#data, view).length;
+    const shown = this.#rowsFor(view).length;
     const rowText =
       shown === total ? `${total}` : `${shown} of ${total}`;
     const columnCount = this.#data.columns.length;
@@ -1074,16 +1716,40 @@ export class DatabaseView {
     }
     this.#syncColumnWidths();
     this.#syncBoardValues();
-    this.#updateCount(databaseView(this.#data));
+    this.#syncStats();
+    this.#updateCount(this.#activeView());
+  }
+
+  #syncStats(): void {
+    const view = this.#activeView();
+    const groups = this.#groupsFor(view);
+    for (const table of this.element.querySelectorAll<HTMLElement>('.nb-db-table')) {
+      const groupKey = table.closest<HTMLElement>('.nb-db-group')?.dataset.group;
+      const rows = groupKey === undefined
+        ? this.#rowsFor(view)
+        : groups.find(group => group.key === groupKey)?.rows ?? [];
+      for (const button of table.querySelectorAll<HTMLButtonElement>('.nb-db-stat[data-stat-column]')) {
+        const column = this.#data.columns.find(item => item.id === button.dataset.statColumn);
+        if (!column) continue;
+        const stat = view.stats?.[column.id];
+        button.dataset.calculated = String(Boolean(stat));
+        button.textContent = stat
+          ? `${DATABASE_STAT_LABELS[stat]}: ${databaseStatValue(rows, column, stat)}`
+          : 'Calculate';
+      }
+    }
   }
 
   #syncColumnWidths(): void {
-    this.#data.columns.forEach((column, index) => {
-      const col = this.#colElements[index];
-      if (!col) return;
+    const columns = this.#visibleColumns(this.#activeView());
+    if (columns.length === 0) return;
+    this.#colElements.forEach((col, index) => {
+      const columnIndex = index % columns.length;
+      const column = columns[columnIndex];
+      if (!column) return;
       col.style.width = column.width
         ? `${column.width}px`
-        : index === 0
+        : columnIndex === 0
           ? '200px'
           : '145px';
     });
@@ -1530,12 +2196,12 @@ export class DatabaseView {
   /** ---- navigation ---- */
 
   #rows(): DatabaseRow[] {
-    return filteredDatabaseRows(this.#data);
+    return this.#rowsFor(this.#activeView());
   }
 
   #moveTab(rowId: string, columnId: string, backwards: boolean): void {
     const rows = this.#rows();
-    const columns = this.#data.columns;
+    const columns = this.#visibleColumns(this.#activeView());
     const rowIndex = rows.findIndex(row => row.id === rowId);
     const columnIndex = columns.findIndex(column => column.id === columnId);
     if (rowIndex < 0 || columnIndex < 0) return;
@@ -1573,7 +2239,7 @@ export class DatabaseView {
 
   #moveHorizontal(rowId: string, columnId: string, direction: 1 | -1): void {
     const rows = this.#rows();
-    const columns = this.#data.columns;
+    const columns = this.#visibleColumns(this.#activeView());
     const rowIndex = rows.findIndex(row => row.id === rowId);
     const columnIndex = columns.findIndex(column => column.id === columnId);
     if (rowIndex < 0 || columnIndex < 0) return;
@@ -1737,8 +2403,9 @@ export class DatabaseView {
     endColumn: number;
   } | null {
     if (!this.#range) return null;
-    const rows = filteredDatabaseRows(this.#data, databaseView(this.#data));
-    const columns = this.#data.columns;
+    const view = this.#activeView();
+    const rows = this.#rowsFor(view);
+    const columns = this.#visibleColumns(view);
     const startRow = rows.findIndex(row => row.id === this.#range?.startRowId);
     const endRow = rows.findIndex(row => row.id === this.#range?.endRowId);
     const startColumn = columns.findIndex(column => column.id === this.#range?.startColumnId);
@@ -1809,16 +2476,19 @@ export class DatabaseView {
     grid: string[][],
     clearReferences = false
   ): void {
-    const rows = filteredDatabaseRows(this.#data, databaseView(this.#data));
+    const view = this.#activeView();
+    const rows = this.#rowsFor(view);
+    const visibleColumns = this.#visibleColumns(view);
     const startRow = rows.findIndex(row => row.id === startRowId);
-    const startColumn = this.#data.columns.findIndex(column => column.id === startColumnId);
+    const startColumn = visibleColumns.findIndex(column => column.id === startColumnId);
     if (startRow < 0 || startColumn < 0) return;
 
-    const columns = [...this.#data.columns];
+    const columns = [...visibleColumns];
     const width = Math.max(0, ...grid.map(line => line.length));
     while (columns.length < startColumn + width) {
       columns.push(createDatabaseColumn(`Column ${columns.length + 1}`));
     }
+    const newColumns = columns.slice(visibleColumns.length);
 
     const byId = new Map(this.#data.rows.map(row => [row.id, row]));
     const added: DatabaseRow[] = [];
@@ -1862,7 +2532,7 @@ export class DatabaseView {
     });
     this.#host.commit({
       ...this.#data,
-      columns,
+      columns: [...this.#data.columns, ...newColumns],
       rows: [
         ...this.#data.rows.map(row => byId.get(row.id) ?? row),
         ...added.map(row => byId.get(row.id) ?? row),
@@ -2244,19 +2914,21 @@ export class DatabaseView {
     });
     action('Sort ↑', icon.sortAsc, () => {
       apply();
-      this.#setView({ sort: { columnId, direction: 'asc' } });
+      this.#updateActiveView({ sorts: [{ columnId, direction: 'asc' }], sort: null });
       this.#closePopover();
     });
     action('Sort ↓', icon.sortDesc, () => {
       apply();
-      this.#setView({ sort: { columnId, direction: 'desc' } });
+      this.#updateActiveView({ sorts: [{ columnId, direction: 'desc' }], sort: null });
       this.#closePopover();
     });
-    const currentView = databaseView(this.#data);
-    if (currentView.sort?.columnId === columnId) {
+    if (databaseSorts(this.#activeView()).some(sort => sort.columnId === columnId)) {
       action('Clear sort', icon.x, () => {
         apply();
-        this.#setView({ sort: null });
+        this.#updateActiveView({
+          sorts: databaseSorts(this.#activeView()).filter(sort => sort.columnId !== columnId),
+          sort: null,
+        });
         this.#closePopover();
       });
     }

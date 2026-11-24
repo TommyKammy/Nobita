@@ -11,6 +11,7 @@ export type BlockType =
   | 'callout'
   | 'image'
   | 'database'
+  | 'table'
   | 'page';
 
 export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
@@ -30,7 +31,29 @@ export type DatabaseColumnType =
   | 'files'
   | 'people';
 
+/** Legacy schema variant. New simple tables use the separate `table` block. */
 export type DatabaseVariant = 'table' | 'database';
+
+export interface TableCell {
+  text: string;
+}
+
+export interface TableRow {
+  id: string;
+  backgroundColor?: string;
+  cells: Record<string, TableCell>;
+}
+
+export interface TableColumn {
+  id: string;
+  width?: number;
+  backgroundColor?: string;
+}
+
+export interface TableData {
+  columns: TableColumn[];
+  rows: TableRow[];
+}
 
 export interface DatabaseColumn {
   id: string;
@@ -78,14 +101,42 @@ export interface DatabaseSort {
   direction: 'asc' | 'desc';
 }
 
+export type DatabaseStatType =
+  | 'count'
+  | 'countValues'
+  | 'sum'
+  | 'average'
+  | 'median'
+  | 'min'
+  | 'max';
+
 export type DatabaseViewType = 'table' | 'board';
 
 export type DatabaseFilterOperator =
   | 'contains'
+  | 'doesNotContain'
+  | 'startsWith'
+  | 'endsWith'
   | 'is'
   | 'isNot'
   | 'isEmpty'
-  | 'isNotEmpty';
+  | 'isNotEmpty'
+  | 'equal'
+  | 'notEqual'
+  | 'greaterThan'
+  | 'lessThan'
+  | 'greaterThanOrEqual'
+  | 'lessThanOrEqual'
+  | 'before'
+  | 'after'
+  | 'isChecked'
+  | 'isUnchecked'
+  | 'isAnyOf'
+  | 'isNoneOf'
+  | 'containsAny'
+  | 'containsAll'
+  | 'doesNotContainAny'
+  | 'doesNotContainAll';
 
 export interface DatabaseFilter {
   columnId: string;
@@ -94,10 +145,17 @@ export interface DatabaseFilter {
 }
 
 export interface DatabaseView {
+  id?: string;
+  name?: string;
   type: DatabaseViewType;
   filters: DatabaseFilter[];
+  filterMode?: 'and' | 'or';
   groupBy?: string | null;
+  /** Multiple sort keys. `sort` is the legacy single-key form. */
+  sorts?: DatabaseSort[];
   sort?: DatabaseSort | null;
+  hiddenColumns?: string[];
+  stats?: Record<string, DatabaseStatType>;
 }
 
 export interface DatabaseData {
@@ -108,6 +166,9 @@ export interface DatabaseData {
   sort?: DatabaseSort | null;
   /** Saved table or board view. Omitted documents use a computed default. */
   view?: DatabaseView | null;
+  /** Named views. When present this supersedes the legacy single `view`. */
+  views?: DatabaseView[];
+  activeViewId?: string;
 }
 
 /**
@@ -188,6 +249,7 @@ export interface BlockProps {
   caption?: string;
   collapsed?: boolean;
   database?: DatabaseData;
+  table?: TableData;
   pageId?: string;
   pageTitle?: string;
   pageIcon?: string;
@@ -250,6 +312,7 @@ export const isTextualBlock = (block: Block): boolean =>
   block.type !== 'divider' &&
   block.type !== 'image' &&
   block.type !== 'database' &&
+  block.type !== 'table' &&
   block.type !== 'page';
 
 export const isListBlock = (block: Block): boolean =>

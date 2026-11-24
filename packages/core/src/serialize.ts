@@ -1,6 +1,7 @@
 import { createBlock, createDoc } from './doc.js';
 import { cloneDatabaseData, databaseCellDisplay, normalizeDatabaseData, sortedDatabaseRows } from './database.js';
 import { normalizeMark, normalizeRuns, runsToHtml } from './text.js';
+import { normalizeTableData, tableToTsv } from './table.js';
 import type {
   Block,
   BlockProps,
@@ -26,6 +27,7 @@ const BLOCK_TYPES: readonly BlockType[] = [
   'callout',
   'image',
   'database',
+  'table',
   'page',
 ];
 
@@ -81,6 +83,9 @@ function parseProps(value: unknown): BlockProps {
   if (typeof value.pageIcon === 'string' && value.pageIcon.length > 0) {
     props.pageIcon = value.pageIcon.slice(0, 40);
   }
+  if (isRecord(value.table)) {
+    props.table = normalizeTableData(value.table);
+  }
   return props;
 }
 
@@ -100,6 +105,10 @@ function parseBlock(value: unknown, seen: Set<string>): Block | null {
   if (type === 'database') {
     const rawProps = isRecord(value.props) ? value.props : {};
     props.database = normalizeDatabaseData(rawProps.database, 'database');
+  }
+  if (type === 'table') {
+    const rawProps = isRecord(value.props) ? value.props : {};
+    props.table = normalizeTableData(rawProps.table);
   }
   const children: Block[] = [];
   if (Array.isArray(value.children)) {
@@ -246,6 +255,9 @@ export function blocksToHtml(blocks: readonly Block[]): string {
             : `<div data-block-id="${block.id}"></div>`
         );
         break;
+      case 'table':
+        out.push(`${tableToHtml(block)}${children}`);
+        break;
       case 'page': {
         const pageId = block.props.pageId ?? '';
         const pageTitle = block.props.pageTitle ?? 'Untitled page';
@@ -273,6 +285,27 @@ function blockInnerText(block: Block): string {
   let out = '';
   for (const run of block.text) out += run.text;
   return out;
+}
+
+function tableToHtml(block: Block): string {
+  const table = block.props.table;
+  if (!table) return `<table data-block-id="${block.id}"></table>`;
+  const rows = table.rows
+    .map(row => {
+      const cells = table.columns
+        .map(column => {
+          const cell = row.cells[column.id];
+          const color = row.backgroundColor ?? column.backgroundColor;
+          const style = color
+            ? ` style="background-color:${escapeHtml(color)}"`
+            : '';
+          return `<td${style}>${escapeHtml(cell?.text ?? '')}</td>`;
+        })
+        .join('');
+      return `<tr>${cells}</tr>`;
+    })
+    .join('');
+  return `<table data-block-id="${block.id}">${rows}</table>`;
 }
 
 function databaseToHtml(data: NonNullable<Block['props']['database']>): string {
@@ -359,6 +392,11 @@ export function blocksToPlainText(blocks: readonly Block[], indent = 0): string 
         }
         break;
       }
+      case 'table':
+        for (const line of tableToTsv(block.props.table ?? { columns: [], rows: [] }).split('\n')) {
+          lines.push(`${pad}${line}`);
+        }
+        break;
       case 'page':
         lines.push(
           `${pad}[page: ${block.props.pageTitle ?? block.props.pageId ?? 'Untitled page'}]`

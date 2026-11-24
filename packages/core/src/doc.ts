@@ -1,5 +1,6 @@
 import { createDocId, createId } from './id.js';
 import { createDatabaseData, duplicateDatabaseData } from './database.js';
+import { createTableData, duplicateTableData } from './table.js';
 import { normalizeRuns, plainText, runsLength, sliceRuns } from './text.js';
 import type {
   Block,
@@ -43,6 +44,8 @@ export function defaultProps(type: BlockType): BlockProps {
       return { tone: 'info' };
     case 'database':
       return { database: createDatabaseData({ variant: 'database' }) };
+    case 'table':
+      return { table: createTableData() };
     default:
       return {};
   }
@@ -126,11 +129,21 @@ export function countWords(doc: Doc): number {
     const text = plainText(block.text).trim();
     if (text) words += text.split(/\s+/u).length;
     const database = block.props.database;
-    if (!database) return;
-    for (const row of database.rows) {
-      for (const cell of Object.values(row.cells)) {
-        const value = cell.text?.trim();
-        if (value) words += value.split(/\s+/u).length;
+    if (database) {
+      for (const row of database.rows) {
+        for (const cell of Object.values(row.cells)) {
+          const value = cell.text?.trim();
+          if (value) words += value.split(/\s+/u).length;
+        }
+      }
+    }
+    const table = block.props.table;
+    if (table) {
+      for (const row of table.rows) {
+        for (const cell of Object.values(row.cells)) {
+          const value = cell.text.trim();
+          if (value) words += value.split(/\s+/u).length;
+        }
       }
     }
   });
@@ -383,6 +396,7 @@ export function duplicateBlockTree(block: Block): Block {  return {
       ...(block.props.database
         ? { database: duplicateDatabaseData(block.props.database) }
         : {}),
+      ...(block.props.table ? { table: duplicateTableData(block.props.table) } : {}),
     },
     children: block.children.map(duplicateBlockTree),
   };
@@ -434,5 +448,12 @@ export function headingLevel(block: Block): HeadingLevel {
 }
 
 export function blockPlainText(block: Block): string {
+  if (block.type === 'table') {
+    return block.props.table?.rows
+      .flatMap(row => Object.values(row.cells))
+      .map(cell => cell.text)
+      .filter(Boolean)
+      .join(' ') ?? '';
+  }
   return plainText(block.text);
 }

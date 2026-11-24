@@ -1,10 +1,6 @@
 import { createBlock } from './doc.js';
-import {
-  createDatabaseColumn,
-  createDatabaseRow,
-  databaseCellText,
-  sortedDatabaseRows,
-} from './database.js';
+import { createTableColumn, createTableData, createTableRow } from './table.js';
+import { databaseCellText, sortedDatabaseRows } from './database.js';
 import { normalizeRuns, plainText, runsLength, sliceRuns } from './text.js';
 import type { Block, Doc, InlineMark, InlineRun } from './types.js';
 import { safeHref, safeImageSrc } from './url.js';
@@ -228,29 +224,28 @@ export function markdownToBlocks(
     ) {
       stack.length = 0;
       const headerCells = splitTableRow(trimmed);
-      const columns = headerCells.map((name, columnIndex) =>
-        createDatabaseColumn(name || `Column ${columnIndex + 1}`)
-      );
-      const databaseRows = [];
+      const columns = headerCells.map(() => createTableColumn());
+      const tableRows = [createTableRow()];
+      headerCells.forEach((value, columnIndex) => {
+        const column = columns[columnIndex];
+        if (column && value) tableRows[0]!.cells[column.id] = { text: plainText(parseInlineMarkdown(value)) };
+      });
       index += 2;
       while (index < lines.length) {
         const line = (lines[index] ?? '').trim();
         if (!line.startsWith('|')) break;
         const cells = splitTableRow(line);
-        const values: Record<string, { text?: string }> = {};
+        const row = createTableRow();
         columns.forEach((column, columnIndex) => {
           const value = plainText(parseInlineMarkdown(cells[columnIndex] ?? ''));
-          if (value) values[column.id] = { text: value };
+          if (value) row.cells[column.id] = { text: value };
         });
-        databaseRows.push(createDatabaseRow(values));
+        tableRows.push(row);
         index += 1;
       }
-      if (databaseRows.length === 0) databaseRows.push(createDatabaseRow());
       blocks.push(
-        createBlock('database', {
-          props: {
-            database: { variant: 'table', columns, rows: databaseRows },
-          },
+        createBlock('table', {
+          props: { table: { columns, rows: tableRows } },
         })
       );
       continue;
@@ -348,6 +343,10 @@ export function markdownToBlocks(
 
 const SERIALIZE_ESCAPABLE = new Set(['\\', '`', '*', '_', '[', ']']);
 
+function escapeTableText(text: string): string {
+  return escapeInline(text).replace(/\|/gu, '\\|').replace(/\n/gu, '<br>');
+}
+
 function escapeInline(text: string): string {
   let out = '';
   for (const char of text) {
@@ -432,6 +431,23 @@ function serializeBlocks(blocks: readonly Block[], depth: number, lines: string[
             lines.push(`${pad}${line}`);
           }
           lines.push('');
+        }
+        break;
+      }
+      case 'table': {
+        const table = block.props.table ?? createTableData({ rows: 1, columns: 1 });
+        const header = table.columns.map((column, index) => {
+          const first = table.rows[0]?.cells[column.id]?.text ?? `Column ${index + 1}`;
+          return escapeTableText(first || `Column ${index + 1}`);
+        });
+        lines.push(`${pad}| ${header.join(' | ')} |`);
+        lines.push(`${pad}| ${table.columns.map(() => '---').join(' | ')} |`);
+        for (const row of table.rows.slice(1)) {
+          lines.push(
+            `${pad}| ${table.columns
+              .map(column => escapeTableText(row.cells[column.id]?.text ?? ''))
+              .join(' | ')} |`
+          );
         }
         break;
       }

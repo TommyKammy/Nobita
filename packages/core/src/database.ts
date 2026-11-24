@@ -10,8 +10,10 @@ import type {
   DatabasePerson,
   DatabaseRow,
   DatabaseSort,
+  DatabaseStatType,
   DatabaseVariant,
   DatabaseView,
+  DatabaseViewType,
 } from './types.js';
 import { safeHref, safeImageSrc } from './url.js';
 
@@ -32,11 +34,62 @@ export const isDatabaseColumnType = (value: unknown): value is DatabaseColumnTyp
 
 export const DATABASE_FILTER_OPERATORS: readonly DatabaseFilterOperator[] = [
   'contains',
+  'doesNotContain',
+  'startsWith',
+  'endsWith',
   'is',
   'isNot',
   'isEmpty',
   'isNotEmpty',
+  'equal',
+  'notEqual',
+  'greaterThan',
+  'lessThan',
+  'greaterThanOrEqual',
+  'lessThanOrEqual',
+  'before',
+  'after',
+  'isChecked',
+  'isUnchecked',
+  'isAnyOf',
+  'isNoneOf',
+  'containsAny',
+  'containsAll',
+  'doesNotContainAny',
+  'doesNotContainAll',
 ];
+
+export const DATABASE_STAT_TYPES: readonly DatabaseStatType[] = [
+  'count',
+  'countValues',
+  'sum',
+  'average',
+  'median',
+  'min',
+  'max',
+];
+
+export const DATABASE_STAT_LABELS: Record<DatabaseStatType, string> = {
+  count: 'Count all',
+  countValues: 'Count values',
+  sum: 'Sum',
+  average: 'Average',
+  median: 'Median',
+  min: 'Min',
+  max: 'Max',
+};
+
+export function createDatabaseView(
+  type: DatabaseViewType = 'table',
+  name?: string
+): DatabaseView & { id: string; name: string } {
+  return {
+    id: createId('v'),
+    name: name ?? (type === 'board' ? 'Board' : 'Table'),
+    type,
+    filters: [],
+  };
+}
 
 export function createDatabaseColumn(
   name: string,
@@ -63,18 +116,16 @@ export interface CreateDatabaseOptions {
   rows?: DatabaseRow[];
 }
 
-/** A ready-to-edit data view. Tables use plain text columns; databases use properties. */
+/** A ready-to-edit typed database. The `table` variant is kept for legacy documents. */
 export function createDatabaseData(options: CreateDatabaseOptions = {}): DatabaseData {
   const variant = options.variant ?? 'database';
   if (options.columns && options.columns.length > 0) {
-    return {
-      variant,
-      columns: options.columns,
-      rows: options.rows ?? [createDatabaseRow(), createDatabaseRow()],
-    };
+    const columns = options.columns;
+    const rows = options.rows ?? [createDatabaseRow(), createDatabaseRow()];
+    return withDefaultView({ variant, columns, rows });
   }
   if (variant === 'table') {
-    return {
+    return withDefaultView({
       variant,
       columns: [
         createDatabaseColumn('Column 1'),
@@ -82,9 +133,9 @@ export function createDatabaseData(options: CreateDatabaseOptions = {}): Databas
         createDatabaseColumn('Column 3'),
       ],
       rows: [createDatabaseRow(), createDatabaseRow(), createDatabaseRow()],
-    };
+    });
   }
-  return {
+  return withDefaultView({
     variant,
     columns: [
       createDatabaseColumn('Name'),
@@ -93,7 +144,12 @@ export function createDatabaseData(options: CreateDatabaseOptions = {}): Databas
       createDatabaseColumn('Done', 'checkbox'),
     ],
     rows: [createDatabaseRow(), createDatabaseRow()],
-  };
+  });
+}
+
+function withDefaultView(data: Omit<DatabaseData, 'views' | 'activeViewId'>): DatabaseData {
+  const view = createDatabaseView('table');
+  return { ...data, views: [view], activeViewId: view.id };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -243,6 +299,19 @@ function parseFilter(
   return filter;
 }
 
+function parseSorts(value: unknown, columns: readonly DatabaseColumn[]): DatabaseSort[] {
+  if (!Array.isArray(value)) return [];
+  const sorts: DatabaseSort[] = [];
+  const seen = new Set<string>();
+  for (const item of value.slice(0, 8)) {
+    const sort = parseSort(item, columns);
+    if (!sort || seen.has(sort.columnId)) continue;
+    seen.add(sort.columnId);
+    sorts.push(sort);
+  }
+  return sorts;
+}
+
 function parseView(
   value: unknown,
   columns: readonly DatabaseColumn[]
@@ -260,11 +329,41 @@ function parseView(
       ? value.groupBy
       : undefined;
   const sort = parseSort(value.sort, columns);
+  const sorts = parseSorts(value.sorts, columns);
+  const hiddenColumns = Array.isArray(value.hiddenColumns)
+    ? [...new Set(value.hiddenColumns.filter((id): id is string => typeof id === 'string'))]
+        .filter(id => columns.some(column => column.id === id))
+        .slice(0, columns.length)
+    : [];
+  const stats: Record<string, DatabaseStatType> = {};
+  if (isRecord(value.stats)) {
+    for (const [columnId, stat] of Object.entries(value.stats)) {
+      if (
+        columns.some(column => column.id === columnId) &&
+        typeof stat === 'string' &&
+        (DATABASE_STAT_TYPES as readonly string[]).includes(stat)
+      ) {
+        stats[columnId] = stat as DatabaseStatType;
+      }
+    }
+  }
   return {
+    id:
+      typeof value.id === 'string' && value.id.length > 0 ? value.id : createId('v'),
+    name:
+      typeof value.name === 'string' && value.name.trim()
+        ? value.name.trim().slice(0, 120)
+        : type === 'board'
+          ? 'Board'
+          : 'Table',
     type,
     filters,
+    ...(value.filterMode === 'or' ? { filterMode: 'or' as const } : {}),
     ...(groupBy ? { groupBy } : {}),
+    ...(sorts.length > 0 ? { sorts } : {}),
     ...(sort ? { sort } : {}),
+    ...(hiddenColumns.length > 0 ? { hiddenColumns } : {}),
+    ...(Object.keys(stats).length > 0 ? { stats } : {}),
   };
 }
 
@@ -293,12 +392,29 @@ export function normalizeDatabaseData(value: unknown, fallbackVariant: DatabaseV
   }
   const sort = parseSort(value.sort, columns);
   const view = parseView(value.view, columns);
+  const views: DatabaseView[] = [];
+  if (Array.isArray(value.views)) {
+    const seen = new Set<string>();
+    for (const item of value.views.slice(0, 20)) {
+      const parsed = parseView(item, columns);
+      if (!parsed?.id || seen.has(parsed.id)) continue;
+      seen.add(parsed.id);
+      views.push(parsed);
+    }
+  }
+  const activeViewId =
+    typeof value.activeViewId === 'string' &&
+    views.some(item => item.id === value.activeViewId)
+      ? value.activeViewId
+      : views[0]?.id;
   return {
     variant,
     columns,
     rows,
     ...(sort ? { sort } : {}),
     ...(view ? { view } : {}),
+    ...(views.length > 0 ? { views } : {}),
+    ...(activeViewId ? { activeViewId } : {}),
   };
 }
 
@@ -313,10 +429,52 @@ function cloneCell(cell: DatabaseCell): DatabaseCell {
 
 function cloneView(view: DatabaseView): DatabaseView {
   return {
+    ...(view.id ? { id: view.id } : {}),
+    ...(view.name ? { name: view.name } : {}),
     type: view.type,
     filters: view.filters.map(filter => ({ ...filter })),
+    ...(view.filterMode ? { filterMode: view.filterMode } : {}),
     ...(view.groupBy ? { groupBy: view.groupBy } : {}),
+    ...(view.sorts ? { sorts: view.sorts.map(sort => ({ ...sort })) } : {}),
     ...(view.sort ? { sort: { ...view.sort } } : {}),
+    ...(view.hiddenColumns ? { hiddenColumns: [...view.hiddenColumns] } : {}),
+    ...(view.stats ? { stats: { ...view.stats } } : {}),
+  };
+}
+
+function remapView(
+  view: DatabaseView,
+  columnMap: ReadonlyMap<string, string>,
+  id?: string
+): DatabaseView {
+  const filters = view.filters.flatMap(filter => {
+    const columnId = columnMap.get(filter.columnId);
+    return columnId ? [{ ...filter, columnId }] : [];
+  });
+  const groupBy = view.groupBy ? columnMap.get(view.groupBy) : undefined;
+  const sorts = (view.sorts ?? (view.sort ? [view.sort] : [])).flatMap(sort => {
+    const columnId = columnMap.get(sort.columnId);
+    return columnId ? [{ ...sort, columnId }] : [];
+  });
+  const hiddenColumns = (view.hiddenColumns ?? []).flatMap(columnId => {
+    const nextId = columnMap.get(columnId);
+    return nextId ? [nextId] : [];
+  });
+  const stats: Record<string, DatabaseStatType> = {};
+  for (const [columnId, stat] of Object.entries(view.stats ?? {})) {
+    const nextId = columnMap.get(columnId);
+    if (nextId) stats[nextId] = stat;
+  }
+  return {
+    ...(id ? { id } : view.id ? { id: view.id } : {}),
+    ...(view.name ? { name: view.name } : {}),
+    type: view.type,
+    filters,
+    ...(view.filterMode ? { filterMode: view.filterMode } : {}),
+    ...(groupBy ? { groupBy } : {}),
+    ...(sorts.length > 0 ? { sorts } : {}),
+    ...(hiddenColumns.length > 0 ? { hiddenColumns } : {}),
+    ...(Object.keys(stats).length > 0 ? { stats } : {}),
   };
 }
 
@@ -336,6 +494,8 @@ export function cloneDatabaseData(data: DatabaseData): DatabaseData {
     })),
     ...(data.sort ? { sort: { ...data.sort } } : {}),
     ...(data.view ? { view: cloneView(data.view) } : {}),
+    ...(data.views ? { views: data.views.map(cloneView) } : {}),
+    ...(data.activeViewId ? { activeViewId: data.activeViewId } : {}),
   };
 }
 
@@ -359,27 +519,16 @@ export function duplicateDatabaseData(data: DatabaseData): DatabaseData {
     }
     return { id: createId('r'), cells };
   });
-  const groupBy = data.view?.groupBy
-    ? columnMap.get(data.view.groupBy)
-    : undefined;
-  const view = data.view
-    ? {
-        type: data.view.type,
-        filters: data.view.filters.flatMap(filter => {
-          const columnId = columnMap.get(filter.columnId);
-          return columnId ? [{ ...filter, columnId }] : [];
-        }),
-        ...(groupBy ? { groupBy } : {}),
-        ...(data.view.sort && columnMap.has(data.view.sort.columnId)
-          ? {
-              sort: {
-                columnId: columnMap.get(data.view.sort.columnId) as string,
-                direction: data.view.sort.direction,
-              },
-            }
-          : {}),
-      }
-    : undefined;
+  const view = data.view ? remapView(data.view, columnMap) : undefined;
+  const viewIdMap = new Map<string, string>();
+  const views = data.views?.map(item => {
+    const id = createId('v');
+    if (item.id) viewIdMap.set(item.id, id);
+    return remapView(item, columnMap, id);
+  });
+  const activeViewId = data.activeViewId
+    ? viewIdMap.get(data.activeViewId)
+    : views?.[0]?.id;
   return {
     variant: data.variant,
     columns,
@@ -388,6 +537,8 @@ export function duplicateDatabaseData(data: DatabaseData): DatabaseData {
       ? { sort: { columnId: columnMap.get(data.sort.columnId) as string, direction: data.sort.direction } }
       : {}),
     ...(view ? { view } : {}),
+    ...(views && views.length > 0 ? { views } : {}),
+    ...(activeViewId ? { activeViewId } : {}),
   };
 }
 
@@ -409,34 +560,6 @@ export function databaseCellDisplay(cell: DatabaseCell | undefined, type: Databa
   return cell.text ?? '';
 }
 
-function filterText(cell: DatabaseCell | undefined, column: DatabaseColumn): string {
-  if (column.type === 'checkbox') return cell?.checked ? 'true' : 'false';
-  return databaseCellText(cell, column.type);
-}
-
-function matchesFilter(
-  row: DatabaseRow,
-  column: DatabaseColumn,
-  filter: DatabaseFilter
-): boolean {
-  const current = filterText(row.cells[column.id], column).trim().toLocaleLowerCase();
-  const expected = (filter.value ?? '').trim().toLocaleLowerCase();
-  switch (filter.operator) {
-    case 'contains':
-      return expected === '' || current.includes(expected);
-    case 'is':
-      return current === expected;
-    case 'isNot':
-      return current !== expected;
-    case 'isEmpty':
-      return current === '' || (column.type === 'checkbox' && current === 'false');
-    case 'isNotEmpty':
-      return !(current === '' || (column.type === 'checkbox' && current === 'false'));
-    default:
-      return true;
-  }
-}
-
 function comparable(value: string, type: DatabaseColumnType): string | number {
   if (type === 'number') {
     const number = Number.parseFloat(value);
@@ -452,61 +575,199 @@ function comparable(value: string, type: DatabaseColumnType): string | number {
 function sortRows(
   rows: readonly DatabaseRow[],
   columns: readonly DatabaseColumn[],
-  sort: DatabaseSort | null | undefined
+  sorts: readonly DatabaseSort[]
 ): DatabaseRow[] {
-  if (!sort) return [...rows];
-  const column = columns.find(item => item.id === sort.columnId);
-  if (!column) return [...rows];
-  const direction = sort.direction === 'desc' ? -1 : 1;
+  if (sorts.length === 0) return [...rows];
   return rows
     .map((row, index) => ({ row, index }))
     .sort((a, b) => {
-      const left = databaseCellText(a.row.cells[column.id], column.type);
-      const right = databaseCellText(b.row.cells[column.id], column.type);
-      if (!left && !right) return a.index - b.index;
-      if (!left) return 1;
-      if (!right) return -1;
-      let result = 0;
-      if (column.type === 'checkbox') {
-        const l = a.row.cells[column.id]?.checked ? 1 : 0;
-        const r = b.row.cells[column.id]?.checked ? 1 : 0;
-        result = l - r;
-      } else {
-        const l = comparable(left, column.type);
-        const r = comparable(right, column.type);
-        if (typeof l === 'number' && typeof r === 'number') {
-          if (Number.isNaN(l) && Number.isNaN(r)) result = 0;
-          else if (Number.isNaN(l)) result = 1;
-          else if (Number.isNaN(r)) result = -1;
-          else result = l - r;
+      for (const sort of sorts) {
+        const column = columns.find(item => item.id === sort.columnId);
+        if (!column) continue;
+        const left = databaseCellText(a.row.cells[column.id], column.type);
+        const right = databaseCellText(b.row.cells[column.id], column.type);
+        if (!left && !right) continue;
+        if (!left) return 1;
+        if (!right) return -1;
+        let result = 0;
+        if (column.type === 'checkbox') {
+          const l = a.row.cells[column.id]?.checked ? 1 : 0;
+          const r = b.row.cells[column.id]?.checked ? 1 : 0;
+          result = l - r;
         } else {
-          result = String(l).localeCompare(String(r), undefined, {
-            numeric: true,
-            sensitivity: 'base',
-          });
+          const l = comparable(left, column.type);
+          const r = comparable(right, column.type);
+          if (typeof l === 'number' && typeof r === 'number') {
+            if (Number.isNaN(l) && Number.isNaN(r)) result = 0;
+            else if (Number.isNaN(l)) result = 1;
+            else if (Number.isNaN(r)) result = -1;
+            else result = l - r;
+          } else {
+            result = String(l).localeCompare(String(r), undefined, {
+              numeric: true,
+              sensitivity: 'base',
+            });
+          }
         }
+        if (result !== 0) return sort.direction === 'desc' ? -result : result;
       }
-      return result === 0 ? a.index - b.index : result * direction;
+      return a.index - b.index;
     })
     .map(entry => entry.row);
 }
 
-/** Saved view, or a table view derived from the legacy fields. */
+export function databaseSorts(view: DatabaseView): DatabaseSort[] {
+  if (view.sorts && view.sorts.length > 0) return view.sorts;
+  return view.sort ? [view.sort] : [];
+}
+
+export function databaseViews(data: DatabaseData): DatabaseView[] {
+  if (data.views && data.views.length > 0) return data.views;
+  if (data.view) return [data.view];
+  return [
+    {
+      id: 'view-default',
+      name: 'Table',
+      type: 'table',
+      filters: [],
+      ...(data.sort ? { sort: data.sort } : {}),
+    },
+  ];
+}
+
+/** Saved active view, or a table view derived from the legacy fields. */
 export function databaseView(data: DatabaseData): DatabaseView {
-  return data.view ?? {
-    type: 'table',
-    filters: [],
-    ...(data.sort ? { sort: data.sort } : {}),
-  };
+  const views = databaseViews(data);
+  return views.find(view => view.id === data.activeViewId) ?? views[0]!;
+}
+
+function effectiveSorts(data: DatabaseData, view: DatabaseView): DatabaseSort[] {
+  const sorts = databaseSorts(view);
+  return sorts.length > 0 ? sorts : data.sort ? [data.sort] : [];
 }
 
 /** Rows in display order, applying the saved view sort or legacy sort. */
 export function sortedDatabaseRows(data: DatabaseData): DatabaseRow[] {
-  return sortRows(
-    data.rows,
-    data.columns,
-    data.view ? data.view.sort : data.sort
-  );
+  return sortRows(data.rows, data.columns, effectiveSorts(data, databaseView(data)));
+}
+
+function isEmptyCell(cell: DatabaseCell | undefined, column: DatabaseColumn): boolean {
+  if (!cell) return true;
+  if (column.type === 'checkbox') return cell.checked !== true;
+  if (column.type === 'multi-select') return !cell.values?.length;
+  if (column.type === 'files') return !cell.files?.length;
+  if (column.type === 'people') return !cell.people?.length;
+  return !cell.text;
+}
+
+function filterValues(filter: DatabaseFilter): string[] {
+  return (filter.value ?? '')
+    .split(/[\n,]/u)
+    .map(value => value.trim())
+    .filter(Boolean);
+}
+
+function matchesFilter(
+  row: DatabaseRow,
+  column: DatabaseColumn,
+  filter: DatabaseFilter
+): boolean {
+  if (filter.operator === 'isEmpty') return isEmptyCell(row.cells[column.id], column);
+  if (filter.operator === 'isNotEmpty') return !isEmptyCell(row.cells[column.id], column);
+
+  const cell = row.cells[column.id];
+  const current = databaseCellText(cell, column.type).trim();
+  const expected = (filter.value ?? '').trim();
+  const currentLower = current.toLocaleLowerCase();
+  const expectedLower = expected.toLocaleLowerCase();
+  const expectedValues = filterValues(filter).map(value => value.toLocaleLowerCase());
+
+  switch (column.type) {
+    case 'checkbox': {
+      const checked = cell?.checked === true;
+      if (filter.operator === 'isChecked') return checked;
+      if (filter.operator === 'isUnchecked') return !checked;
+      if (filter.operator === 'is') {
+        return checked === (expected === '' || expectedLower === 'true');
+      }
+      if (filter.operator === 'isNot') {
+        return checked !== (expected === '' || expectedLower === 'true');
+      }
+      return true;
+    }
+    case 'number': {
+      const left = Number.parseFloat(current);
+      const right = Number.parseFloat(expected);
+      if (!Number.isFinite(left) || !Number.isFinite(right)) {
+        return filter.operator === 'notEqual' ? true : false;
+      }
+      switch (filter.operator) {
+        case 'equal':
+          return left === right;
+        case 'notEqual':
+          return left !== right;
+        case 'greaterThan':
+          return left > right;
+        case 'lessThan':
+          return left < right;
+        case 'greaterThanOrEqual':
+          return left >= right;
+        case 'lessThanOrEqual':
+          return left <= right;
+        default:
+          break;
+      }
+      break;
+    }
+    case 'date': {
+      const left = Date.parse(current);
+      const right = Date.parse(expected);
+      if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+      if (filter.operator === 'before') return left < right;
+      if (filter.operator === 'after') return left > right;
+      break;
+    }
+    case 'select': {
+      if (filter.operator === 'isAnyOf') return expectedValues.includes(currentLower);
+      if (filter.operator === 'isNoneOf') return !expectedValues.includes(currentLower);
+      break;
+    }
+    case 'multi-select': {
+      const values = (cell?.values ?? []).map(value => value.toLocaleLowerCase());
+      if (filter.operator === 'containsAny') {
+        return expectedValues.length === 0 || expectedValues.some(value => values.includes(value));
+      }
+      if (filter.operator === 'containsAll') {
+        return expectedValues.length === 0 || expectedValues.every(value => values.includes(value));
+      }
+      if (filter.operator === 'doesNotContainAny') {
+        return expectedValues.length === 0 || expectedValues.every(value => !values.includes(value));
+      }
+      if (filter.operator === 'doesNotContainAll') {
+        return expectedValues.length === 0 || !expectedValues.every(value => values.includes(value));
+      }
+      break;
+    }
+    default:
+      break;
+  }
+
+  switch (filter.operator) {
+    case 'contains':
+      return expectedLower === '' || currentLower.includes(expectedLower);
+    case 'doesNotContain':
+      return expectedLower !== '' && !currentLower.includes(expectedLower);
+    case 'startsWith':
+      return currentLower.startsWith(expectedLower);
+    case 'endsWith':
+      return currentLower.endsWith(expectedLower);
+    case 'is':
+      return currentLower === expectedLower;
+    case 'isNot':
+      return currentLower !== expectedLower;
+    default:
+      return true;
+  }
 }
 
 /** Rows after filters and sorting for a view. */
@@ -515,13 +776,74 @@ export function filteredDatabaseRows(
   view: DatabaseView = databaseView(data)
 ): DatabaseRow[] {
   const filters = view.filters ?? [];
-  const rows = data.rows.filter(row =>
-    filters.every(filter => {
-      const column = data.columns.find(item => item.id === filter.columnId);
-      return !column || matchesFilter(row, column, filter);
-    })
+  const rows =
+    filters.length === 0
+      ? [...data.rows]
+      : data.rows.filter(row => {
+          const matches = filters.map(filter => {
+            const column = data.columns.find(item => item.id === filter.columnId);
+            return !column || matchesFilter(row, column, filter);
+          });
+          return view.filterMode === 'or' ? matches.some(Boolean) : matches.every(Boolean);
+        });
+  return sortRows(rows, data.columns, effectiveSorts(data, view));
+}
+
+/** Transient search across every cell in the given rows. */
+export function searchDatabaseRows(
+  data: DatabaseData,
+  rows: readonly DatabaseRow[],
+  query: string
+): DatabaseRow[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return [...rows];
+  return rows.filter(row =>
+    data.columns.some(column =>
+      databaseCellDisplay(row.cells[column.id], column.type)
+        .toLocaleLowerCase()
+        .includes(needle)
+    )
   );
-  return sortRows(rows, data.columns, view.sort);
+}
+
+function formatStatNumber(value: number): string {
+  if (!Number.isFinite(value)) return '';
+  if (Number.isInteger(value)) return String(value);
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+/** Display value for a table footer statistic. */
+export function databaseStatValue(
+  rows: readonly DatabaseRow[],
+  column: DatabaseColumn,
+  type: DatabaseStatType | undefined
+): string {
+  if (!type) return '';
+  if (type === 'count') return String(rows.length);
+  const values = rows
+    .map(row => databaseCellText(row.cells[column.id], column.type).trim())
+    .filter(Boolean);
+  if (type === 'countValues') return String(values.length);
+  const numbers = values
+    .map(value => Number.parseFloat(value))
+    .filter(value => Number.isFinite(value));
+  if (type !== 'sum' && type !== 'average' && type !== 'median' && type !== 'min' && type !== 'max') {
+    return '';
+  }
+  if (numbers.length === 0) return '';
+  if (type === 'sum') return formatStatNumber(numbers.reduce((sum, value) => sum + value, 0));
+  if (type === 'min') return formatStatNumber(Math.min(...numbers));
+  if (type === 'max') return formatStatNumber(Math.max(...numbers));
+  if (type === 'average') {
+    return formatStatNumber(numbers.reduce((sum, value) => sum + value, 0) / numbers.length);
+  }
+  const sorted = numbers.slice().sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  const median =
+    sorted.length % 2 === 0
+      ? ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2
+      : (sorted[middle] ?? 0);
+  return formatStatNumber(median);
 }
 
 export interface DatabaseGroup {

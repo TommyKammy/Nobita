@@ -2,7 +2,7 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **59.2 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **67.5 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
 > `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
@@ -47,7 +47,7 @@ The P0/P1 passes have already closed alignment, dates, Heading 4–6,
 2. **Block selection** (Escape, Shift+Arrow, Cmd+A stages) is absent. Nobita can
    select text across blocks, but non-text blocks (image, database, divider, page)
    cannot be selected as blocks.
-3. **Database search** is absent; filters, grouping and board views are implemented.
+3. **Database search**, typed filters, multi-sort, multiple views, hidden columns and footer statistics are implemented; calendar view and nested filter groups remain.
 4. **Database keyboard row deletion** is absent; cell range selection and copy/paste are implemented.
 5. **Page workspace / `[[` / comments** are app-level features that should
    not be pulled into the editor core casually. Mentions and page references
@@ -89,7 +89,7 @@ in Nobita's toolbar or block menu.
 | --- | --- | --- |
 | New Doc | ❌ | Demo shell can create pages; not exposed from `/` |
 | Linked Doc | ◐ | Page reference block + host routing; no page registry or backlinks |
-| Table (simple table block) | 🟡 | Nobita "Table" is the table view of a database block |
+| Table (simple table block) | ✅ | Separate `table` block; HTML/Markdown table import |
 | Image | ✅ | URL-based |
 | Link (bookmark card) | 🟡 | Inline links work; no bookmark card |
 | Attachment / PDF | ❌ | No file storage/upload layer |
@@ -102,7 +102,7 @@ in Nobita's toolbar or block menu.
 
 | AFFiNE command | Nobita | Notes |
 | --- | --- | --- |
-| Table View | ✅ | Nobita `Database` / `Table` variants |
+| Table View | ✅ | Database block; simple tables are a separate block |
 | Calendar View | ❌ | — |
 | Kanban View | ✅ | Board view with grouping and card drag |
 | Todo data view | ❌ | AFFiNE feature-flagged block query view |
@@ -174,25 +174,26 @@ in Nobita's toolbar or block menu.
 ## 5. Data views (Table / Database)
 
 AFFiNE has a separate **simple table block** and a **database block** with
-table, calendar and kanban views. Nobita uses one `database` block with
-`variant: 'table' | 'database'`, currently rendering a table view.
+table, calendar and kanban views. Nobita now mirrors that split: `table` is a
+plain editable grid, while `database` is a typed data view with multiple named
+table/board views.
 
 ### 5.1 View and query features
 
 | AFFiNE | Nobita | Notes |
 | --- | --- | --- |
-| Table view | ✅ | Both `Table` and `Database` variants |
+| Table view | ✅ | Database view; simple tables are a separate `table` block |
 | Kanban view | ✅ | Board view with select/checkbox grouping and card drag |
 | Calendar view | ❌ | Needs date property + calendar grid |
 | Todo/data view | ❌ | Feature-flagged in AFFiNE |
-| Multiple views per database | ❌ | One saved view per block |
-| Add / rename / duplicate / delete view | ❌ | — |
-| Filter | ✅ | Column/operator/value filters |
-| Sort | ✅ | Asc/desc/clear, empty last |
-| Search | ❌ | — |
-| Group by | ✅ | Select, multi-select and checkbox columns |
-| View options | ❌ | Hide empty groups, date settings, etc. |
-| Add row / add column | ✅ | Header and footer buttons |
+| Multiple views per database | ✅ | Named table/board views |
+| Add / rename / duplicate / delete view | ✅ | View bar and menu |
+| Filter | ✅ | Typed operators, AND/OR mode |
+| Sort | ✅ | Multiple sort keys, empty last |
+| Search | ✅ | Live search across visible rows |
+| Group by | ✅ | Table: text/number/date/select/multi-select/checkbox; board: select/multi-select/checkbox |
+| View options | ◐ | Hidden columns, stats and view actions; hide-empty/date settings remain |
+| Add row / add column | ✅ | Header/footer and table actions |
 | Database title editing | ❌ | Label is fixed ("Table"/"Database") |
 
 ### 5.2 Properties and cells
@@ -290,8 +291,8 @@ the editor core just for parity:
   YouTube/GitHub/Figma/Loom/iframe embeds.
 - **Math:** LaTeX rendering and inline equations.
 - **Navigation graph:** linked docs, backlinks, synced docs.
-- **Full data-view framework:** row pages, calendar/kanban views, filters,
-  grouping, multi-select, progress/image properties, view tabs.
+- **Full data-view framework:** row pages, calendar view, progress/image properties,
+  per-view widths and nested filter groups.
 - **AI features.**
 
 ## 9. Priorities
@@ -324,13 +325,11 @@ the editor core just for parity:
    - Selected block ids independent of text range.
    - Escape, gutter click, Shift+Arrow, Cmd+A stages, Enter to insert after,
      Delete selected, batch duplicate/copy.
-   - Makes image/database/divider selectable and unlocks table-from-selection.
+   - Makes image/database/table/divider selectable and unlocks table-from-selection.
    - Est. 4–6 KB plus careful tests.
-2. **Database search.**
-   - Search over cell text; derived rows, no schema break.
-3. **Multiple saved views, column move/hide/duplicate.**
-   - View tabs and configuration; reuse the existing view model.
-4. **Create Table from selected blocks** (toolbar/block selection).
+2. **Database column move/duplicate and per-view widths.**
+   - Extend the current view model; hide/show and view duplication already ship.
+3. **Create Table from selected blocks** (toolbar/block selection).
    - Convert blocks into database rows; requires block selection first.
    - Est. 2–3 KB.
 6. **Bracket auto-pair and backtick-wrap-selection.**
@@ -358,6 +357,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 59.2 KB gzip. Phase 1 data views added about 7.5 KB gzip,
-Phase 2 references/input added about 2.4 KB and page links about 1.3 KB; remaining search/multi-view
+The current editor is 67.5 KB gzip. Phase 1 data views added about 7.5 KB gzip,
+Phase 2 references/input added about 2.4 KB, page links about 1.3 KB and table/database P1 about 8.3 KB; remaining
 items are incremental on top of the existing view model.

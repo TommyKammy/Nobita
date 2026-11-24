@@ -42,6 +42,8 @@ Covered today:
 - code language / callout tone pickers
 - block-link navigation, including the legacy clipboard fallback
 - page reference insertion, navigation, resolver refresh and missing-page fallback
+- simple table rendering, editing, row/column actions and HTML import
+- database multi-view, multi-sort, typed filters, search, hidden columns, statistics and table grouping
 
 Add a test when changing toolbar, menus, selection, clipboard, drag, data views
 or mobile layout. Prefer `data-*` selectors over UI copy.

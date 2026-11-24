@@ -21,6 +21,11 @@ const databaseBlock = {
             { id: 'people', name: 'People', type: 'people' },
             { id: 'done', name: 'Done', type: 'checkbox' },
           ],
+          views: [
+            { id: 'v-table', name: 'Table', type: 'table', filters: [] },
+            { id: 'v-board', name: 'Board', type: 'board', filters: [], groupBy: 'status' },
+          ],
+          activeViewId: 'v-table',
           rows: [
             {
               id: 'r1',
@@ -99,6 +104,11 @@ async function setTextBoard(page: Page): Promise<void> {
                   { id: 'tr1', cells: { name: { text: 'One' } } },
                   { id: 'tr2', cells: { name: { text: 'Two' } } },
                 ],
+                views: [
+                  { id: 'v-table', name: 'Table', type: 'table', filters: [] },
+                  { id: 'v-board', name: 'Board', type: 'board', filters: [], groupBy: 'name' },
+                ],
+                activeViewId: 'v-table',
               },
             },
             children: [],
@@ -108,7 +118,7 @@ async function setTextBoard(page: Page): Promise<void> {
     );
   });
   await expect(page.locator('.nb-db-table')).toBeVisible();
-  await page.locator('.nb-db-viewbtn[data-view="board"]').click();
+  await page.locator('.nb-db-viewtab', { hasText: 'Board' }).click();
   await expect(page.locator('.nb-db-board')).toBeVisible();
 }
 
@@ -120,7 +130,15 @@ async function databaseState(page: Page) {
     return host.doc.blocks[0]?.props.database as {
       columns: Array<{ id: string; width?: number }>;
       rows: Array<{ id: string; cells: Record<string, Record<string, unknown>> }>;
+      views?: Array<{ id: string; type?: string; filters?: unknown[]; groupBy?: string }>;
+      activeViewId?: string;
       view?: { type?: string; filters?: unknown[]; groupBy?: string };
+    };
+    return {
+      ...data,
+      view:
+        data.views?.find(view => view.id === data.activeViewId) ??
+        data.view,
     };
   });
 }
@@ -134,7 +152,7 @@ test('renders table, board and new property types', async ({ page }) => {
   await expect(page.locator('.nb-db-select', { hasText: 'Spec' })).toBeVisible();
   await expect(page.locator('.nb-db-select', { hasText: 'Ada' })).toBeVisible();
 
-  await page.locator('.nb-db-viewbtn[data-view="board"]').click();
+  await page.locator('.nb-db-viewtab', { hasText: 'Board' }).click();
   await expect(page.locator('.nb-db-board')).toBeVisible();
   await expect(page.locator('.nb-db-board-column')).toHaveCount(2);
   await expect(page.locator('.nb-db-card')).toHaveCount(3);
@@ -163,7 +181,7 @@ test('renders table, board and new property types', async ({ page }) => {
   expect(data.rows[1]?.cells.status?.text).toBe('Todo');
   await expect(page.locator('.nb-db-board-column[data-group="Todo"] .nb-db-card')).toHaveCount(3);
 
-  await page.locator('.nb-db-viewbtn[data-view="table"]').click();
+  await page.locator('.nb-db-viewtab', { hasText: 'Table' }).click();
   await expect(page.locator('.nb-db-table')).toBeVisible();
 });
 
@@ -225,16 +243,17 @@ test('filters rows and groups the board', async ({ page }) => {
   await page.getByRole('button', { name: '+ Add filter' }).click();
   await page.locator('.nb-db-filter-row select').nth(0).selectOption('status');
   await page.locator('.nb-db-filter-row select').nth(1).selectOption('is');
-  await page.locator('.nb-db-filter-row input').fill('Todo');
+  await page.locator('.nb-db-filter-row select').nth(2).selectOption('Todo');
   await page.getByRole('button', { name: 'Apply' }).click();
 
   await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(2);
   await expect(page.locator('.nb-db-count')).toContainText('2 of 3 rows');
 
-  await page.locator('.nb-db-viewbtn[data-view="board"]').click();
+  await page.locator('.nb-db-viewtab', { hasText: 'Board' }).click();
   await expect(page.locator('.nb-db-board')).toBeVisible();
   await expect(page.locator('.nb-db-board-column')).toHaveCount(2);
-  await expect(page.locator('.nb-db-card')).toHaveCount(2);
+  // Filters belong to the table view; the board view keeps all rows.
+  await expect(page.locator('.nb-db-card')).toHaveCount(3);
 });
 
 test('extends the table for oversized TSV imports', async ({ page }) => {
@@ -294,7 +313,7 @@ test('defers board regrouping when blur precedes a toolbar click', async ({ page
   await setTextBoard(page);
 
   await page.locator('.nb-db-card-title').first().click();
-  await page.locator('.nb-db-viewbtn[data-view="table"]').click();
+  await page.locator('.nb-db-viewtab', { hasText: 'Table' }).click();
   await expect(page.locator('.nb-db-table')).toBeVisible();
 });
 
@@ -506,7 +525,7 @@ test('keeps the caret while editing a board card title', async ({ page }) => {
   await openFixture(page);
   await setDatabase(page);
 
-  await page.locator('.nb-db-viewbtn[data-view="board"]').click();
+  await page.locator('.nb-db-viewtab', { hasText: 'Board' }).click();
   const title = page
     .locator('.nb-db-card', { hasText: 'One' })
     .locator('.nb-db-card-title');

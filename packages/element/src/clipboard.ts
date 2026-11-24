@@ -3,8 +3,8 @@ import {
   blocksToMarkdown,
   blocksToPlainText,
   createBlock,
-  createDatabaseColumn,
-  createDatabaseRow,
+  createTableColumn,
+  createTableRow,
   isHighlightColor,
   isTextColor,
   markdownToBlocks,
@@ -14,10 +14,10 @@ import {
 } from '@nobita/core';
 import type {
   Block,
-  DatabaseData,
   HighlightColor,
   InlineMark,
   InlineRun,
+  TableData,
   TextColor,
 } from '@nobita/core';
 
@@ -306,48 +306,28 @@ function languageOf(pre: Element): string {
   return match?.[1] ?? 'text';
 }
 
-function tableToDatabase(table: Element): DatabaseData | null {
+function tableToSimpleTable(table: Element): TableData | null {
   const allRows = Array.from(table.querySelectorAll('tr'));
   if (allRows.length === 0) return null;
-  const firstRow = allRows[0];
-  if (!firstRow) return null;
-  const firstCells = Array.from(firstRow.querySelectorAll('th,td'));
-  const hasHeader =
-    firstCells.length > 0 &&
-    (firstCells.every(cell => tag(cell) === 'TH') || firstRow.closest('thead') !== null);
-  const headerCells = hasHeader ? firstCells : [];
-  const dataRows = hasHeader ? allRows.slice(1) : allRows;
-  const width = Math.max(
-    headerCells.length,
-    ...dataRows.map(row => row.querySelectorAll('th,td').length)
-  );
+  const width = Math.max(0, ...allRows.map(row => row.querySelectorAll('th,td').length));
   if (width === 0) return null;
-  const columns = Array.from({ length: width }, (_, index) => {
-    const header = headerCells[index];
-    const name = header ? inlineRuns(header).map(run => run.text).join('').trim() : '';
-    return createDatabaseColumn(name || `Column ${index + 1}`);
-  });
-  const rows = dataRows.map(row => {
+  const columns = Array.from({ length: width }, () => createTableColumn());
+  const rows = allRows.map(row => {
     const cells = Array.from(row.querySelectorAll('th,td'));
-    const values: Record<string, { text?: string; checked?: boolean }> = {};
+    const tableRow = createTableRow();
     columns.forEach((column, index) => {
       const cell = cells[index];
       if (!cell) return;
-      const checkbox = cell.querySelector<HTMLInputElement>('input[type="checkbox"]');
       const text = inlineRuns(cell)
         .map(run => run.text)
         .join('')
         .trim();
-      if (checkbox) {
-        if (checkbox.checked) values[column.id] = { checked: true };
-      } else if (text) {
-        values[column.id] = { text };
-      }
+      if (text) tableRow.cells[column.id] = { text };
     });
-    return createDatabaseRow(values);
+    return tableRow;
   });
-  if (rows.length === 0) rows.push(createDatabaseRow());
-  return { variant: 'table', columns, rows };
+  if (rows.length === 0) rows.push(createTableRow());
+  return { columns, rows };
 }
 
 function convertElement(element: Element, out: Block[]): void {
@@ -407,9 +387,9 @@ function convertElement(element: Element, out: Block[]): void {
       return;
     }
     case 'TABLE': {
-      const database = tableToDatabase(element);
-      if (database) {
-        out.push(createBlock('database', { props: { database } }));
+      const tableData = tableToSimpleTable(element);
+      if (tableData) {
+        out.push(createBlock('table', { props: { table: tableData } }));
         return;
       }
       for (const row of element.querySelectorAll('tr')) {
