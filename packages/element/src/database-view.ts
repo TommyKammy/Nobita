@@ -479,14 +479,17 @@ export class DatabaseView {
 
   #setGroupProperty(key: string, patch: { hide?: boolean; collapsed?: boolean }): void {
     const view = this.#activeView();
-    const groups = (view.groupProperties ?? []).map(group => ({ ...group }));
+    const existing = new Map(
+      (view.groupProperties ?? []).map(group => [group.key, { ...group }])
+    );
+    const keys = this.#groupsFor(view).map(group => group.key);
+    for (const groupKey of existing.keys()) {
+      if (!keys.includes(groupKey)) keys.push(groupKey);
+    }
+    if (!keys.includes(key)) keys.push(key);
+    const groups = keys.map(groupKey => existing.get(groupKey) ?? { key: groupKey });
     const index = groups.findIndex(group => group.key === key);
-    if (index < 0) {
-      const group = { key } as { key: string; hide?: boolean; collapsed?: boolean };
-      if (patch.hide !== undefined) group.hide = patch.hide;
-      if (patch.collapsed !== undefined) group.collapsed = patch.collapsed;
-      groups.push(group);
-    } else {
+    if (index >= 0) {
       const current = groups[index];
       if (current) groups[index] = { ...current, ...patch };
     }
@@ -711,6 +714,7 @@ export class DatabaseView {
     } else if (view.type === 'table' && hadFocus && this.#active) {
       this.focusCell(this.#active.rowId, this.#active.columnId, 'end');
     }
+    this.#syncDetailPanel();
     this.#syncRowSelection();
   }
 
@@ -2536,6 +2540,7 @@ export class DatabaseView {
     title.placeholder = 'Untitled';
     title.setAttribute('aria-label', 'Record title');
     title.disabled = this.#readonly;
+    if (titleColumn) title.dataset.columnId = titleColumn.id;
     title.addEventListener('input', () => {
       if (!titleColumn) return;
       const value =
@@ -2691,7 +2696,7 @@ export class DatabaseView {
         input.addEventListener(
           'focus',
           () => {
-            input.value = cell?.text ?? '';
+            input.value = this.#currentCell(row.id, column.id)?.text ?? '';
             input.select();
           },
           { signal: this.#detailEvents.signal }
@@ -2974,6 +2979,10 @@ export class DatabaseView {
     else this.#cells.set(key, [nodes]);
   }
 
+  #currentCell(rowId: string, columnId: string): DatabaseCell | undefined {
+    return this.#data.rows.find(row => row.id === rowId)?.cells[columnId];
+  }
+
   #syncTitle(): void {
     const input = this.#titleInput;
     if (!input) return;
@@ -3018,7 +3027,96 @@ export class DatabaseView {
     this.#syncTitle();
     this.#syncBoardValues();
     this.#syncStats();
+    this.#syncDetailPanel();
     this.#updateCount(this.#activeView());
+  }
+
+  #syncDetailPanel(): void {
+    const detail = this.#detail;
+    const rowId = this.#detailRowId;
+    if (!detail || !rowId) return;
+    const row = this.#data.rows.find(item => item.id === rowId);
+    if (!row) return;
+    const title = detail.querySelector<HTMLInputElement>('.nb-db-detail-title');
+    if (title) {
+      const column = title.dataset.columnId
+        ? this.#data.columns.find(item => item.id === title.dataset.columnId)
+        : undefined;
+      if (column) {
+        const cell = row.cells[column.id];
+        const value =
+          column.type === 'number'
+            ? cell?.text ?? ''
+            : databaseCellText(cell, column.type);
+        const formatted =
+          column.type === 'number'
+            ? formatDatabaseNumber(value, column)
+            : value;
+        this.#syncDetailInput(title, value, formatted);
+      }
+    }
+    for (const field of detail.querySelectorAll<HTMLElement>(
+      '.nb-db-detail-field[data-column-id]'
+    )) {
+      const column = this.#data.columns.find(
+        item => item.id === field.dataset.columnId
+      );
+      if (!column) continue;
+      const cell = row.cells[column.id];
+      const check = field.querySelector<HTMLButtonElement>(
+        'button[role="checkbox"]'
+      );
+      if (check) {
+        check.setAttribute('aria-checked', String(Boolean(cell?.checked)));
+        continue;
+      }
+      const select = field.querySelector<HTMLSelectElement>('select');
+      if (select) {
+        const selected =
+          column.type === 'multi-select'
+            ? new Set(cell?.values ?? [])
+            : new Set(cell?.text ? [cell.text] : []);
+        for (const option of select.options) {
+          if (!option.value) continue;
+          option.selected = selected.has(option.value);
+        }
+        continue;
+      }
+      const input = field.querySelector<HTMLInputElement>('input');
+      if (input) {
+        const value = cell?.text ?? '';
+        const formatted =
+          column.type === 'number'
+            ? formatDatabaseNumber(value, column)
+            : value;
+        this.#syncDetailInput(input, value, formatted);
+        continue;
+      }
+      const text = field.querySelector<HTMLElement>('.nb-db-detail-text');
+      if (text && !text.matches(':focus') && text.textContent !== (cell?.text ?? '')) {
+        text.textContent = cell?.text ?? '';
+      }
+    }
+  }
+
+  #syncDetailInput(
+    input: HTMLInputElement,
+    value: string,
+    formatted: string
+  ): void {
+    const focused = input.matches(':focus');
+    const next = focused ? value : formatted;
+    if (input.value === next) return;
+    const start = input.selectionStart;
+    const end = input.selectionEnd;
+    input.value = next;
+    if (focused && start !== null && end !== null) {
+      try {
+        input.setSelectionRange(start, end);
+      } catch {
+        // Some input types do not support selection ranges.
+      }
+    }
   }
 
   #syncStats(): void {
@@ -3187,7 +3285,7 @@ export class DatabaseView {
         () => {
           this.#active = { rowId: row.id, columnId: column.id };
           if (column.type === 'number') {
-            input.value = cell?.text ?? '';
+            input.value = this.#currentCell(row.id, column.id)?.text ?? '';
             input.select();
           }
         },
@@ -4228,16 +4326,21 @@ export class DatabaseView {
   #onDatabaseKeyDown = (event: KeyboardEvent): void => {
     if (this.#readonly) return;
     const target = event.target;
-    if (
+    const editing =
       target instanceof HTMLInputElement ||
       target instanceof HTMLTextAreaElement ||
       (target instanceof HTMLElement &&
         (target.matches('[contenteditable="true"]') ||
-          Boolean(target.closest('.nb-db-text[contenteditable="true"]'))))
-    ) {
-      return;
-    }
-    if (this.#selectedRows.size > 0) {
+          Boolean(target.closest('.nb-db-text[contenteditable="true"]'))));
+    const rangeDelete =
+      (event.key === 'Delete' || event.key === 'Backspace') &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      this.#selectedRows.size === 0 &&
+      this.#range !== null &&
+      this.#rangeCells.size > 1;
+    if (editing && !rangeDelete) return;
+    if (!editing && this.#selectedRows.size > 0) {
       if (event.key === 'Escape') {
         event.preventDefault();
         this.#selectedRows.clear();
@@ -4250,13 +4353,7 @@ export class DatabaseView {
         return;
       }
     }
-    if (
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !this.#selectedRows.size &&
-      this.#range &&
-      (event.key === 'Delete' || event.key === 'Backspace')
-    ) {
+    if (rangeDelete) {
       event.preventDefault();
       const bounds = this.#rangeBounds();
       if (!bounds) return;

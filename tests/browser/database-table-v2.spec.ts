@@ -351,6 +351,135 @@ test('formats number cells from column settings', async ({ page }) => {
   ).toHaveValue('10%');
 });
 
+test('reads the current numeric value when refocusing a cell', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'number-refocus',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              { id: 'score', name: 'Score', type: 'number' },
+            ],
+            rows: [
+              { id: 'r1', cells: { name: { text: 'One' }, score: { text: '10' } } },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'score', width: 160 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  const score = page.locator('.nb-db-cell[data-column-id="score"] input');
+  await score.click();
+  await page.keyboard.type('20');
+  await page.locator('.nb-db-cell[data-column-id="name"]').click();
+  await score.click();
+  await expect(score).toHaveValue('20');
+  const doc = await getDoc(page);
+  expect(
+    (
+      doc.blocks[0]?.props.database as {
+        rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+      }
+    ).rows[0]?.cells.score?.text
+  ).toBe('20');
+
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  const detailScore = page.locator(
+    '.nb-db-detail-field[data-column-id="score"] input'
+  );
+  await detailScore.click();
+  await page.keyboard.type('30');
+  await page.locator('.nb-db-detail-title').click();
+  await detailScore.click();
+  await expect(detailScore).toHaveValue('30');
+});
+
+test('synchronizes the detail panel after an external undo', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  const title = page.locator('.nb-db-detail-title');
+  await title.fill('Zebra');
+  await expect(title).toHaveValue('Zebra');
+  await page.evaluate(() => {
+    (window as unknown as { __editor?: { undo(): boolean } }).__editor?.undo();
+  });
+  await expect(title).toHaveValue('One');
+  await expect(
+    page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]')
+  ).toContainText('One');
+});
+
+test('deletes a selected range while a cell editor is focused', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').click();
+  await page
+    .locator('.nb-db-cell[data-row-id="r2"][data-column-id="name"]')
+    .click({ modifiers: ['Shift'] });
+  await expect(page.locator('.nb-db-cell.is-selected')).toHaveCount(2);
+  await page.keyboard.press('Delete');
+  const doc = await getDoc(page);
+  const rows = (
+    doc.blocks[0]?.props.database as {
+      rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+    }
+  ).rows;
+  expect(rows[0]?.cells.name?.text).toBeUndefined();
+  expect(rows[1]?.cells.name?.text).toBeUndefined();
+});
+
+test('preserves group order when collapsing a group', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const view = (doc.blocks[0]?.props.database as { views: Array<Record<string, unknown>> })
+    .views[0]!;
+  view.groupBy = 'status';
+  await setDoc(page, doc);
+  const labels = page.locator('.nb-db-group-label');
+  await expect(labels).toHaveText(['Todo', 'Done']);
+  await page
+    .locator('.nb-db-group[data-group="Done"] .nb-db-group-toggle')
+    .click();
+  await expect(labels).toHaveText(['Todo', 'Done']);
+  const saved = await getDoc(page);
+  const groupProperties = (
+    saved.blocks[0]?.props.database as {
+      views: Array<{ groupProperties?: Array<{ key: string; collapsed?: boolean }> }>;
+    }
+  ).views[0]?.groupProperties;
+  expect(groupProperties).toEqual([
+    { key: 'Todo' },
+    { key: 'Done', collapsed: true },
+  ]);
+});
+
 test('applies nested filter groups', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
