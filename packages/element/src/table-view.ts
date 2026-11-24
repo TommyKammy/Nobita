@@ -116,6 +116,9 @@ export class SimpleTableView {
     const table = document.createElement('table');
     table.className = 'nb-table-grid';
     const colgroup = document.createElement('colgroup');
+    const handleCol = document.createElement('col');
+    handleCol.style.width = '28px';
+    colgroup.append(handleCol);
     for (const column of this.#data.columns) {
       const col = document.createElement('col');
       col.style.width = `${column.width ?? DEFAULT_COLUMN_WIDTH}px`;
@@ -232,11 +235,10 @@ export class SimpleTableView {
   }
 
   #syncValues(): void {
-    const root = this.element.getRootNode() as ShadowRoot;
     for (const row of this.#data.rows) {
       for (const column of this.#data.columns) {
         const cell = this.#cells.get(cellKey(row.id, column.id));
-        if (!cell || root.activeElement === cell) continue;
+        if (!cell) continue;
         const value = tableCellText(row, column.id);
         if (cell.textContent !== value) cell.textContent = value;
       }

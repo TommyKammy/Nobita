@@ -395,7 +395,7 @@ export function normalizeDatabaseData(value: unknown, fallbackVariant: DatabaseV
   const views: DatabaseView[] = [];
   if (Array.isArray(value.views)) {
     const seen = new Set<string>();
-    for (const item of value.views.slice(0, 20)) {
+    for (const item of value.views.slice(0, 100)) {
       const parsed = parseView(item, columns);
       if (!parsed?.id || seen.has(parsed.id)) continue;
       seen.add(parsed.id);
@@ -407,10 +407,15 @@ export function normalizeDatabaseData(value: unknown, fallbackVariant: DatabaseV
     views.some(item => item.id === value.activeViewId)
       ? value.activeViewId
       : views[0]?.id;
+  const title =
+    typeof value.title === 'string' && value.title.trim()
+      ? value.title.trim().slice(0, 200)
+      : undefined;
   return {
     variant,
     columns,
     rows,
+    ...(title ? { title } : {}),
     ...(sort ? { sort } : {}),
     ...(view ? { view } : {}),
     ...(views.length > 0 ? { views } : {}),
@@ -482,6 +487,7 @@ function remapView(
 export function cloneDatabaseData(data: DatabaseData): DatabaseData {
   return {
     variant: data.variant,
+    ...(data.title ? { title: data.title } : {}),
     columns: data.columns.map(column => ({
       ...column,
       ...(column.options ? { options: [...column.options] } : {}),
@@ -531,6 +537,7 @@ export function duplicateDatabaseData(data: DatabaseData): DatabaseData {
     : views?.[0]?.id;
   return {
     variant: data.variant,
+    ...(data.title ? { title: data.title } : {}),
     columns,
     rows,
     ...(data.sort && columnMap.has(data.sort.columnId)
@@ -775,15 +782,15 @@ export function filteredDatabaseRows(
   data: DatabaseData,
   view: DatabaseView = databaseView(data)
 ): DatabaseRow[] {
-  const filters = view.filters ?? [];
+  const filters = (view.filters ?? []).flatMap(filter => {
+    const column = data.columns.find(item => item.id === filter.columnId);
+    return column ? [{ filter, column }] : [];
+  });
   const rows =
     filters.length === 0
       ? [...data.rows]
       : data.rows.filter(row => {
-          const matches = filters.map(filter => {
-            const column = data.columns.find(item => item.id === filter.columnId);
-            return !column || matchesFilter(row, column, filter);
-          });
+          const matches = filters.map(entry => matchesFilter(row, entry.column, entry.filter));
           return view.filterMode === 'or' ? matches.some(Boolean) : matches.every(Boolean);
         });
   return sortRows(rows, data.columns, effectiveSorts(data, view));

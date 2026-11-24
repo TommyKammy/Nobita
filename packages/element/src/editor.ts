@@ -930,7 +930,10 @@ export class NobitaEditor implements BlockHost {
       ...block,
       props: { ...block.props, table: data },
     }));
-    this.#commit(next, this.store.selection, options);
+    this.store.update(() => next, {
+      ...(options.mergeKey ? { mergeKey: options.mergeKey } : {}),
+      source: 'table',
+    });
   }
 
   setImage(blockId: string, patch: { src?: string; alt?: string; caption?: string }): void {

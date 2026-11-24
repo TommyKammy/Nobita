@@ -427,6 +427,55 @@ describe('database P1 queries', () => {
     expect(databaseStatValue(data.rows, score, 'count')).toBe('3');
   });
 
+  it('ignores filters for deleted columns instead of passing all rows', () => {
+    data.views = [
+      {
+        id: 'v1',
+        name: 'Main',
+        type: 'table',
+        filters: [
+          { columnId: 'deleted', operator: 'is', value: 'anything' },
+          { columnId: status.id, operator: 'is', value: 'Done' },
+        ],
+        filterMode: 'or',
+      },
+    ];
+    expect(filteredDatabaseRows(data).map(row => row.cells[name.id]?.text)).toEqual(['Beta']);
+  });
+
+  it('preserves more than twenty named views', () => {
+    const parsed = parseDoc({
+      version: 1,
+      id: 'many-views',
+      title: '',
+      blocks: [
+        {
+          id: 'db',
+          type: 'database',
+          text: [],
+          props: {
+            database: {
+              variant: 'database',
+              title: 'Roadmap',
+              columns: [{ id: 'name', name: 'Name', type: 'text' }],
+              rows: [],
+              views: Array.from({ length: 21 }, (_, index) => ({
+                id: `v${index}`,
+                name: `View ${index}`,
+                type: 'table',
+                filters: [],
+              })),
+              activeViewId: 'v20',
+            },
+          },
+          children: [],
+        },
+      ],
+    });
+    expect(parsed.blocks[0]?.props.database?.views).toHaveLength(21);
+    expect(parsed.blocks[0]?.props.database?.title).toBe('Roadmap');
+  });
+
   it('normalizes multiple views and view-specific settings', () => {
     const parsed = parseDoc({
       version: 1,

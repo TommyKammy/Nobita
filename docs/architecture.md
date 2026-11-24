@@ -276,6 +276,7 @@ A `database` block stores typed columns, row records and named views:
 ```ts
 interface DatabaseData {
   variant: 'database' | 'table'; // 'table' is legacy-only
+  title?: string;
   columns: { id; name; type; options?; width? }[];
   rows: {
     id;

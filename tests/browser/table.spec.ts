@@ -54,7 +54,7 @@ test('renders and edits a simple table independently from Database', async ({ pa
   await page.locator('.nb-table-action', { hasText: '+ Row' }).click();
   await expect(page.locator('.nb-table-grid tbody tr')).toHaveCount(3);
   await page.locator('.nb-table-action', { hasText: '+ Column' }).click();
-  await expect(page.locator('.nb-table-grid colgroup col')).toHaveCount(3);
+  await expect(page.locator('.nb-table-grid colgroup col')).toHaveCount(4);
 });
 
 test('inserts a simple table from the slash menu', async ({ page }) => {
@@ -81,7 +81,7 @@ test('deletes rows and columns from the table menu', async ({ page }) => {
 
   await page.locator('.nb-table-cell').first().click({ button: 'right' });
   await page.locator('.nb-table-menu button', { hasText: 'Delete column' }).click();
-  await expect(page.locator('.nb-table-grid colgroup col')).toHaveCount(1);
+  await expect(page.locator('.nb-table-grid colgroup col')).toHaveCount(2);
 });
 
 test('imports an HTML table as a simple table', async ({ page }) => {
@@ -101,4 +101,44 @@ test('imports an HTML table as a simple table', async ({ page }) => {
   const doc = await getDoc(page);
   expect(doc.blocks.some(block => block.type === 'table')).toBe(true);
   expect(doc.blocks.some(block => block.type === 'database')).toBe(false);
+});
+
+
+test('keeps focus in a table cell after editing a paragraph', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'table-focus',
+    title: '',
+    blocks: [
+      { id: 'p1', type: 'paragraph', text: [{ text: 'Before' }], props: {}, children: [] },
+      tableDoc().blocks[0],
+    ],
+  });
+  await page.locator('[data-block-id="p1"] .nb-text').click();
+  await page.keyboard.press('End');
+  await page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c1"]').click();
+  await page.keyboard.press('End');
+  await page.keyboard.type('XYZ');
+
+  const doc = await getDoc(page);
+  expect(doc.blocks.find(block => block.id === 'p1')?.text).toBe('Before');
+  const table = doc.blocks.find(block => block.type === 'table');
+  expect((table?.props.table as { rows: { id: string; cells: Record<string, { text?: string }> }[] }).rows[0]?.cells.c1?.text).toBe('AXYZ');
+});
+
+test('reverts a focused table cell when the host undoes', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, tableDoc());
+  const cell = page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c1"]');
+  await cell.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type('Z');
+  await expect(cell).toHaveText('AZ');
+  await page.evaluate(() => {
+    (window as unknown as { __editor?: { undo(): boolean } }).__editor?.undo();
+  });
+  await expect(cell).toHaveText('A');
+  const doc = await getDoc(page);
+  expect((doc.blocks[0]?.props.table as { rows: { id: string; cells: Record<string, { text?: string }> }[] }).rows[0]?.cells.c1?.text).toBe('A');
 });

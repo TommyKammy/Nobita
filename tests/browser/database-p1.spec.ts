@@ -64,7 +64,7 @@ async function setDoc(page: Page, doc = p1Doc()): Promise<void> {
       .__editor;
     editor?.setDoc(JSON.stringify(value));
   }, doc);
-  await expect(page.locator('.nb-db-table')).toBeVisible();
+  await expect(page.locator('.nb-db-table').first()).toBeVisible();
 }
 
 test('sorts, filters and searches rows', async ({ page }) => {
@@ -164,4 +164,112 @@ test('keeps view state independent', async ({ page }) => {
   await expect(page.locator('.nb-db-card')).toHaveCount(3);
   await page.locator('.nb-db-viewtab', { hasText: 'Table' }).click();
   await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(1);
+});
+
+test('renames a database', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  const title = page.locator('.nb-db-title-input');
+  await title.fill('Roadmap');
+  const state = await page.evaluate(() => {
+    const host = document.querySelector('nobita-editor') as unknown as {
+      doc: { blocks: Array<{ props: { database?: { title?: string } } }> };
+    };
+    return host.doc.blocks[0]?.props.database?.title;
+  });
+  expect(state).toBe('Roadmap');
+});
+
+test('synchronizes duplicated cells in grouped tables', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'grouped-cells',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              { id: 'tags', name: 'Tags', type: 'multi-select', options: ['A', 'B'] },
+              { id: 'score', name: 'Score', type: 'number' },
+            ],
+            rows: [
+              { id: 'r1', cells: { name: { text: 'One' }, tags: { values: ['A', 'B'] }, score: { text: '1' } } },
+              { id: 'r2', cells: { name: { text: 'Two' }, tags: { values: ['A'] }, score: { text: '2' } } },
+            ],
+            views: [
+              { id: 'v1', name: 'By tag', type: 'table', filters: [], groupBy: 'tags' },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+
+  await page
+    .locator('.nb-db-group[data-group="B"] .nb-db-cell[data-row-id="r1"][data-column-id="score"] input')
+    .fill('5');
+  await expect(
+    page.locator('.nb-db-group[data-group="A"] .nb-db-cell[data-row-id="r1"][data-column-id="score"] input')
+  ).toHaveValue('5');
+});
+
+test('pastes rows in grouped table display order', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'grouped-paste',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              { id: 'group', name: 'Group', type: 'select', options: ['A', 'B'] },
+            ],
+            rows: [
+              { id: 'r1', cells: { name: { text: 'B1' }, group: { text: 'B' } } },
+              { id: 'r2', cells: { name: { text: 'A1' }, group: { text: 'A' } } },
+              { id: 'r3', cells: { name: { text: 'B2' }, group: { text: 'B' } } },
+              { id: 'r4', cells: { name: { text: 'A2' }, group: { text: 'A' } } },
+            ],
+            views: [
+              { id: 'v1', name: 'Grouped', type: 'table', filters: [], groupBy: 'group' },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', 'X\nY');
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db-cell[data-row-id="r2"][data-column-id="name"]')
+      ?.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: data }));
+  });
+  const doc = await getDoc(page);
+  const database = doc.blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  };
+  expect(database.rows.find(row => row.id === 'r2')?.cells.name?.text).toBe('X');
+  expect(database.rows.find(row => row.id === 'r4')?.cells.name?.text).toBe('Y');
+  expect(database.rows.find(row => row.id === 'r3')?.cells.name?.text).toBe('B2');
 });

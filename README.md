@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **67.5 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
+- **67.9 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 67.5 KB bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 67.9 KB bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -184,6 +184,7 @@ A document is deliberately simple, stable JSON:
   "props": {
     "database": {
       "variant": "database",
+      "title": "Tasks",
       "columns": [
         { "id": "c1", "name": "Task", "type": "text" },
         { "id": "c2", "name": "Status", "type": "select", "options": ["Todo", "Done"] },
@@ -365,8 +366,8 @@ Bundle sizes:
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 253.7 KB | **67.5 KB** |
-| Demo app (editor + UI + seed data) | 284.8 KB | 77.7 KB |
+| Editor ESM (`nobita.js`) | 255.7 KB | **67.9 KB** |
+| Demo app (editor + UI + seed data) | 286.8 KB | 78.1 KB |
 
 The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.
 

@@ -218,7 +218,8 @@ export class DatabaseView {
   #readonly: boolean;
   #structureKey = '';
   #events = new AbortController();
-  #cells = new Map<string, CellNodes>();
+  #cells = new Map<string, CellNodes[]>();
+  #titleInput: HTMLInputElement | null = null;
   #active: { rowId: string; columnId: string } | null = null;
   #pendingFocus: { rowId: string; columnId: string; at: 'start' | 'end' } | null = null;
   #popoverCleanup: (() => void) | null = null;
@@ -296,7 +297,7 @@ export class DatabaseView {
   }
 
   focusCell(rowId: string, columnId: string, at: 'start' | 'end' = 'end'): void {
-    const nodes = this.#cells.get(cellKey(rowId, columnId));
+    const nodes = this.#cells.get(cellKey(rowId, columnId))?.[0];
     if (!nodes) return;
     const target = nodes.text ?? nodes.input ?? nodes.button;
     if (!target) return;
@@ -445,9 +446,19 @@ export class DatabaseView {
     title.className = 'nb-db-title';
     const titleIcon = document.createElement('span');
     titleIcon.innerHTML = this.#data.variant === 'table' ? icon.table : icon.database;
-    const titleText = document.createElement('span');
-    titleText.textContent = this.#data.variant === 'table' ? 'Table' : 'Database';
-    title.append(titleIcon, titleText);
+    const titleInput = document.createElement('input');
+    titleInput.className = 'nb-db-title-input';
+    titleInput.value = this.#data.title ?? '';
+    titleInput.placeholder = this.#data.variant === 'table' ? 'Untitled table' : 'Untitled database';
+    titleInput.disabled = this.#readonly;
+    titleInput.setAttribute('aria-label', 'Database title');
+    titleInput.addEventListener('input', () => {
+      const value = titleInput.value.replace(/\r?\n/gu, ' ').slice(0, 200);
+      if ((this.#data.title ?? '') === value) return;
+      this.#host.commit({ ...this.#data, title: value }, { mergeKey: 'db:title' });
+    }, { signal: this.#events.signal });
+    this.#titleInput = titleInput;
+    title.append(titleIcon, titleInput);
     const count = document.createElement('span');
     count.className = 'nb-db-count';
     this.#countElement = count;
@@ -631,6 +642,7 @@ export class DatabaseView {
   }
 
   #addView(type: 'table' | 'board'): void {
+    if (this.#views().length >= 100) return;
     const view = createDatabaseView(type, this.#nextViewName(type));
     if (type === 'board') {
       const groupBy = this.#defaultGroupColumn();
@@ -686,6 +698,7 @@ export class DatabaseView {
     });
     add('Duplicate view', () => {
       this.#closePopover();
+      if (this.#views().length >= 100) return;
       const active = this.#activeView();
       const views = this.#views();
       const index = views.findIndex(item => item.id === active.id);
@@ -951,10 +964,7 @@ export class DatabaseView {
   ): HTMLTableElement {
     const table = document.createElement('table');
     table.className = 'nb-db-table';
-    table.setAttribute(
-      'aria-label',
-      this.#data.variant === 'table' ? 'Table' : 'Database'
-    );
+    table.setAttribute('aria-label', this.#data.title?.trim() || 'Database');
     const colgroup = document.createElement('colgroup');
     const handleCol = document.createElement('col');
     handleCol.style.width = '28px';
@@ -1410,7 +1420,9 @@ export class DatabaseView {
 
   #openFilterPopover(anchor: HTMLElement): void {
     const view = this.#activeView();
-    const draft: DatabaseFilter[] = view.filters.map(filter => ({ ...filter }));
+    const draft: DatabaseFilter[] = view.filters
+      .filter(filter => this.#data.columns.some(column => column.id === filter.columnId))
+      .map(filter => ({ ...filter }));
     const mode = view.filterMode === 'or' ? 'or' : 'and';
     const content = document.createElement('div');
     content.className = 'nb-db-filter-popover';
@@ -1688,32 +1700,48 @@ export class DatabaseView {
     }`;
   }
 
+  #registerCell(key: string, nodes: CellNodes): void {
+    const list = this.#cells.get(key);
+    if (list) list.push(nodes);
+    else this.#cells.set(key, [nodes]);
+  }
+
+  #syncTitle(): void {
+    const input = this.#titleInput;
+    if (!input) return;
+    const value = this.#data.title ?? '';
+    if (input.value !== value) input.value = value;
+  }
+
   #syncValues(): void {
     for (const row of this.#data.rows) {
       for (const column of this.#data.columns) {
-        const nodes = this.#cells.get(cellKey(row.id, column.id));
-        if (!nodes) continue;
+        const copies = this.#cells.get(cellKey(row.id, column.id));
+        if (!copies) continue;
         const cell = row.cells[column.id];
         const value = column.type === 'checkbox' ? '' : cell?.text ?? '';
-        if (nodes.text && nodes.text.textContent !== value) nodes.text.textContent = value;
-        if (nodes.input && nodes.input.value !== value) nodes.input.value = value;
-        if (nodes.button && column.type === 'checkbox') {
-          nodes.button.setAttribute('aria-checked', String(Boolean(cell?.checked)));
-        }
-        if (nodes.button && column.type === 'select') {
-          this.#applySelectLabel(nodes.button, value, column.options);
-        }
-        if (nodes.button && column.type === 'multi-select') {
-          this.#applyMultiLabel(nodes.button, cell?.values ?? []);
-        }
-        if (nodes.button && column.type === 'files') {
-          this.#applyFilesLabel(nodes.button, cell?.files ?? []);
-        }
-        if (nodes.button && column.type === 'people') {
-          this.#applyPeopleLabel(nodes.button, cell?.people ?? []);
+        for (const nodes of copies) {
+          if (nodes.text && nodes.text.textContent !== value) nodes.text.textContent = value;
+          if (nodes.input && nodes.input.value !== value) nodes.input.value = value;
+          if (nodes.button && column.type === 'checkbox') {
+            nodes.button.setAttribute('aria-checked', String(Boolean(cell?.checked)));
+          }
+          if (nodes.button && column.type === 'select') {
+            this.#applySelectLabel(nodes.button, value, column.options);
+          }
+          if (nodes.button && column.type === 'multi-select') {
+            this.#applyMultiLabel(nodes.button, cell?.values ?? []);
+          }
+          if (nodes.button && column.type === 'files') {
+            this.#applyFilesLabel(nodes.button, cell?.files ?? []);
+          }
+          if (nodes.button && column.type === 'people') {
+            this.#applyPeopleLabel(nodes.button, cell?.people ?? []);
+          }
         }
       }
     }
+    this.#syncTitle();
     this.#syncColumnWidths();
     this.#syncBoardValues();
     this.#syncStats();
@@ -1795,7 +1823,7 @@ export class DatabaseView {
       );
       td.append(button);
       nodes.button = button;
-      this.#cells.set(key, nodes);
+      this.#registerCell(key, nodes);
       return td;
     }
 
@@ -1824,7 +1852,7 @@ export class DatabaseView {
       );
       td.append(button);
       nodes.button = button;
-      this.#cells.set(key, nodes);
+      this.#registerCell(key, nodes);
       return td;
     }
 
@@ -1867,7 +1895,7 @@ export class DatabaseView {
       );
       td.append(button);
       nodes.button = button;
-      this.#cells.set(key, nodes);
+      this.#registerCell(key, nodes);
       return td;
     }
 
@@ -1901,7 +1929,7 @@ export class DatabaseView {
       );
       td.append(input);
       nodes.input = input;
-      this.#cells.set(key, nodes);
+      this.#registerCell(key, nodes);
       return td;
     }
 
@@ -1947,7 +1975,7 @@ export class DatabaseView {
     }
     td.append(text);
     nodes.text = text;
-    this.#cells.set(key, nodes);
+    this.#registerCell(key, nodes);
     return td;
   }
 
@@ -2138,21 +2166,34 @@ export class DatabaseView {
     });
     const next: DatabaseData = { ...this.#data, columns, rows };
     if (this.#data.sort?.columnId === columnId) delete next.sort;
+    if (this.#data.views) {
+      next.views = this.#data.views.map(view => this.#removeColumnFromView(view, columnId));
+    }
     if (this.#data.view) {
-      const view: DatabaseViewConfig = {
-        type: this.#data.view.type,
-        filters: this.#data.view.filters.filter(filter => filter.columnId !== columnId),
-      };
-      const groupBy =
-        this.#data.view.groupBy && this.#data.view.groupBy !== columnId
-          ? this.#data.view.groupBy
-          : undefined;
-      if (groupBy) view.groupBy = groupBy;
-      const sort = this.#data.view.sort;
-      if (sort && sort.columnId !== columnId) view.sort = sort;
-      next.view = view;
+      next.view = this.#removeColumnFromView(this.#data.view, columnId);
     }
     this.#host.commit(next);
+  }
+
+  #removeColumnFromView(view: DatabaseViewConfig, columnId: string): DatabaseViewConfig {
+    const filters = view.filters.filter(filter => filter.columnId !== columnId);
+    const groupBy = view.groupBy && view.groupBy !== columnId ? view.groupBy : undefined;
+    const sorts = (view.sorts ?? (view.sort ? [view.sort] : [])).filter(
+      sort => sort.columnId !== columnId
+    );
+    const sort = view.sort && view.sort.columnId !== columnId ? view.sort : undefined;
+    const hiddenColumns = (view.hiddenColumns ?? []).filter(id => id !== columnId);
+    const stats = { ...(view.stats ?? {}) };
+    delete stats[columnId];
+    return {
+      ...view,
+      filters,
+      ...(groupBy ? { groupBy } : {}),
+      ...(sorts.length > 0 ? { sorts } : {}),
+      ...(sort ? { sort } : {}),
+      ...(hiddenColumns.length > 0 ? { hiddenColumns } : {}),
+      ...(Object.keys(stats).length > 0 ? { stats } : {}),
+    };
   }
 
   #insertColumn(anchorId: string, after: boolean): void {
@@ -2196,7 +2237,16 @@ export class DatabaseView {
   /** ---- navigation ---- */
 
   #rows(): DatabaseRow[] {
-    return this.#rowsFor(this.#activeView());
+    return this.#renderedRows(this.#activeView());
+  }
+
+  #renderedRows(view: DatabaseViewConfig = this.#activeView()): DatabaseRow[] {
+    if (view.type === 'table' && view.groupBy) {
+      return this.#groupsFor(view).flatMap(group =>
+        this.#collapsedGroups.has(`${view.id}:${group.key}`) ? [] : group.rows
+      );
+    }
+    return this.#rowsFor(view);
   }
 
   #moveTab(rowId: string, columnId: string, backwards: boolean): void {
@@ -2281,6 +2331,9 @@ export class DatabaseView {
       event.preventDefault();
       return;
     }
+    const copies = this.#cells.get(cellKey(rowId, columnId)) ?? [];
+    const activeNode =
+      copies.find(copy => copy.td.contains(event.target as Node)) ?? copies[0];
     if (event.key === 'Tab') {
       event.preventDefault();
       this.#moveTab(rowId, columnId, event.shiftKey);
@@ -2288,7 +2341,7 @@ export class DatabaseView {
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      const nodes = this.#cells.get(cellKey(rowId, columnId));
+      const nodes = activeNode;
       if (kind === 'select') {
         if (nodes?.button) this.#openSelectPopover(columnId, rowId, nodes.button);
         return;
@@ -2307,7 +2360,7 @@ export class DatabaseView {
       return;
     }
     if (kind === 'text' || kind === 'select' || kind === 'checkbox') {
-      const node = this.#cells.get(cellKey(rowId, columnId));
+      const node = activeNode;
       if (event.key === 'ArrowDown') {
         if (kind === 'text' && node?.text && !caretAtBoundary(node.text, 'end')) return;
         event.preventDefault();
@@ -2404,7 +2457,7 @@ export class DatabaseView {
   } | null {
     if (!this.#range) return null;
     const view = this.#activeView();
-    const rows = this.#rowsFor(view);
+    const rows = this.#renderedRows(view);
     const columns = this.#visibleColumns(view);
     const startRow = rows.findIndex(row => row.id === this.#range?.startRowId);
     const endRow = rows.findIndex(row => row.id === this.#range?.endRowId);
@@ -2434,19 +2487,23 @@ export class DatabaseView {
         }
       }
     }
-    for (const [key, nodes] of this.#cells) {
+    for (const [key, copies] of this.#cells) {
       const selected = this.#rangeCells.has(key);
-      nodes.td.classList.toggle('is-selected', selected);
-      nodes.td.setAttribute('aria-selected', String(selected));
+      for (const nodes of copies) {
+        nodes.td.classList.toggle('is-selected', selected);
+        nodes.td.setAttribute('aria-selected', String(selected));
+      }
     }
   }
 
   #clearRange(): void {
     this.#range = null;
     this.#rangeCells.clear();
-    for (const nodes of this.#cells.values()) {
-      nodes.td.classList.remove('is-selected');
-      nodes.td.setAttribute('aria-selected', 'false');
+    for (const copies of this.#cells.values()) {
+      for (const nodes of copies) {
+        nodes.td.classList.remove('is-selected');
+        nodes.td.setAttribute('aria-selected', 'false');
+      }
     }
   }
 
@@ -2477,7 +2534,7 @@ export class DatabaseView {
     clearReferences = false
   ): void {
     const view = this.#activeView();
-    const rows = this.#rowsFor(view);
+    const rows = this.#renderedRows(view);
     const visibleColumns = this.#visibleColumns(view);
     const startRow = rows.findIndex(row => row.id === startRowId);
     const startColumn = visibleColumns.findIndex(column => column.id === startColumnId);

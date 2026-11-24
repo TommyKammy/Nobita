@@ -871,6 +871,25 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 
 .nb-db-title svg { width: 16px; height: 16px; color: var(--nb-text-tertiary); }
+.nb-db-title { flex: 1 1 auto; }
+.nb-db-title-input {
+  width: 100%;
+  min-width: 0;
+  max-width: 320px;
+  padding: 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--nb-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+}
+.nb-db-title-input:hover { border-color: var(--nb-border); }
+.nb-db-title-input:focus { border-color: var(--nb-accent); box-shadow: 0 0 0 2px var(--nb-accent-soft); }
+.nb-db-title-input::placeholder { color: var(--nb-text-placeholder); font-weight: 500; }
+.nb-db-title-input:disabled { color: var(--nb-text-secondary); cursor: default; }
 .nb-db-count { font-size: 11px; font-weight: 450; color: var(--nb-text-tertiary); white-space: nowrap; }
 
 .nb-db-tools { margin-left: auto; display: flex; gap: 4px; }

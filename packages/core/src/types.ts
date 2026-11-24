@@ -160,6 +160,8 @@ export interface DatabaseView {
 
 export interface DatabaseData {
   variant: DatabaseVariant;
+  /** Optional database title displayed by the data view. */
+  title?: string;
   columns: DatabaseColumn[];
   rows: DatabaseRow[];
   /** Legacy global sort retained for older documents. */
