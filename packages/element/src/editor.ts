@@ -205,6 +205,7 @@ export class NobitaEditor implements BlockHost {
   #drag: DragState | null = null;
   #savedSelection: EditorSelection | null = null;
   #destroyed = false;
+  #docEpoch = 0;
   #bodyEvents = new AbortController();
   #composing = false;
   #compositionBlockId: string | null = null;
@@ -871,9 +872,10 @@ export class NobitaEditor implements BlockHost {
   async #uploadImage(blockId: string, file: File): Promise<void> {
     const upload = this.#options.uploadImage;
     if (!upload || this.#readonly) return;
+    const epoch = this.#docEpoch;
     try {
       const result = await upload(file);
-      if (this.#destroyed || this.#readonly) return;
+      if (this.#destroyed || this.#readonly || epoch !== this.#docEpoch) return;
       const src = typeof result === 'string' ? result : result.src;
       if (!src) return;
       const alt = typeof result === 'string' ? undefined : result.alt;
@@ -1270,6 +1272,7 @@ export class NobitaEditor implements BlockHost {
 
   #onStoreChange(change: { doc: Doc; source: string }): void {
     if (this.#destroyed) return;
+    if (change.source === 'replace') this.#docEpoch += 1;
     this.#syncBody(change.doc.blocks);
     this.#syncTitle();
     this.#syncPlaceholders();

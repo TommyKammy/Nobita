@@ -594,3 +594,74 @@ test('does not insert an upload that finishes after readonly', async ({ page }) 
   await page.waitForTimeout(100);
   expect((await getDoc(page)).blocks.some(block => block.type === 'image')).toBe(false);
 });
+
+test('does not apply a pending upload to a replaced document', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, textDoc('Original'));
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        setUploadImage(handler: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    (window as unknown as { __uploadStarted: boolean }).__uploadStarted = false;
+    editor?.setUploadImage(
+      () =>
+        new Promise(resolve => {
+          (window as unknown as { __uploadStarted: boolean }).__uploadStarted = true;
+          (window as unknown as { __finishUpload: () => void }).__finishUpload = () =>
+            resolve({ src: 'https://example.com/replaced.png' });
+        })
+    );
+    editor?.focus('b1', 0);
+    const data = new DataTransfer();
+    data.items.add(
+      new File([new Uint8Array([137, 80, 78, 71])], 'replaced.png', {
+        type: 'image/png',
+      })
+    );
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('[data-block-id="b1"] .nb-text')
+      ?.dispatchEvent(
+        new ClipboardEvent('paste', {
+          bubbles: true,
+          clipboardData: data,
+        })
+      );
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { __uploadStarted: boolean }).__uploadStarted
+      )
+    )
+    .toBe(true);
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { setDoc(value: string): void };
+    }).__editor;
+    editor?.setDoc(
+      JSON.stringify({
+        version: 1,
+        id: 'replacement',
+        title: '',
+        blocks: [
+          {
+            id: 'b1',
+            type: 'paragraph',
+            text: [{ text: 'Replaced' }],
+            props: {},
+            children: [],
+          },
+        ],
+      })
+    );
+    (window as unknown as { __finishUpload: () => void }).__finishUpload();
+  });
+  await page.waitForTimeout(100);
+  const doc = await getDoc(page);
+  expect(doc.blocks.some(block => block.type === 'image')).toBe(false);
+  expect(blockById(doc, 'b1')?.text).toBe('Replaced');
+});
