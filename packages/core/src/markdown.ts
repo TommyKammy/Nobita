@@ -435,6 +435,19 @@ function serializeBlocks(blocks: readonly Block[], depth: number, lines: string[
         }
         break;
       }
+      case 'page': {
+        const title = escapeInline(
+          block.props.pageTitle ?? block.props.pageId ?? 'Untitled page'
+        );
+        const pageId = block.props.pageId;
+        const href = pageId
+          ? `#page-${encodeURIComponent(pageId)
+              .replace(/\(/gu, '%28')
+              .replace(/\)/gu, '%29')}`
+          : '';
+        lines.push(pageId ? `${pad}[${title}](${href})` : `${pad}${title}`);
+        break;
+      }
       case 'callout':
         lines.push(indentLines(text, `${pad}> `));
         if (block.props.tone && block.props.tone !== 'info') {

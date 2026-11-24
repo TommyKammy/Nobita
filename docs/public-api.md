@@ -24,7 +24,7 @@ Stable exports:
 - `defineNobitaEditor(tagName?)`
 - `NobitaOptions`
 - `NobitaTheme`
-- `NobitaChangeDetail`
+- `NobitaChangeDetail`, `NobitaPageOpenDetail`
 - `MentionItem`, `MentionProvider`, `ImageUploadResult`, `ImageUploadHandler`
 - `htmlToBlocks`, `plainTextToBlocks`, `readClipboardPayload`
 - `icon`
@@ -48,6 +48,8 @@ selection helpers, and menu item builders. Do not import these files directly.
 | `onSelectionChange` | `(selection \| null) => void` | Selection change callback |
 | `mentionProvider` | `MentionProvider` | Host directory used by the `@` mention picker |
 | `uploadImage` | `ImageUploadHandler` | Upload pasted/dropped images |
+| `onOpenPage` | `(pageId) => void` | Host navigation for page reference blocks |
+| `resolvePage` | `(pageId) => PageInfo \| null` | Optional cached metadata for live page titles/icons |
 
 `MentionProvider.search(query)` may return items synchronously or as a Promise. Each item is
 `{ id, label, kind?, keywords? }`; the selected item becomes an inline
@@ -63,34 +65,42 @@ browser-native HTML.
 `getBlockLink(blockId)` returns `#block-<id>`. Clicking a matching link inside
 the same document focuses the block. Use normal URLs for links across documents.
 
+Page references are block-level links to documents owned by the host. A page
+block stores `{ pageId, pageTitle, pageIcon? }` and never embeds page content.
+`insertPageLink(page, { afterBlockId? })` creates one; `refreshPageLinks()`
+re-reads optional `resolvePage` metadata after a host rename. The resolver must
+be synchronous and cached; `onOpenPage` owns loading and routing.
+
 ### Editor methods
 
 `getDoc()`, `getJSON(pretty?)`, `getMarkdown()`, `getHTML()`, `setDoc(doc, { history? })`,
 `getSelection()`, `focus(blockId?, offset?)`, `focusTitle()`, `blur()`, `setTitle(title)`,
 `setReadonly(value)`, `setTheme(theme)`, `setPlaceholder(value)`, `undo()`, `redo()`,
-`insertMarkdown(markdown)`, `getBlockLink(blockId)`, `setMentionProvider(provider)`,
-`setUploadImage(handler)`, `destroy()`.
+`insertMarkdown(markdown)`, `insertPageLink(page, { afterBlockId? })`, `refreshPageLinks()`,
+`getBlockLink(blockId)`, `setMentionProvider(provider)`, `setUploadImage(handler)`, `destroy()`.
 
 ### `<nobita-editor>`
 
 Attributes: `readonly`, `theme`, `placeholder`, `min-height`, `doc` (JSON string).
 
-Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `uploadImage`.
+Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `uploadImage`,
+`onOpenPage`, `resolvePage`.
 
 Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`,
-`setReadonly()`, `setTheme()`.
+`insertPageLink()`, `refreshPageLinks()`, `setReadonly()`, `setTheme()`.
 
 Events:
 
 - `nobita-change`: `{ doc: Doc, source: string }`
 - `nobita-selection`: `{ selection: EditorSelection | null }`
+- `nobita-page-open`: `{ pageId: string }`
 - `nobita-ready`
 
 ## `@nobita/core`
 
 Stable exports include:
 
-- Document types: `Doc`, `Block`, `BlockProps`, `InlineRun`, `InlineMark`, `MentionRef`, `EditorSelection`
+- Document types: `Doc`, `Block`, `BlockProps`, `InlineRun`, `InlineMark`, `MentionRef`, `PageInfo`, `EditorSelection`
 - Serialization: `parseDoc`, `docToJSON`, `blocksToMarkdown`, `markdownToBlocks`,
   `blocksToHtml`
 - Editing commands: `setBlockType`, `setBlockAlign`, `toggleChecked`,

@@ -52,6 +52,7 @@ import {
   type HeadingLevel,
   type HighlightColor,
   type InlineMark,
+  type PageInfo,
   type Point,
   type TextAlign,
   type TextColor,
@@ -116,6 +117,10 @@ export interface NobitaOptions {
   mentionProvider?: MentionProvider;
   /** Optional host-provided image uploader used by paste and drop. */
   uploadImage?: ImageUploadHandler;
+  /** Navigate to a page reference. The host owns loading and routing. */
+  onOpenPage?: (pageId: string) => void;
+  /** Optional cached metadata used to refresh page reference titles/icons. */
+  resolvePage?: (pageId: string) => PageInfo | null;
 }
 
 interface SlashState {
@@ -393,6 +398,65 @@ export class NobitaEditor implements BlockHost {
     return findBlock(this.store.doc.blocks, blockId)
       ? `#block-${encodeURIComponent(blockId)}`
       : null;
+  }
+
+  /**
+   * Insert a reference to a page owned by the host. The editor stores only a
+   * snapshot of the page metadata and never loads or embeds page content.
+   */
+  insertPageLink(page: PageInfo, options: { afterBlockId?: string } = {}): string | null {
+    if (this.#readonly) return null;
+    const pageId = page.id.trim();
+    if (!pageId) return null;
+    const pageTitle = page.title.trim() || 'Untitled page';
+    const pageIcon = page.icon?.trim();
+    const block = createBlock('page', {
+      props: {
+        pageId,
+        pageTitle,
+        ...(pageIcon ? { pageIcon } : {}),
+      },
+    });
+    const afterId =
+      options.afterBlockId ??
+      this.#focusedBlockId ??
+      this.store.selection?.focus.blockId ??
+      this.store.doc.blocks[this.store.doc.blocks.length - 1]?.id ??
+      null;
+    let next = afterId
+      ? insertBlockRelative(this.store.doc, afterId, block, 'after')
+      : this.store.doc;
+    if (next === this.store.doc) {
+      next = { ...this.store.doc, blocks: [...this.store.doc.blocks, block] };
+    }
+    this.#commit(next, this.store.selection);
+    return block.id;
+  }
+
+  /** Re-render page reference cards after host metadata changes. */
+  refreshPageLinks(): void {
+    for (const view of this.#viewIndex.values()) view.refreshPageLink();
+  }
+
+  get onOpenPage(): ((pageId: string) => void) | undefined {
+    return this.#options.onOpenPage;
+  }
+
+  set onOpenPage(handler: ((pageId: string) => void) | undefined) {
+    this.#options = handler
+      ? { ...this.#options, onOpenPage: handler }
+      : (({ onOpenPage: _onOpenPage, ...rest }) => rest)(this.#options);
+  }
+
+  get resolvePage(): ((pageId: string) => PageInfo | null) | undefined {
+    return this.#options.resolvePage;
+  }
+
+  set resolvePage(handler: ((pageId: string) => PageInfo | null) | undefined) {
+    this.#options = handler
+      ? { ...this.#options, resolvePage: handler }
+      : (({ resolvePage: _resolvePage, ...rest }) => rest)(this.#options);
+    this.refreshPageLinks();
   }
 
   setDoc(doc: Doc | string, options: { history?: boolean } = {}): void {
@@ -895,6 +959,14 @@ export class NobitaEditor implements BlockHost {
     }
   }
 
+  pageInfo(pageId: string): PageInfo | null {
+    return this.#options.resolvePage?.(pageId) ?? null;
+  }
+
+  openPage(pageId: string): void {
+    if (pageId) this.#options.onOpenPage?.(pageId);
+  }
+
   setCodeLanguage(blockId: string, language: string): void {
     if (this.#readonly) return;
     this.#commit(setCodeLanguage(this.store.doc, blockId, language), this.store.selection);
@@ -968,7 +1040,7 @@ export class NobitaEditor implements BlockHost {
   #isNestedField(target: EventTarget | null): boolean {
     if (!(target instanceof Node)) return false;
     const element = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement;
-    return Boolean(element?.closest('.nb-caption, .nb-db, .nb-image-placeholder, input, textarea, select'));
+    return Boolean(element?.closest('.nb-caption, .nb-db, .nb-image-placeholder, .nb-page-link, input, textarea, select'));
   }
 
   #activeBlockId(target: EventTarget | null): string | null {
@@ -1097,6 +1169,13 @@ export class NobitaEditor implements BlockHost {
     body.addEventListener(
       'focusin',
       event => {
+        const target = event.target instanceof Node ? event.target : null;
+        const pageLink = target ? closestElement(target, '.nb-page-link') : null;
+        if (pageLink) {
+          const pageBlock = closestElement(pageLink, '.nb-block');
+          if (pageBlock?.dataset.blockId) this.setFocusedBlock(pageBlock.dataset.blockId);
+          return;
+        }
         if (this.#isNestedField(event.target)) return;
         const element = closestElement(event.target as Node, '.nb-block');
         const blockId = element?.dataset.blockId;
@@ -1262,7 +1341,7 @@ export class NobitaEditor implements BlockHost {
         this.#focusBlock(block.id, 0);
         return;
       }
-      if (last.type === 'database' || last.type === 'image' || last.type === 'divider') {
+      if (last.type === 'database' || last.type === 'image' || last.type === 'divider' || last.type === 'page') {
         const { doc, block } = appendParagraphAfter(this.store.doc, last.id);
         const caret: Point = { blockId: block.id, offset: 0 };
         this.#commit(doc, { anchor: caret, focus: caret });
@@ -1271,7 +1350,7 @@ export class NobitaEditor implements BlockHost {
       }
       const flat = flattenBlocks(blocks);
       const lastText = [...flat].reverse().find(
-        item => item.type !== 'divider' && item.type !== 'image' && item.type !== 'database'
+        item => item.type !== 'divider' && item.type !== 'image' && item.type !== 'database' && item.type !== 'page'
       );
       if (lastText) this.#focusBlock(lastText.id, runsLength(lastText.text));
     });
@@ -1360,6 +1439,11 @@ export class NobitaEditor implements BlockHost {
     if (block.type === 'divider') {
       const next = this.#nextTextBlock(blockId);
       if (next) this.#focusBlock(next.id, 0);
+      return;
+    }
+    if (block.type === 'page') {
+      this.#focusedBlockId = blockId;
+      view.focusPageLink();
       return;
     }
     const point: Point = { blockId, offset };
@@ -1628,6 +1712,10 @@ export class NobitaEditor implements BlockHost {
     const point = this.#pointFromCaret(blockId);
     const block = findBlock(this.store.doc.blocks, blockId);
     if (!block) return;
+    if (block.type === 'page') {
+      this.#insertParagraphAfter(blockId);
+      return;
+    }
     const length = runsLength(block.text);
     const text = plainText(block.text);
 
@@ -1694,7 +1782,13 @@ export class NobitaEditor implements BlockHost {
       });
       return;
     }
-    if (block.type !== 'paragraph' && block.type !== 'divider' && block.type !== 'image' && block.type !== 'database') {
+    if (
+      block.type !== 'paragraph' &&
+      block.type !== 'divider' &&
+      block.type !== 'image' &&
+      block.type !== 'database' &&
+      block.type !== 'page'
+    ) {
       const next = setBlockType(this.store.doc, blockId, 'paragraph');
       const caret: Point = { blockId, offset: 0 };
       this.#commit(next, { anchor: caret, focus: caret });
@@ -1708,7 +1802,7 @@ export class NobitaEditor implements BlockHost {
     const previous = location ? location.siblings[location.index - 1] : undefined;
     if (
       previous &&
-      (previous.type === 'image' || previous.type === 'divider' || previous.type === 'database')
+      (previous.type === 'image' || previous.type === 'divider' || previous.type === 'database' || previous.type === 'page')
     ) {
       return;
     }
@@ -1743,7 +1837,7 @@ export class NobitaEditor implements BlockHost {
     }
     const location = locateBlock(this.store.doc.blocks, blockId);
     const next = location ? location.siblings[location.index + 1] : undefined;
-    if (next && (next.type === 'image' || next.type === 'divider' || next.type === 'database')) return;
+    if (next && (next.type === 'image' || next.type === 'divider' || next.type === 'database' || next.type === 'page')) return;
     const merged = mergeBlockWithNext(this.store.doc, blockId);
     if (!merged) return;
     const caret: Point = { blockId, offset: point.offset };
@@ -1914,7 +2008,7 @@ export class NobitaEditor implements BlockHost {
       return;
     }
     const flat = flattenBlocks(this.store.doc.blocks).filter(
-      item => item.type !== 'divider' && item.type !== 'image' && item.type !== 'database'
+      item => item.type !== 'divider' && item.type !== 'image' && item.type !== 'database' && item.type !== 'page'
     );
     const first = flat[0];
     const last = flat[flat.length - 1];
@@ -1928,7 +2022,7 @@ export class NobitaEditor implements BlockHost {
 
   #previousTextBlock(blockId: string): Block | null {
     const flat = flattenBlocks(this.store.doc.blocks).filter(
-      block => block.type !== 'divider' && block.type !== 'image' && block.type !== 'database'
+      block => block.type !== 'divider' && block.type !== 'image' && block.type !== 'database' && block.type !== 'page'
     );
     const index = flat.findIndex(block => block.id === blockId);
     return index > 0 ? flat[index - 1] ?? null : null;
@@ -1936,7 +2030,7 @@ export class NobitaEditor implements BlockHost {
 
   #nextTextBlock(blockId: string): Block | null {
     const flat = flattenBlocks(this.store.doc.blocks).filter(
-      block => block.type !== 'divider' && block.type !== 'image' && block.type !== 'database'
+      block => block.type !== 'divider' && block.type !== 'image' && block.type !== 'database' && block.type !== 'page'
     );
     const index = flat.findIndex(block => block.id === blockId);
     return index >= 0 ? flat[index + 1] ?? null : null;
@@ -1970,7 +2064,7 @@ export class NobitaEditor implements BlockHost {
     if (!first) return;
     let caret: Point;
 
-    if (block.type === 'database' || block.type === 'divider' || block.type === 'image') {
+    if (block.type === 'database' || block.type === 'divider' || block.type === 'image' || block.type === 'page') {
       doc = insertBlocksAfter(doc, block.id, inserted);
       const last = inserted[inserted.length - 1] ?? block;
       caret = { blockId: last.id, offset: runsLength(last.text) };

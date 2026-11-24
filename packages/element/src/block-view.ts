@@ -50,6 +50,9 @@ export class BlockView {
   #text: HTMLElement | null = null;
   #codeLang: HTMLSelectElement | null = null;
   #toneSelect: HTMLSelectElement | null = null;
+  #pageLink: HTMLElement | null = null;
+  #pageIcon: HTMLElement | null = null;
+  #pageLabel: HTMLElement | null = null;
   #image: HTMLElement | null = null;
   #caption: HTMLElement | null = null;
   #database: DatabaseView | null = null;
@@ -165,6 +168,9 @@ export class BlockView {
     if (this.#toneSelect) {
       this.#toneSelect.value = block.props.tone ?? 'info';
     }
+    if (block.type === 'page' && this.#pageLink) {
+      this.#syncPageLink(block);
+    }
 
     if (block.type === 'image') {
       if (force || previous.props.src !== block.props.src) this.#buildImage(block);
@@ -185,9 +191,46 @@ export class BlockView {
     this.#text = null;
     this.#codeLang = null;
     this.#toneSelect = null;
+    this.#pageLink = null;
+    this.#pageIcon = null;
+    this.#pageLabel = null;
     this.#image = null;
     this.#caption = null;
     this.#content.replaceChildren();
+
+    if (block.type === 'page') {
+      const link = document.createElement('div');
+      link.className = 'nb-page-link';
+      link.contentEditable = 'false';
+      link.tabIndex = 0;
+      link.setAttribute('role', 'link');
+      const pageIcon = document.createElement('span');
+      pageIcon.className = 'nb-page-icon';
+      const label = document.createElement('span');
+      label.className = 'nb-page-label';
+      const arrow = document.createElement('span');
+      arrow.className = 'nb-page-arrow';
+      arrow.setAttribute('aria-hidden', 'true');
+      arrow.textContent = '↗';
+      link.append(pageIcon, label, arrow);
+      link.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.#openPage();
+      });
+      link.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.#openPage();
+      });
+      this.#pageLink = link;
+      this.#pageIcon = pageIcon;
+      this.#pageLabel = label;
+      this.#content.append(link);
+      this.#syncPageLink(block);
+      return;
+    }
 
     if (block.type === 'database') {
       const host = this.#host;
@@ -327,6 +370,41 @@ export class BlockView {
       fragment.append(span);
     }
     text.replaceChildren(fragment);
+  }
+
+  #openPage(): void {
+    const pageId = this.block.props.pageId;
+    if (!pageId) return;
+    this.#host.setFocusedBlock(this.id);
+    this.#host.openPage(pageId);
+  }
+
+  #syncPageLink(block: Block): void {
+    if (!this.#pageLink || !this.#pageIcon || !this.#pageLabel) return;
+    const pageId = block.props.pageId ?? '';
+    const info = pageId ? this.#host.pageInfo(pageId) : null;
+    const title =
+      (info?.title ?? block.props.pageTitle ?? '').trim() ||
+      (pageId ? 'Untitled page' : 'Missing page');
+    const pageIcon = info?.icon ?? block.props.pageIcon;
+    if (pageIcon) this.#pageIcon.textContent = pageIcon;
+    else this.#pageIcon.innerHTML = icon.page;
+    this.#pageLabel.textContent = title;
+    this.#pageLink.dataset.pageId = pageId;
+    this.#pageLink.dataset.missing = String(!pageId);
+    this.#pageLink.title = pageId ? title : 'Missing page link';
+    this.#pageLink.setAttribute(
+      'aria-label',
+      pageId ? `Open page: ${title}` : 'Missing page link'
+    );
+  }
+
+  refreshPageLink(): void {
+    if (this.block.type === 'page') this.#syncPageLink(this.block);
+  }
+
+  focusPageLink(): void {
+    this.#pageLink?.focus();
   }
 
   #syncCodeLanguage(language: string): void {

@@ -53,6 +53,7 @@ export const icon = {
   callout: wrap(
     '<rect x="2.5" y="3.5" width="15" height="13" rx="3.5"/><path d="M10 8.6v4"/><circle cx="10" cy="6.2" r="0.4" fill="currentColor"/>'
   ),
+  page: wrap('<path d="M5.5 3.5h6L15 7v9.5h-9.5z"/><path d="M11.5 3.5V7H15"/>'),
   image: wrap(
     '<rect x="2.5" y="3.5" width="15" height="13" rx="3"/><circle cx="7" cy="8" r="1.4"/><path d="m3.4 14.4 4-4 3 3 2.4-2.2 3.8 3.8"/>'
   ),
@@ -129,6 +130,8 @@ export function blockIcon(type: BlockType, level?: HeadingLevel): string {
       return icon.code;
     case 'divider':
       return icon.divider;
+    case 'page':
+      return icon.page;
     default:
       return icon.text;
   }

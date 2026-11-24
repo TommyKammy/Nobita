@@ -8,6 +8,7 @@ import {
   readClipboardPayload,
   type NobitaChangeDetail,
   type NobitaOptions,
+  type NobitaPageOpenDetail,
   type NobitaTheme,
 } from '@nobita/element';
 // @ts-expect-error - Menu is intentionally internal to @nobita/element
@@ -20,6 +21,7 @@ import {
   parseDoc,
   type Doc,
   type EditorSelection,
+  type PageInfo,
 } from '@nobita/core';
 
 /**
@@ -47,8 +49,12 @@ export function publicApiFixture(host: HTMLElement): void {
     onSelectionChange: (selection: EditorSelection | null) => {
       void selection;
     },
+    onOpenPage: pageId => void pageId,
+    resolvePage: (pageId: string): PageInfo | null => ({ id: pageId, title: 'Page' }),
   };
   const editor = createEditor(host, options);
+  void editor.insertPageLink({ id: 'p1', title: 'Page' });
+  editor.refreshPageLinks();
   const element = new NobitaEditorElement();
   defineNobitaEditor('public-api-editor');
   void element;
@@ -59,6 +65,7 @@ export function publicApiFixture(host: HTMLElement): void {
   void blocksToMarkdown(doc);
   void markdownToBlocks('Hello');
   void (null as NobitaChangeDetail | null);
+  void (null as NobitaPageOpenDetail | null);
   void (null as unknown as typeof Menu);
   void editor;
 }

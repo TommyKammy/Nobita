@@ -14,7 +14,7 @@ import {
   type NobitaChangeDetail,
   type NobitaTheme,
 } from '@nobita/element';
-import type { Doc, EditorSelection } from '@nobita/core';
+import type { Doc, EditorSelection, PageInfo } from '@nobita/core';
 
 export interface NobitaReactHandle {
   readonly element: NobitaEditorElement | null;
@@ -23,6 +23,8 @@ export interface NobitaReactHandle {
   getMarkdown(): string;
   getJSON(): string;
   setDoc(doc: Doc | string): void;
+  insertPageLink(page: PageInfo, options?: { afterBlockId?: string }): string | null;
+  refreshPageLinks(): void;
   undo(): boolean;
   redo(): boolean;
 }
@@ -39,6 +41,8 @@ export interface NobitaEditorProps {
   onSelectionChange?: (selection: EditorSelection | null) => void;
   mentionProvider?: MentionProvider;
   uploadImage?: ImageUploadHandler;
+  onOpenPage?: (pageId: string) => void;
+  resolvePage?: (pageId: string) => PageInfo | null;
 }
 
 /**
@@ -86,6 +90,18 @@ export const NobitaEditor = forwardRef<NobitaReactHandle, NobitaEditorProps>(
     useLayoutEffect(() => {
       const element = hostRef.current;
       if (!element) return;
+      element.onOpenPage = props.onOpenPage;
+    }, [props.onOpenPage]);
+
+    useLayoutEffect(() => {
+      const element = hostRef.current;
+      if (!element) return;
+      element.resolvePage = props.resolvePage;
+    }, [props.resolvePage]);
+
+    useLayoutEffect(() => {
+      const element = hostRef.current;
+      if (!element) return;
       const handleChange = (event: Event): void => {
         const detail = (event as CustomEvent<NobitaChangeDetail>).detail;
         props.onChange?.(detail.doc, { source: detail.source });
@@ -115,6 +131,9 @@ export const NobitaEditor = forwardRef<NobitaReactHandle, NobitaEditorProps>(
         setDoc: (doc: Doc | string) => {
           if (hostRef.current) hostRef.current.doc = doc;
         },
+        insertPageLink: (page: PageInfo, options?: { afterBlockId?: string }) =>
+          hostRef.current?.insertPageLink(page, options) ?? null,
+        refreshPageLinks: () => hostRef.current?.refreshPageLinks(),
         undo: () => hostRef.current?.undo() ?? false,
         redo: () => hostRef.current?.redo() ?? false,
       }),

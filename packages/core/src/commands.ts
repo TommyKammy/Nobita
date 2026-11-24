@@ -48,6 +48,15 @@ function propsForType(type: BlockType, current: BlockProps, extra: Partial<Block
       next.database =
         extra.database ?? current.database ?? createDatabaseData({ variant: 'database' });
       break;
+    case 'page': {
+      const pageId = extra.pageId ?? current.pageId;
+      const pageTitle = extra.pageTitle ?? current.pageTitle;
+      const pageIcon = extra.pageIcon ?? current.pageIcon;
+      if (pageId) next.pageId = pageId;
+      if (pageTitle) next.pageTitle = pageTitle;
+      if (pageIcon) next.pageIcon = pageIcon;
+      break;
+    }
     default:
       break;
   }
@@ -68,7 +77,7 @@ export function setBlockType(
     const text =
       type === 'code'
         ? normalizeRuns(block.text.map(run => ({ text: run.text })))
-        : type === 'divider' || type === 'image' || type === 'database'
+        : type === 'divider' || type === 'image' || type === 'database' || type === 'page'
           ? []
           : block.text;
     return {
@@ -214,12 +223,15 @@ export function blockPlaceholder(block: Block, isFirst: boolean): string {
       return 'Image';
     case 'database':
       return '';
+    case 'page':
+      return '';
     default:
       return "Write something, or press '/' for commands";
   }
 }
 
 export function blockSearchText(block: Block): string {
+  if (block.type === 'page') return block.props.pageTitle ?? block.props.pageId ?? '';
   return plainText(block.text);
 }
 

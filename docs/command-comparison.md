@@ -2,7 +2,7 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **57.9 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **59.2 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
 > `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
@@ -45,12 +45,13 @@ The P0/P1 passes have already closed alignment, dates, Heading 4–6,
 
 1. **Inline equation** is absent and needs a math renderer.
 2. **Block selection** (Escape, Shift+Arrow, Cmd+A stages) is absent. Nobita can
-   select text across blocks, but non-text blocks (image, database, divider)
+   select text across blocks, but non-text blocks (image, database, divider, page)
    cannot be selected as blocks.
 3. **Database search** is absent; filters, grouping and board views are implemented.
 4. **Database keyboard row deletion** is absent; cell range selection and copy/paste are implemented.
-5. **Linked docs / nested pages / comments** are app-level features that should
-   not be pulled into the editor core casually. Mentions are a generic inline primitive.
+5. **Page workspace / `[[` / comments** are app-level features that should
+   not be pulled into the editor core casually. Mentions and page references
+   are generic primitives; routing, backlinks and page trees stay in the host.
 
 Recommended order is in [Priorities](#priorities).
 
@@ -87,7 +88,7 @@ in Nobita's toolbar or block menu.
 | AFFiNE command | Nobita | Notes |
 | --- | --- | --- |
 | New Doc | ❌ | Demo shell can create pages; not exposed from `/` |
-| Linked Doc | ❌ | Requires page registry inside the editor |
+| Linked Doc | ◐ | Page reference block + host routing; no page registry or backlinks |
 | Table (simple table block) | 🟡 | Nobita "Table" is the table view of a database block |
 | Image | ✅ | URL-based |
 | Link (bookmark card) | 🟡 | Inline links work; no bookmark card |
@@ -340,7 +341,7 @@ the editor core just for parity:
 
 - Calendar database view.
 - Row detail pages / title property / page-per-row.
-- Linked docs, `[[`, backlinks.
+- Page workspace navigation, `[[`, backlinks.
 - Comments and collaboration.
 - Attachments/PDF, managed image hosting, bookmark previews, embeds.
 - LaTeX/equation blocks.
@@ -357,6 +358,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 57.9 KB gzip. Phase 1 data views added about 7.5 KB gzip
-and Phase 2 references/input added about 2.4 KB; remaining search/multi-view
+The current editor is 59.2 KB gzip. Phase 1 data views added about 7.5 KB gzip,
+Phase 2 references/input added about 2.4 KB and page links about 1.3 KB; remaining search/multi-view
 items are incremental on top of the existing view model.
