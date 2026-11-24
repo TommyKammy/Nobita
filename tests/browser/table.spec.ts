@@ -227,9 +227,28 @@ test('selects table cells by dragging and supports copy and clear', async ({ pag
   });
   expect(copied).toBe('A\tB\nC\tD');
 
+  await page.evaluate(() => {
+    const cell = document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-table-cell[data-row-id="r2"][data-column-id="c2"]');
+    if (!cell) return;
+    const data = new DataTransfer();
+    data.setData('text/plain', 'X\tY\nZ\tW');
+    cell.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: data }));
+  });
+  await expect(first).toBeFocused();
+  let doc = await getDoc(page);
+  let table = doc.blocks[0]?.props.table as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  };
+  expect(table.rows[0]?.cells.c1?.text).toBe('X');
+  expect(table.rows[0]?.cells.c2?.text).toBe('Y');
+  expect(table.rows[1]?.cells.c1?.text).toBe('Z');
+  expect(table.rows[1]?.cells.c2?.text).toBe('W');
+
   await page.keyboard.press('Delete');
-  const doc = await getDoc(page);
-  const table = doc.blocks[0]?.props.table as {
+  doc = await getDoc(page);
+  table = doc.blocks[0]?.props.table as {
     rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
   };
   expect(table.rows[0]?.cells).toEqual({});

@@ -227,7 +227,12 @@ test('keeps the search caret while refreshing results', async ({ page }) => {
   await setDoc(page);
   const search = page.locator('.nb-db-search');
   await search.fill('ac');
-  await page.waitForTimeout(30);
+  await page.evaluate(
+    () =>
+      new Promise<void>(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      })
+  );
   await search.evaluate(input => {
     (input as HTMLInputElement).setSelectionRange(1, 1);
   });

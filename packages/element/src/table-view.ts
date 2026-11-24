@@ -46,6 +46,44 @@ function tsvCell(value: string): string {
   return /[\t\n\r"]/u.test(value) ? `"${value.replace(/"/gu, '""')}"` : value;
 }
 
+function parseTsv(source: string): string[][] {
+  const text = source.replace(/\r\n?/gu, '\n');
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quoted) {
+      if (char === '"' && text[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        field += char;
+      }
+      continue;
+    }
+    if (char === '"' && field === '') {
+      quoted = true;
+    } else if (char === '\t') {
+      row.push(field);
+      field = '';
+    } else if (char === '\n') {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += char;
+    }
+  }
+  row.push(field);
+  rows.push(row);
+  return rows;
+}
+
 interface TableAreaBounds {
   rowStart: number;
   rowEnd: number;
@@ -148,6 +186,7 @@ export class SimpleTableView {
     });
     this.element.addEventListener('copy', this.#onCopy, true);
     this.element.addEventListener('cut', this.#onCut, true);
+    this.element.addEventListener('paste', this.#onPaste, true);
     this.element.addEventListener('click', this.#onClickCapture, true);
     this.render();
   }
@@ -675,6 +714,63 @@ export class SimpleTableView {
     event.clipboardData?.setData('text/plain', text);
     event.preventDefault();
     this.#clearSelectedCells();
+  };
+
+  #onPaste = (event: ClipboardEvent): void => {
+    if (this.#readonly) return;
+    const bounds = this.#areaBounds();
+    if (!bounds) return;
+    const text = event.clipboardData?.getData('text/plain') ?? '';
+    if (!text) return;
+    const grid = parseTsv(text);
+    if (grid.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    let data = this.#data;
+    const width = Math.max(0, ...grid.map(line => line.length));
+    const neededColumns = bounds.columnStart + width;
+    while (data.columns.length < neededColumns) {
+      const last = data.columns[data.columns.length - 1];
+      const result = insertTableColumn(data, last?.id ?? null);
+      if (!result.columnId) break;
+      data = result.data;
+    }
+    const neededRows = bounds.rowStart + grid.length;
+    while (data.rows.length < neededRows) {
+      const last = data.rows[data.rows.length - 1];
+      const result = insertTableRow(data, last?.id ?? null);
+      if (!result.rowId) break;
+      data = result.data;
+    }
+
+    let lastRowId = '';
+    let lastColumnId = '';
+    grid.forEach((values, rowOffset) => {
+      const row = data.rows[bounds.rowStart + rowOffset];
+      if (!row) return;
+      values.forEach((value, columnOffset) => {
+        const column = data.columns[bounds.columnStart + columnOffset];
+        if (!column) return;
+        data = setTableCellText(data, row.id, column.id, value);
+        lastRowId = row.id;
+        lastColumnId = column.id;
+      });
+    });
+    const anchorRow = data.rows[bounds.rowStart];
+    const anchorColumn = data.columns[bounds.columnStart];
+    if (!anchorRow || !anchorColumn) return;
+    this.#area = {
+      anchorRowId: anchorRow.id,
+      anchorColumnId: anchorColumn.id,
+      focusRowId: lastRowId || anchorRow.id,
+      focusColumnId: lastColumnId || anchorColumn.id,
+    };
+    this.#host.commit(data);
+    this.#syncSelection();
+    requestAnimationFrame(() => {
+      this.#cells.get(cellKey(anchorRow.id, anchorColumn.id))?.focus();
+    });
   };
 
   #commitCell(rowId: string, columnId: string, text: string): void {
