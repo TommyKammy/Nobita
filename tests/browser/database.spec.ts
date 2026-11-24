@@ -66,6 +66,42 @@ async function setDatabase(page: Page): Promise<void> {
   await expect(page.locator('.nb-db-table')).toBeVisible();
 }
 
+async function setTextBoard(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { setDoc(value: string): void };
+    }).__editor;
+    editor?.setDoc(
+      JSON.stringify({
+        version: 1,
+        id: 'text-board',
+        title: '',
+        blocks: [
+          {
+            id: 'db-text',
+            type: 'database',
+            text: [],
+            props: {
+              database: {
+                variant: 'database',
+                columns: [{ id: 'name', name: 'Name', type: 'text' }],
+                rows: [
+                  { id: 'tr1', cells: { name: { text: 'One' } } },
+                  { id: 'tr2', cells: { name: { text: 'Two' } } },
+                ],
+              },
+            },
+            children: [],
+          },
+        ],
+      })
+    );
+  });
+  await expect(page.locator('.nb-db-table')).toBeVisible();
+  await page.locator('.nb-db-viewbtn[data-view="board"]').click();
+  await expect(page.locator('.nb-db-board')).toBeVisible();
+}
+
 async function databaseState(page: Page) {
   return page.evaluate(() => {
     const host = document.querySelector('nobita-editor') as unknown as {
@@ -179,6 +215,71 @@ test('extends the table for oversized TSV imports', async ({ page }) => {
   expect(data.rows).toHaveLength(5);
   expect(data.columns).toHaveLength(7);
   expect(data.rows[4]?.cells[data.columns[6]!.id]?.text).toBe('L');
+});
+
+test('keeps board title focus when the title is the group key', async ({ page }) => {
+  await openFixture(page);
+  await setTextBoard(page);
+
+  const title = page.locator('.nb-db-card-title').first();
+  await title.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type('XYZ');
+
+  await expect(title).toHaveText('OneXYZ');
+  expect(
+    await page.evaluate(() => {
+      const host = document.querySelector('nobita-editor');
+      return host?.shadowRoot?.activeElement?.textContent ?? '';
+    })
+  ).toBe('OneXYZ');
+});
+
+test('does not use board title paste for table grid import', async ({ page }) => {
+  await openFixture(page);
+  await setTextBoard(page);
+
+  const title = page.locator('.nb-db-card-title').first();
+  await title.click();
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', 'A\tB');
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      clipboardData: data,
+    });
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db-card-title')
+      ?.dispatchEvent(event);
+  });
+
+  const data = await databaseState(page);
+  expect(data.rows).toHaveLength(2);
+  expect(data.rows[0]?.cells.name?.text).toBe('One');
+});
+
+test('parses quoted spreadsheet fields before applying TSV', async ({ page }) => {
+  await openFixture(page);
+  await setDatabase(page);
+
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', '"first\nsecond"\tneighbor');
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      clipboardData: data,
+    });
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db-cell[data-row-id="r1"][data-column-id="name"]')
+      ?.dispatchEvent(event);
+  });
+
+  const data = await databaseState(page);
+  expect(data.rows).toHaveLength(3);
+  expect(data.rows[0]?.cells.name?.text).toBe('first\nsecond');
+  expect(data.rows[0]?.cells.status?.text).toBe('neighbor');
 });
 
 test('initializes checkbox filters to the displayed value', async ({ page }) => {

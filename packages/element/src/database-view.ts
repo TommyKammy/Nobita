@@ -77,6 +77,53 @@ const FILTER_OPERATORS: readonly [DatabaseFilterOperator, string][] = [
 
 const cellKey = (rowId: string, columnId: string): string => `${rowId}\u0000${columnId}`;
 
+/** Parse spreadsheet-friendly TSV, including quoted tabs/newlines and quotes. */
+function parseTsv(source: string): string[][] {
+  const text = source.replace(/\r\n?/gu, '\n');
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quoted) {
+      if (char === '"' && text[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        field += char;
+      }
+      continue;
+    }
+    if (char === '"') {
+      quoted = true;
+    } else if (char === '\t') {
+      row.push(field);
+      field = '';
+    } else if (char === '\n') {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += char;
+    }
+  }
+  if (field || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function tsvField(value: string): string {
+  return /[\t\n\r"]/u.test(value)
+    ? `"${value.replace(/"/gu, '""')}"`
+    : value;
+}
+
 function placeCaret(element: HTMLElement, at: 'start' | 'end'): void {
   const root = element.getRootNode() as ShadowRoot;
   const selection = nativeSelection(root);
@@ -123,6 +170,7 @@ export class DatabaseView {
   } | null = null;
   #rangeCells = new Set<string>();
   #visibleKey = '';
+  #boardTitleEditing: { rowId: string; columnId: string } | null = null;
 
   constructor(host: DatabaseHost, data: DatabaseData) {
     this.#host = host;
@@ -141,6 +189,15 @@ export class DatabaseView {
   update(data: DatabaseData): void {
     if (data === this.#data) return;
     this.#data = data;
+    const view = databaseView(data);
+    if (
+      this.#boardTitleEditing &&
+      view.type === 'board' &&
+      view.groupBy === this.#boardTitleEditing.columnId
+    ) {
+      this.#updateCount(view);
+      return;
+    }
     const nextKey = this.#keyFor(data);
     const visibleKey = this.#visibleKeyFor(data);
     if (nextKey !== this.#structureKey || visibleKey !== this.#visibleKey) {
@@ -224,6 +281,7 @@ export class DatabaseView {
   }
 
   render(): void {
+    this.#boardTitleEditing = null;
     this.#events.abort();
     this.#events = new AbortController();
     this.#closePopover();
@@ -571,6 +629,28 @@ export class DatabaseView {
       title.spellcheck = false;
       title.setAttribute('role', 'textbox');
       title.setAttribute('aria-label', titleColumn.name);
+      title.addEventListener(
+        'focus',
+        () => {
+          if (view.groupBy === titleColumn.id) {
+            this.#boardTitleEditing = { rowId: row.id, columnId: titleColumn.id };
+          }
+        },
+        { signal: this.#events.signal }
+      );
+      title.addEventListener(
+        'blur',
+        () => {
+          if (
+            this.#boardTitleEditing?.rowId === row.id &&
+            this.#boardTitleEditing.columnId === titleColumn.id
+          ) {
+            this.#boardTitleEditing = null;
+            this.render();
+          }
+        },
+        { signal: this.#events.signal }
+      );
       title.addEventListener(
         'input',
         () => {
@@ -1659,7 +1739,9 @@ export class DatabaseView {
       for (let column = bounds.startColumn; column <= bounds.endColumn; column += 1) {
         const dataColumn = bounds.columns[column];
         if (!dataColumn) continue;
-        cells.push(databaseCellText(dataRow.cells[dataColumn.id], dataColumn.type));
+        cells.push(
+          tsvField(databaseCellText(dataRow.cells[dataColumn.id], dataColumn.type))
+        );
       }
       lines.push(cells.join('\t'));
     }
@@ -1768,16 +1850,13 @@ export class DatabaseView {
 
   #onPaste = (event: ClipboardEvent): void => {
     const target = event.target as Element | null;
-    if (target?.closest('.nb-db-popover')) return;
+    if (target?.closest('.nb-db-popover, .nb-db-card-title')) return;
     const text = event.clipboardData?.getData('text/plain') ?? '';
     if (!text) return;
     const hasGrid = text.includes('\t') || text.includes('\n');
     if (!hasGrid && this.#rangeCells.size <= 1) return;
-    const grid = text
-      .replace(/\r\n?/gu, '\n')
-      .split('\n')
-      .filter((line, index, lines) => !(index === lines.length - 1 && line === ''))
-      .map(line => line.split('\t'));
+    const grid = parseTsv(text);
+    if (grid.length === 0) return;
     const cell = target?.closest<HTMLElement>(
       '.nb-db-cell[data-row-id][data-column-id]'
     );
