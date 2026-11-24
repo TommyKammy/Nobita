@@ -11,6 +11,7 @@ import type {
   DatabaseRow,
 } from '@nobita/core';
 import { nativeSelection } from './dom.js';
+import { dismissFloating, placeFloating } from './floating.js';
 import { icon } from './icons.js';
 
 export interface DatabaseHost {
@@ -810,34 +811,30 @@ export class DatabaseView {
     popover.className = 'nb-db-popover';
     popover.append(content);
     this.element.append(popover);
-    const rect = anchor.getBoundingClientRect();
-    const width = 266;
-    const height = popover.offsetHeight;
-    let left = Math.min(rect.left, window.innerWidth - width - 10);
-    left = Math.max(10, left);
-    let top = rect.bottom + 6;
-    if (top + height > window.innerHeight - 10) top = Math.max(10, rect.top - height - 6);
-    popover.style.left = `${Math.round(left)}px`;
-    popover.style.top = `${Math.round(top)}px`;
+    placeFloating(popover, anchor.getBoundingClientRect(), {
+      align: 'start',
+      side: 'below',
+      gap: 6,
+      margin: 10,
+    });
 
-    const onPointer = (event: PointerEvent): void => {
-      if (event.composedPath().includes(popover)) return;
-      this.#closePopover();
-    };
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
       this.#closePopover();
     };
-    const onScroll = (): void => this.#closePopover();
-    document.addEventListener('pointerdown', onPointer, true);
+    const dismiss = dismissFloating({
+      element: popover,
+      pointerTarget: document,
+      scroll: true,
+      dismissOnInsideScroll: true,
+      onDismiss: () => this.#closePopover(),
+    });
     window.addEventListener('keydown', onKey, true);
-    window.addEventListener('scroll', onScroll, true);
     this.#popoverCleanup = () => {
-      document.removeEventListener('pointerdown', onPointer, true);
+      dismiss();
       window.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('scroll', onScroll, true);
       popover.remove();
     };
   }

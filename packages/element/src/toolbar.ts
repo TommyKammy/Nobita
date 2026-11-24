@@ -7,6 +7,7 @@ import type {
   PaletteColor,
   TextAlign,
 } from '@nobita/core';
+import { dismissFloating, placeFloating } from './floating.js';
 import { blockIcon, icon } from './icons.js';
 import { PopoverList, type PopoverRow } from './popover.js';
 
@@ -421,14 +422,12 @@ export class Toolbar {
     }
     this.update(state, align, blockType, level);
     this.element.style.visibility = 'hidden';
-    const width = this.element.offsetWidth;
-    const height = this.element.offsetHeight;
-    let left = rect.left + rect.width / 2 - width / 2;
-    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
-    let top = rect.top - height - 8;
-    if (top < 8) top = rect.bottom + 8;
-    this.element.style.left = `${Math.round(left)}px`;
-    this.element.style.top = `${Math.round(top)}px`;
+    placeFloating(this.element, rect, {
+      align: 'center',
+      side: 'above',
+      gap: 8,
+      margin: 8,
+    });
     this.element.style.visibility = '';
   }
 
@@ -471,11 +470,7 @@ export class LinkPopover {
   #input: HTMLInputElement;
   #onApply: ((value: string | null) => void) | null = null;
   #visible = false;
-  #onDocPointerDown = (event: PointerEvent): void => {
-    if (!this.#visible) return;
-    if (event.composedPath().includes(this.element)) return;
-    this.#finish(null);
-  };
+  #dismiss: (() => void) | null = null;
 
   constructor(overlay: HTMLElement) {
     this.#overlay = overlay;
@@ -512,15 +507,18 @@ export class LinkPopover {
     this.#overlay.append(this.element);
     this.#visible = true;
     this.element.style.visibility = 'hidden';
-    const width = this.element.offsetWidth;
-    const height = this.element.offsetHeight;
-    let left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 10));
-    let top = rect.top - height - 10;
-    if (top < 8) top = rect.bottom + 10;
-    this.element.style.left = `${Math.round(left)}px`;
-    this.element.style.top = `${Math.round(top)}px`;
+    placeFloating(this.element, rect, {
+      align: 'start',
+      side: 'above',
+      gap: 10,
+      marginX: 10,
+      marginY: 8,
+    });
     this.element.style.visibility = '';
-    window.addEventListener('pointerdown', this.#onDocPointerDown, true);
+    this.#dismiss = dismissFloating({
+      element: this.element,
+      onDismiss: () => this.#finish(null),
+    });
     this.#input.focus();
     this.#input.select();
   }
@@ -529,7 +527,8 @@ export class LinkPopover {
     if (this.#visible) {
       this.#visible = false;
       this.element.remove();
-      window.removeEventListener('pointerdown', this.#onDocPointerDown, true);
+      this.#dismiss?.();
+      this.#dismiss = null;
     }
     this.#onApply = null;
   }

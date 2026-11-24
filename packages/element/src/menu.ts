@@ -1,3 +1,5 @@
+import { dismissFloating, placeFloating } from './floating.js';
+
 export interface MenuItem {
   id: string;
   label: string;
@@ -59,6 +61,7 @@ export class Menu {
   #filterable = false;
   #query = '';
   #onClose: (() => void) | undefined;
+  #dismiss: (() => void) | null = null;
   #width = 322;
 
   constructor(root: ShadowRoot, overlay: HTMLElement) {
@@ -106,9 +109,13 @@ export class Menu {
     this.element.style.visibility = '';
     this.#open = true;
     this.#root.addEventListener('keydown', this.#onKeyDown as EventListener, true);
-    this.#root.addEventListener('pointerdown', this.#onPointerDown as EventListener, true);
-    window.addEventListener('scroll', this.#onScroll, { capture: true, passive: true });
-    window.addEventListener('resize', this.#onResize);
+    this.#dismiss = dismissFloating({
+      element: this.element,
+      pointerTarget: this.#root,
+      scroll: true,
+      resize: true,
+      onDismiss: () => this.close(),
+    });
   }
 
   setQuery(query: string): void {
@@ -124,9 +131,8 @@ export class Menu {
     this.#open = false;
     this.element.remove();
     this.#root.removeEventListener('keydown', this.#onKeyDown as EventListener, true);
-    this.#root.removeEventListener('pointerdown', this.#onPointerDown as EventListener, true);
-    window.removeEventListener('scroll', this.#onScroll, { capture: true });
-    window.removeEventListener('resize', this.#onResize);
+    this.#dismiss?.();
+    this.#dismiss = null;
     const callback = this.#onClose;
     this.#onClose = undefined;
     if (notify) callback?.();
@@ -142,19 +148,13 @@ export class Menu {
   #repositionToAnchor(): void {
     const anchor = this.#anchorRect;
     if (!anchor) return;
-    const height = this.element.offsetHeight;
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    let left = anchor.left;
-    if (left + this.#width > viewportWidth - 10) left = viewportWidth - this.#width - 10;
-    if (left < 10) left = 10;
-    let top = anchor.bottom + 6;
-    if (top + height > viewportHeight - 10) {
-      const above = anchor.top - height - 6;
-      top = above >= 10 ? above : Math.max(10, viewportHeight - height - 10);
-    }
-    this.element.style.left = `${Math.round(left)}px`;
-    this.element.style.top = `${Math.round(top)}px`;
+    placeFloating(this.element, anchor, {
+      align: 'start',
+      side: 'below',
+      gap: 6,
+      margin: 10,
+      fallback: 'clamp',
+    });
   }
 
   #filter(): void {
@@ -284,22 +284,5 @@ export class Menu {
       default:
         break;
     }
-  };
-
-  #onPointerDown = (event: PointerEvent): void => {
-    if (!this.#open) return;
-    const path = event.composedPath();
-    if (path.includes(this.element)) return;
-    this.close();
-  };
-
-  #onScroll = (event: Event): void => {
-    if (!this.#open) return;
-    if (event.composedPath().includes(this.element)) return;
-    this.close();
-  };
-
-  #onResize = (): void => {
-    this.close();
   };
 }

@@ -1,3 +1,5 @@
+import { dismissFloating, placeFloating } from './floating.js';
+
 export interface PopoverRow<T> {
   key: string;
   value: T;
@@ -28,7 +30,7 @@ export class PopoverList<T> {
   #selectable: boolean;
   #selected = new Set<string>();
   #focusIndex = -1;
-  #trigger: HTMLElement | null = null;
+  #dismiss: (() => void) | null = null;
   #onPick: ((value: T) => void) | null = null;
   #visible = false;
 
@@ -81,7 +83,6 @@ export class PopoverList<T> {
     onPick: (value: T) => void
   ): void {
     this.hide();
-    this.#trigger = trigger;
     this.#onPick = onPick;
     const selected = this.#rows.findIndex(row => this.#selected.has(row.key));
     this.#focusIndex = selected >= 0 ? selected : -1;
@@ -91,7 +92,11 @@ export class PopoverList<T> {
     this.element.style.visibility = 'hidden';
     this.#position(anchor);
     this.element.style.visibility = '';
-    window.addEventListener('pointerdown', this.#onDocPointerDown, true);
+    this.#dismiss = dismissFloating({
+      element: this.element,
+      trigger,
+      onDismiss: () => this.hide(),
+    });
     window.addEventListener('keydown', this.#onKeyDown, true);
   }
 
@@ -105,23 +110,19 @@ export class PopoverList<T> {
     this.#visible = false;
     this.element.remove();
     this.#onPick = null;
-    this.#trigger = null;
-    window.removeEventListener('pointerdown', this.#onDocPointerDown, true);
+    this.#dismiss?.();
+    this.#dismiss = null;
     window.removeEventListener('keydown', this.#onKeyDown, true);
     this.onHide?.();
   }
 
   #position(anchor: DOMRect): void {
-    const width = this.element.offsetWidth;
-    const height = this.element.offsetHeight;
-    let left = anchor.left + anchor.width / 2 - width / 2;
-    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
-    let top = anchor.bottom + 6;
-    if (top + height > window.innerHeight - 8) {
-      top = anchor.top - height - 6;
-    }
-    this.element.style.left = `${Math.round(left)}px`;
-    this.element.style.top = `${Math.max(8, top)}px`;
+    placeFloating(this.element, anchor, {
+      align: 'center',
+      side: 'below',
+      gap: 6,
+      margin: 8,
+    });
   }
 
   #render(): void {
@@ -200,14 +201,5 @@ export class PopoverList<T> {
       event.preventDefault();
       event.stopPropagation();
     }
-  };
-
-  #onDocPointerDown = (event: PointerEvent): void => {
-    if (!this.#visible) return;
-    const path = event.composedPath();
-    if (path.includes(this.element) || (this.#trigger && path.includes(this.#trigger))) {
-      return;
-    }
-    this.hide();
   };
 }
