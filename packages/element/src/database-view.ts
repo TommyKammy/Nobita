@@ -187,6 +187,7 @@ function formatDatabaseNumber(value: string, column: DatabaseColumn): string {
 }
 
 const cellKey = (rowId: string, columnId: string): string => `${rowId}\u0000${columnId}`;
+const DATABASE_ROWS_MIME = 'application/x-nobita-database-rows';
 
 function detailFieldSchema(column: DatabaseColumn): string {
   return `${column.type}\u0000${(column.options ?? []).join('\u0001')}`;
@@ -1658,7 +1659,7 @@ export class DatabaseView {
         grip.setAttribute('aria-label', 'Select row');
         grip.innerHTML = icon.more;
         grip.addEventListener('pointerdown', event => {
-          this.#beginRowDrag(event, row.id);
+          this.#beginRowDrag(event, row.id, groupKey);
         }, { signal: this.#events.signal });
         grip.addEventListener('click', () => this.#toggleRowSelection(row.id), {
           signal: this.#events.signal,
@@ -2838,7 +2839,11 @@ export class DatabaseView {
       const selected = column.type === 'multi-select'
         ? new Set(cell?.values ?? [])
         : new Set(cell?.text ? [cell.text] : []);
-      for (const option of column.options ?? []) {
+      const options = [...(column.options ?? [])];
+      for (const value of selected) {
+        if (!options.includes(value)) options.push(value);
+      }
+      for (const option of options) {
         const item = document.createElement('option');
         item.value = option;
         item.textContent = option;
@@ -3031,7 +3036,7 @@ export class DatabaseView {
     this.#updateActiveView({ columns });
   }
 
-  #beginRowDrag(event: PointerEvent, rowId: string): void {
+  #beginRowDrag(event: PointerEvent, rowId: string, groupKey?: string): void {
     if (this.#readonly || event.button !== 0) return;
     const startX = event.clientX;
     const startY = event.clientY;
@@ -3052,7 +3057,7 @@ export class DatabaseView {
         this.#suppressClick = false;
       }, 0);
       const target = this.#rowFromEvent(endEvent);
-      if (target && target !== rowId) this.#moveRowTo(rowId, target);
+      if (target && target !== rowId) this.#moveRowTo(rowId, target, groupKey);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', end);
@@ -3068,7 +3073,7 @@ export class DatabaseView {
     return undefined;
   }
 
-  #moveRowTo(rowId: string, targetId: string): void {
+  #moveRowTo(rowId: string, targetId: string, groupKey?: string): void {
     const view = this.#activeView();
     const rows = [...this.#data.rows];
     const from = rows.findIndex(row => row.id === rowId);
@@ -3083,9 +3088,11 @@ export class DatabaseView {
       view.groupBy &&
       databaseSorts(view).length === 0
     ) {
-      const group = this.#groupsFor(view).find(item =>
-        item.rows.some(entry => entry.id === rowId)
-      );
+      const groups = this.#groupsFor(view);
+      const group =
+        groupKey !== undefined
+          ? groups.find(item => item.key === groupKey)
+          : groups.find(item => item.rows.some(entry => entry.id === rowId));
       if (group?.rows.some(entry => entry.id === targetId)) {
         const ordered = [...group.rows];
         const groupFrom = ordered.findIndex(entry => entry.id === rowId);
@@ -4053,16 +4060,16 @@ export class DatabaseView {
     const index = columns.findIndex(item => item.id === anchorId);
     columns.splice(index < 0 ? columns.length : after ? index + 1 : index, 0, column);
     const view = this.#activeView();
-    const viewColumns = this.#viewColumns(view);
-    const viewIndex = viewColumns.findIndex(item => item.id === anchorId);
-    viewColumns.splice(
-      viewIndex < 0 ? viewColumns.length : after ? viewIndex + 1 : viewIndex,
-      0,
-      { id: column.id, width: 180 }
-    );
-    const views = this.#views().map(item =>
-      item.id === view.id ? { ...item, columns: viewColumns } : item
-    );
+    const views = this.#views().map(item => {
+      const viewColumns = this.#viewColumns(item);
+      const viewIndex = viewColumns.findIndex(entry => entry.id === anchorId);
+      viewColumns.splice(
+        viewIndex < 0 ? viewColumns.length : after ? viewIndex + 1 : viewIndex,
+        0,
+        { id: column.id, width: 180 }
+      );
+      return { ...item, columns: viewColumns };
+    });
     this.#host.commit({
       ...this.#data,
       columns,
@@ -4775,6 +4782,12 @@ export class DatabaseView {
       .join('\n');
   }
 
+  #selectedRowsPayload(): string {
+    return JSON.stringify({
+      rows: this.#selectedVisibleRows().map(row => ({ cells: row.cells })),
+    });
+  }
+
   #onCopy = (event: ClipboardEvent): void => {
     const target = event.target as Element | null;
     if (target?.closest('.nb-db-popover, .nb-db-detail')) return;
@@ -4788,6 +4801,12 @@ export class DatabaseView {
     const text = rowText || (this.#rangeCells.size > 1 ? this.#rangeText() : '');
     if (!text) return;
     event.clipboardData?.setData('text/plain', text);
+    if (rowText) {
+      event.clipboardData?.setData(
+        DATABASE_ROWS_MIME,
+        this.#selectedRowsPayload()
+      );
+    }
     event.preventDefault();
   };
 
@@ -4803,6 +4822,10 @@ export class DatabaseView {
     const rowText = this.#selectedRowsText();
     if (rowText) {
       event.clipboardData?.setData('text/plain', rowText);
+      event.clipboardData?.setData(
+        DATABASE_ROWS_MIME,
+        this.#selectedRowsPayload()
+      );
       event.preventDefault();
       this.#deleteSelectedRows();
       return;
@@ -4835,6 +4858,46 @@ export class DatabaseView {
       !target.closest('.nb-db-cell')
     ) {
       return;
+    }
+    const typed = event.clipboardData?.getData(DATABASE_ROWS_MIME) ?? '';
+    if (typed) {
+      try {
+        const parsed = JSON.parse(typed) as {
+          rows?: Array<{ cells?: Record<string, DatabaseCell> }>;
+        };
+        const rows = (Array.isArray(parsed.rows) ? parsed.rows : []).map(
+          item => {
+            const cells: Record<string, DatabaseCell> = {};
+            for (const [columnId, cell] of Object.entries(item.cells ?? {})) {
+              if (!cell || typeof cell !== 'object' || Array.isArray(cell)) {
+                continue;
+              }
+              if (!this.#data.columns.some(column => column.id === columnId)) {
+                continue;
+              }
+              cells[columnId] = this.#cloneCell(cell);
+            }
+            return { id: createId('r'), cells };
+          }
+        );
+        if (rows.length > 0) {
+          event.preventDefault();
+          event.stopPropagation();
+          const targetCell = target?.closest<HTMLElement>(
+            '.nb-db-cell[data-row-id]'
+          );
+          const targetRowId = targetCell?.dataset.rowId ?? this.#active?.rowId;
+          const index = targetRowId
+            ? this.#data.rows.findIndex(row => row.id === targetRowId)
+            : -1;
+          const next = [...this.#data.rows];
+          next.splice(index < 0 ? next.length : index + 1, 0, ...rows);
+          this.#host.commit({ ...this.#data, rows: next });
+          return;
+        }
+      } catch {
+        // Fall back to TSV paste.
+      }
     }
     const text = event.clipboardData?.getData('text/plain') ?? '';
     if (!text) return;

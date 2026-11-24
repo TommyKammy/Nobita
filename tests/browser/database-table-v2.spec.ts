@@ -578,6 +578,330 @@ test('keeps column width changes local to the active view', async ({ page }) => 
   ).toBe(180);
 });
 
+test('adds inserted columns to every view', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const database = doc.blocks[0]?.props.database as {
+    views: Array<Record<string, unknown>>;
+  };
+  database.views.push({
+    id: 'v2',
+    name: 'Table 2',
+    type: 'table',
+    filters: [],
+    columns: [
+      { id: 'name', width: 200 },
+      { id: 'status', width: 180 },
+      { id: 'done', width: 120 },
+    ],
+  });
+  await setDoc(page, doc);
+  await page.locator('.nb-db-th[data-column-id="name"] .nb-db-col-head').click();
+  await page
+    .locator('.nb-db-column-popover')
+    .getByRole('button', { name: 'Insert Right Column', exact: true })
+    .click();
+  const saved = await getDoc(page);
+  const data = saved.blocks[0]?.props.database as {
+    columns: Array<{ id: string }>;
+    views: Array<{ columns?: Array<{ id: string; width: number }> }>;
+  };
+  const added = data.columns[1]!;
+  expect(data.views[0]?.columns?.[1]).toEqual({ id: added.id, width: 180 });
+  expect(data.views[1]?.columns?.[1]).toEqual({ id: added.id, width: 180 });
+});
+
+test('keeps undeclared select values in the detail panel', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'detail-undeclared-select',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'status',
+                name: 'Status',
+                type: 'select',
+                options: ['A', 'B'],
+              },
+              {
+                id: 'tags',
+                name: 'Tags',
+                type: 'multi-select',
+                options: ['A', 'B'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: {
+                  name: { text: 'One' },
+                  status: { text: 'C' },
+                  tags: { values: ['A', 'C'] },
+                },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'status', width: 160 },
+                  { id: 'tags', width: 160 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  const status = page.locator(
+    '.nb-db-detail-field[data-column-id="status"] select'
+  );
+  const tags = page.locator(
+    '.nb-db-detail-field[data-column-id="tags"] select'
+  );
+  await expect(status).toHaveValue('C');
+  await expect(tags.locator('option[value="C"]')).toHaveCount(1);
+  await expect(tags.locator('option[value="C"]')).toHaveJSProperty(
+    'selected',
+    true
+  );
+  await status.selectOption('B');
+  await tags.selectOption(['A', 'B', 'C']);
+  const doc = await getDoc(page);
+  const cells = (
+    doc.blocks[0]?.props.database as {
+      rows: Array<{
+        id: string;
+        cells: Record<string, { text?: string; values?: string[] }>;
+      }>;
+    }
+  ).rows[0]?.cells;
+  expect(cells?.status?.text).toBe('B');
+  expect(cells?.tags?.values).toEqual(['A', 'B', 'C']);
+});
+
+test('keeps the dragged group context for multi-select groups', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'group-context',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'tags',
+                name: 'Tags',
+                type: 'multi-select',
+                options: ['A', 'B'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { name: { text: 'One' }, tags: { values: ['A', 'B'] } },
+              },
+              {
+                id: 'r2',
+                cells: { name: { text: 'Two' }, tags: { values: ['A', 'B'] } },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                groupBy: 'tags',
+                groupProperties: [
+                  { key: 'A', manuallyCardSort: ['r1', 'r2'] },
+                  { key: 'B', manuallyCardSort: ['r1', 'r2'] },
+                ],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'tags', width: 200 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  const bRows = page.locator(
+    '.nb-db-group[data-group="B"] .nb-db-cell[data-column-id="name"]'
+  );
+  await expect(bRows).toHaveText(['One', 'Two']);
+  const grip = page.locator(
+    '.nb-db-group[data-group="B"] tr[data-row-id="r2"] .nb-db-row-grip'
+  );
+  const target = page.locator(
+    '.nb-db-group[data-group="B"] tr[data-row-id="r1"]'
+  );
+  await target.hover();
+  const start = await grip.boundingBox();
+  const end = await target.boundingBox();
+  if (!start || !end) throw new Error('Missing drag targets');
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  await expect(bRows).toHaveText(['Two', 'One']);
+  const doc = await getDoc(page);
+  const groupProperties = (
+    doc.blocks[0]?.props.database as {
+      views: Array<{
+        groupProperties?: Array<{ key: string; manuallyCardSort?: string[] }>;
+      }>;
+    }
+  ).views[0]?.groupProperties;
+  expect(
+    groupProperties?.find(group => group.key === 'A')?.manuallyCardSort
+  ).toEqual(['r1', 'r2']);
+  expect(
+    groupProperties?.find(group => group.key === 'B')?.manuallyCardSort
+  ).toEqual(['r2', 'r1']);
+});
+
+test('restores hidden fields when pasting cut rows', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'cut-hidden-fields',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              { id: 'notes', name: 'Notes', type: 'text' },
+              { id: 'files', name: 'Files', type: 'files' },
+              {
+                id: 'status',
+                name: 'Status',
+                type: 'select',
+                options: ['A'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: {
+                  name: { text: 'One' },
+                  notes: { text: 'Secret' },
+                  files: {
+                    files: [
+                      {
+                        id: 'f1',
+                        name: 'Spec',
+                        url: 'https://example.com/spec',
+                      },
+                    ],
+                  },
+                  status: { text: 'A' },
+                },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                hiddenColumns: ['notes', 'files'],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'notes', width: 200 },
+                  { id: 'files', width: 200 },
+                  { id: 'status', width: 160 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db-row-check').first().click();
+  const result = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const db = root?.querySelector('.nb-db');
+    const data = new DataTransfer();
+    const cut = new ClipboardEvent('cut', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    });
+    db?.dispatchEvent(cut);
+    const copied = data.getData('text/plain');
+    const payload = data.getData('application/x-nobita-database-rows');
+    const paste = new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    });
+    db?.dispatchEvent(paste);
+    return { copied, payload };
+  });
+  expect(result.payload).toBeTruthy();
+  expect(result.copied).not.toContain('Secret');
+  const doc = await getDoc(page);
+  const cells = (
+    doc.blocks[0]?.props.database as {
+      rows: Array<{
+        id: string;
+        cells: Record<string, {
+          text?: string;
+          files?: Array<{ name: string }>;
+        }>;
+      }>;
+    }
+  ).rows[0]?.cells;
+  expect(cells?.name?.text).toBe('One');
+  expect(cells?.notes?.text).toBe('Secret');
+  expect(cells?.files?.files?.[0]?.name).toBe('Spec');
+});
+
 test('synchronizes the detail panel after an external undo', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
