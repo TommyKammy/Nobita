@@ -1207,6 +1207,204 @@ test('keeps fill ranges within the source group', async ({ page }) => {
   expect(rows.find(row => row.id === 'r1')?.cells.name?.text).toBe('Two');
 });
 
+test('converts incompatible column types when pasting rows', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'cross-database-convert',
+    title: '',
+    blocks: [
+      {
+        id: 'db1',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'a-name',
+            columns: [
+              { id: 'a-name', name: 'Name', type: 'text' },
+              { id: 'a-done', name: 'Done', type: 'checkbox' },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: {
+                  'a-name': { text: 'One' },
+                  'a-done': { checked: true },
+                },
+              },
+            ],
+            views: [
+              {
+                id: 'va',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'a-name', width: 200 },
+                  { id: 'a-done', width: 120 },
+                ],
+              },
+            ],
+            activeViewId: 'va',
+          },
+        },
+        children: [],
+      },
+      {
+        id: 'db2',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'b-name',
+            columns: [
+              { id: 'b-name', name: 'Name', type: 'text' },
+              { id: 'b-done', name: 'Done', type: 'text' },
+            ],
+            rows: [],
+            views: [
+              {
+                id: 'vb',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'b-name', width: 200 },
+                  { id: 'b-done', width: 120 },
+                ],
+              },
+            ],
+            activeViewId: 'vb',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db').nth(0).locator('.nb-db-row-check').first().click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const dbs = root?.querySelectorAll<HTMLElement>('.nb-db');
+    if (!dbs || dbs.length < 2) return;
+    const data = new DataTransfer();
+    dbs[0]?.dispatchEvent(
+      new ClipboardEvent('cut', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      })
+    );
+    dbs[1]?.dispatchEvent(
+      new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      })
+    );
+  });
+  const doc = await getDoc(page);
+  const cells = (
+    doc.blocks[1]?.props.database as {
+      rows: Array<{
+        id: string;
+        cells: Record<string, { text?: string }>;
+      }>;
+    }
+  ).rows[0]?.cells;
+  expect(cells?.['b-name']?.text).toBe('One');
+  expect(cells?.['b-done']?.text).toBe('true');
+});
+
+test('preserves empty rows when pasting typed rows', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'paste-empty-rows',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'status',
+                name: 'Status',
+                type: 'select',
+                options: ['Todo'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { name: { text: 'One' }, status: { text: 'Todo' } },
+              },
+              { id: 'r2', cells: {} },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'status', width: 160 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db-row-check').nth(0).click();
+  await page.locator('.nb-db-row-check').nth(1).click();
+  const rows = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const db = root?.querySelector<HTMLElement>('.nb-db');
+    const data = new DataTransfer();
+    db?.dispatchEvent(
+      new ClipboardEvent('cut', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      })
+    );
+    db?.dispatchEvent(
+      new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      })
+    );
+    return Array.from(db?.querySelectorAll('.nb-db-table tbody tr[data-row-id]') ?? [])
+      .length;
+  });
+  expect(rows).toBe(2);
+  const doc = await getDoc(page);
+  expect(
+    (doc.blocks[0]?.props.database as { rows: unknown[] }).rows
+  ).toHaveLength(2);
+  expect(
+    (
+      doc.blocks[0]?.props.database as {
+        rows: Array<{ id: string; cells: Record<string, unknown> }>;
+      }
+    ).rows[1]?.cells
+  ).toEqual({});
+});
+
 test('synchronizes the detail panel after an external undo', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);

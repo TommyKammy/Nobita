@@ -4478,9 +4478,16 @@ export class DatabaseView {
     for (const [key, copies] of this.#cells) {
       const [rowId, columnId] = key.split('\u0000');
       const selected = this.#rangeCells.has(key);
-      const active =
-        this.#active?.rowId === rowId && this.#active?.columnId === columnId;
       for (const nodes of copies) {
+        const groupKey = nodes.td.closest<HTMLElement>('.nb-db-group')?.dataset
+          .group;
+        const activeState = this.#active;
+        const active =
+          activeState !== null &&
+          activeState.rowId === rowId &&
+          activeState.columnId === columnId &&
+          (activeState.groupKey === undefined ||
+            activeState.groupKey === groupKey);
         nodes.td.classList.toggle('is-selected', selected);
         nodes.td.classList.toggle('is-active', active);
         nodes.td.setAttribute('aria-selected', String(selected));
@@ -4531,7 +4538,15 @@ export class DatabaseView {
       handle.dataset.visible = 'false';
       return;
     }
-    const cell = this.#cells.get(cellKey(active.rowId, active.columnId))?.[0];
+    const copies = this.#cells.get(cellKey(active.rowId, active.columnId)) ?? [];
+    const cell =
+      copies.find(copy => {
+        if (active.groupKey === undefined) return true;
+        return (
+          copy.td.closest<HTMLElement>('.nb-db-group')?.dataset.group ===
+          active.groupKey
+        );
+      }) ?? copies[0];
     const td = cell?.td;
     if (!td) {
       handle.dataset.visible = 'false';
@@ -4613,6 +4628,26 @@ export class DatabaseView {
       ...(cell.files ? { files: cell.files.map(file => ({ ...file })) } : {}),
       ...(cell.people ? { people: cell.people.map(person => ({ ...person })) } : {}),
     };
+  }
+
+  #convertCell(
+    cell: DatabaseCell,
+    sourceType: DatabaseColumnType,
+    targetType: DatabaseColumnType
+  ): DatabaseCell | null {
+    if (targetType === 'files' || targetType === 'people') return null;
+    const value = databaseCellText(cell, sourceType);
+    if (targetType === 'checkbox') {
+      return { checked: /^(true|1|yes|✓)$/iu.test(value.trim()) };
+    }
+    if (targetType === 'multi-select') {
+      const values = value
+        .split(/[,;]/u)
+        .map(item => item.trim())
+        .filter(Boolean);
+      return values.length > 0 ? { values } : {};
+    }
+    return value ? { text: value } : {};
   }
 
   #rangeText(): string {
@@ -4918,7 +4953,10 @@ export class DatabaseView {
         const sourceColumns = Array.isArray(parsed.columns)
           ? parsed.columns
           : [];
-        const columnMap = new Map<string, string>();
+        const columnMap = new Map<
+          string,
+          { id: string; sourceType: DatabaseColumnType; targetType: DatabaseColumnType }
+        >();
         if (sourceColumns.length > 0) {
           const used = new Set<string>();
           for (const source of sourceColumns) {
@@ -4940,31 +4978,44 @@ export class DatabaseView {
               );
             if (targetColumn) {
               used.add(targetColumn.id);
-              columnMap.set(source.id, targetColumn.id);
+              columnMap.set(source.id, {
+                id: targetColumn.id,
+                sourceType: (type || targetColumn.type) as DatabaseColumnType,
+                targetType: targetColumn.type,
+              });
             }
           }
         } else {
           for (const column of this.#data.columns) {
-            columnMap.set(column.id, column.id);
+            columnMap.set(column.id, {
+              id: column.id,
+              sourceType: column.type,
+              targetType: column.type,
+            });
           }
         }
-        const rows = (Array.isArray(parsed.rows) ? parsed.rows : []).flatMap(
-          item => {
-            const cells: Record<string, DatabaseCell> = {};
-            for (const [sourceId, cell] of Object.entries(item.cells ?? {})) {
-              const columnId = columnMap.get(sourceId);
-              if (!columnId) continue;
-              if (!cell || typeof cell !== 'object' || Array.isArray(cell)) {
-                continue;
-              }
-              cells[columnId] = this.#cloneCell(cell);
+        const sourceRows = Array.isArray(parsed.rows) ? parsed.rows : [];
+        const rows = sourceRows.map(item => {
+          const cells: Record<string, DatabaseCell> = {};
+          for (const [sourceId, cell] of Object.entries(item.cells ?? {})) {
+            const mapping = columnMap.get(sourceId);
+            if (!mapping) continue;
+            if (!cell || typeof cell !== 'object' || Array.isArray(cell)) {
+              continue;
             }
-            return Object.keys(cells).length > 0
-              ? [{ id: createId('r'), cells }]
-              : [];
+            const next =
+              mapping.sourceType === mapping.targetType
+                ? this.#cloneCell(cell)
+                : this.#convertCell(
+                    cell,
+                    mapping.sourceType,
+                    mapping.targetType
+                  );
+            if (next) cells[mapping.id] = next;
           }
-        );
-        if (rows.length > 0) {
+          return { id: createId('r'), cells };
+        });
+        if (rows.length > 0 && columnMap.size > 0) {
           event.preventDefault();
           event.stopPropagation();
           const targetCell = target?.closest<HTMLElement>(
