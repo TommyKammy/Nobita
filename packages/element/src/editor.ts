@@ -4,7 +4,6 @@ import {
   blocksToHtml,
   blocksToMarkdown,
   createBlock,
-  createDatabaseData,
   createDoc,
   dedentBlock,
   deleteTextRange,
@@ -36,7 +35,6 @@ import {
   setImageProps,
   setTextColorInRange,
   sliceRuns,
-  TURN_INTO_TYPES,
   splitBlock,
   toggleChecked,
   toggleMarkInRange,
@@ -63,16 +61,16 @@ import {
 import {
   caretRect,
   closestElement,
-  compareTextPositions,
   domPointToOffset,
   isNodeInside,
   nativeSelection,
   offsetToDomPoint,
   selectionRect,
 } from './dom.js';
-import { blockIcon, icon } from './icons.js';
+import { blockRange, orderedRange, selectionBlocks } from './selection.js';
 import { readRunsFromDom } from './inline-dom.js';
-import { Menu, type MenuItem } from './menu.js';
+import { Menu } from './menu.js';
+import { buildBlockMenuItems, buildSlashMenuItems } from './menu-items.js';
 import { styles } from './styles.js';
 import { LinkPopover, Toolbar, type ToolbarMark } from './toolbar.js';
 
@@ -111,9 +109,6 @@ interface DragState {
 
 type ClipboardPayload = ReturnType<typeof serializeBlocksForClipboard>;
 
-function shortcutLabel(mod: boolean, key: string): string {
-  return `${mod ? '⌘' : ''}${key}`;
-}
 
 function normalizeLink(value: string): string {
   const trimmed = value.trim();
@@ -140,32 +135,6 @@ function rectAnchor(rect: DOMRect): {
     right: rect.right,
     top: rect.top,
     bottom: rect.bottom,
-  };
-}
-
-interface OrderedRange {
-  flat: Block[];
-  start: Point;
-  end: Point;
-}
-
-interface BlockRange extends OrderedRange {
-  startIndex: number;
-  endIndex: number;
-}
-
-function orderedRange(
-  blocks: readonly Block[],
-  selection: EditorSelection
-): OrderedRange {
-  const flat = flattenBlocks(blocks);
-  const order = flat.map(block => block.id);
-  const forward =
-    compareTextPositions(order, selection.anchor, selection.focus) <= 0;
-  return {
-    flat,
-    start: forward ? selection.anchor : selection.focus,
-    end: forward ? selection.focus : selection.anchor,
   };
 }
 
@@ -753,7 +722,7 @@ export class NobitaEditor implements BlockHost {
     const selection = this.#currentSelection();
     if (!selection) return;
     if (this.#isCollapsed(selection)) return;
-    const blocks = this.#selectionBlocks(selection);
+    const blocks = selectionBlocks(this.store.doc.blocks, selection);
     if (blocks.length === 0) return;
     event.preventDefault();
     const serialized = serializeBlocksForClipboard(blocks);
@@ -813,11 +782,20 @@ export class NobitaEditor implements BlockHost {
   }
 
   openBlockMenu(blockId: string, anchor: HTMLElement): void {
-    const rect = anchor.getBoundingClientRect();
-    const items = this.#blockMenuItems(blockId);
+    const block = findBlock(this.store.doc.blocks, blockId);
+    if (!block) return;
+    const items = buildBlockMenuItems({
+      block,
+      getDoc: () => this.store.doc,
+      pointFromCaret: () => this.#pointFromCaret(blockId),
+      commit: (next, caret) => this.#commit(next, caret),
+      focusBlock: (id, offset) => this.#focusBlock(id, offset),
+      copyBlock: offset => this.#copyBlockToClipboard(blockId, offset),
+      deleteBlock: () => this.#deleteBlock(blockId),
+    });
     this.#menu.open({
       items,
-      anchor: rectAnchor(rect),
+      anchor: rectAnchor(anchor.getBoundingClientRect()),
       width: 300,
     });
   }
@@ -1283,16 +1261,8 @@ export class NobitaEditor implements BlockHost {
   #blockRange(
     selection: EditorSelection,
     blocks: readonly Block[] = this.store.doc.blocks
-  ): BlockRange | null {
-    const range = orderedRange(blocks, selection);
-    const startIndex = range.flat.findIndex(
-      block => block.id === range.start.blockId
-    );
-    const endIndex = range.flat.findIndex(
-      block => block.id === range.end.blockId
-    );
-    if (startIndex < 0 || endIndex < 0) return null;
-    return { ...range, startIndex, endIndex };
+  ) {
+    return blockRange(blocks, selection);
   }
 
   #offsetInSelection(blockId: string, selection: EditorSelection): number {
@@ -1845,30 +1815,6 @@ export class NobitaEditor implements BlockHost {
     this.#focusBlock(caret.blockId, caret.offset);
   }
 
-  #selectionBlocks(selection: EditorSelection): Block[] {
-    const range = this.#blockRange(selection);
-    if (!range) return [];
-    const { flat, start, end, startIndex, endIndex } = range;
-    const partial = (block: Block, from: number, to: number): Block => {
-      const copy = duplicateBlockTree(block);
-      return { ...copy, text: sliceRuns(block.text, from, to), children: [] };
-    };
-    if (startIndex === endIndex) {
-      const block = flat[startIndex];
-      if (!block) return [];
-      return [partial(block, start.offset, end.offset)];
-    }
-    const out: Block[] = [];
-    const first = flat[startIndex];
-    if (first) out.push(partial(first, start.offset, runsLength(first.text)));
-    for (let index = startIndex + 1; index < endIndex; index += 1) {
-      const block = flat[index];
-      if (block) out.push(duplicateBlockTree(block));
-    }
-    const last = flat[endIndex];
-    if (last) out.push(partial(last, 0, end.offset));
-    return out;
-  }
 
   /** ---- marks & toolbar ---- */
 
@@ -2124,9 +2070,31 @@ export class NobitaEditor implements BlockHost {
   /** ---- slash menu ---- */
 
   #openSlashMenu(blockId: string, slashOffset: number): void {
-    this.#slash = { blockId, start: slashOffset, end: slashOffset + 1 };
+    const slash = { blockId, start: slashOffset, end: slashOffset + 1 };
+    this.#slash = slash;
+    const removeSlash = (): void => {
+      this.#removeSlashQuery(slash);
+    };
     const rect = this.#caretRect(blockId);
-    const items = this.#slashMenuItems(blockId);
+    const items = buildSlashMenuItems({
+      convert: (type, props) => {
+        removeSlash();
+        this.#convertBlock(blockId, type, props);
+      },
+      insertText: text => this.#insertSlashText(slash, blockId, text),
+      alignBlock: align => {
+        removeSlash();
+        this.#alignBlockAt(blockId, align, slashOffset);
+      },
+      moveBlock: position => {
+        removeSlash();
+        this.#moveBlockVertically(blockId, position, slashOffset);
+      },
+      copyBlock: () => {
+        removeSlash();
+        this.#copyBlockToClipboard(blockId, slashOffset);
+      },
+    });
     this.#menu.open({
       items,
       anchor: rectAnchor(rect),
@@ -2201,326 +2169,6 @@ export class NobitaEditor implements BlockHost {
     const caret: Point = { blockId, offset: offset + text.length };
     this.#commit(next, { anchor: caret, focus: caret });
     this.#focusBlock(blockId, caret.offset);
-  }
-
-  #slashMenuItems(blockId: string): MenuItem[] {
-    const mod = /\bMac\b|\biPad\b|\biPhone\b/u.test(navigator.platform);
-    const slash = this.#slash;
-    const items: MenuItem[] = [];
-    const conversion = (
-      label: string,
-      type: BlockType,
-      props: { level?: HeadingLevel } = {},
-      keywords: string[] = [],
-      shortcut?: string
-    ): MenuItem => ({
-      id: `${type}-${props.level ?? ''}`,
-      label,
-      icon: blockIcon(type, props.level),
-      group: 'Basic blocks',
-      keywords,
-      ...(shortcut ? { shortcut } : {}),
-      action: () => {
-        if (slash) this.#removeSlashQuery(slash);
-        this.#convertBlock(blockId, type, props);
-      },
-    });
-
-    items.push(
-      conversion('Text', 'paragraph', {}, ['plain', 'p'], shortcutLabel(mod, '⌥0')),
-      conversion('Heading 1', 'heading', { level: 1 }, ['h1', 'title'], shortcutLabel(mod, '⌥1')),
-      conversion('Heading 2', 'heading', { level: 2 }, ['h2', 'subtitle'], shortcutLabel(mod, '⌥2')),
-      conversion('Heading 3', 'heading', { level: 3 }, ['h3'], shortcutLabel(mod, '⌥3')),
-      conversion('Heading 4', 'heading', { level: 4 }, ['h4'], shortcutLabel(mod, '⌥4')),
-      conversion('Heading 5', 'heading', { level: 5 }, ['h5'], shortcutLabel(mod, '⌥5')),
-      conversion('Heading 6', 'heading', { level: 6 }, ['h6'], shortcutLabel(mod, '⌥6'))
-    );
-
-    items.push(
-      {
-        ...conversion('Bulleted list', 'bulleted', {}, ['bullet', 'ul', 'unordered']),
-        group: 'Lists',
-      },
-      {
-        ...conversion('Numbered list', 'numbered', {}, ['number', 'ol', 'ordered']),
-        group: 'Lists',
-      },
-      {
-        ...conversion('To-do list', 'todo', {}, ['task', 'checkbox', 'check']),
-        group: 'Lists',
-      }
-    );
-
-    items.push(
-      {
-        ...conversion('Quote', 'quote', {}, ['blockquote', 'citation']),
-        group: 'Blocks',
-      },
-      {
-        ...conversion('Code block', 'code', {}, ['code', 'pre', 'snippet']),
-        group: 'Blocks',
-      },
-      {
-        id: 'divider',
-        label: 'Divider',
-        description: 'Visually separate content',
-        icon: icon.divider,
-        group: 'Blocks',
-        keywords: ['hr', 'line', 'separator'],
-        action: () => {
-          if (slash) this.#removeSlashQuery(slash);
-          this.#convertBlock(blockId, 'divider');
-        },
-      },
-      {
-        ...conversion('Callout', 'callout', {}, ['note', 'info', 'warning']),
-        group: 'Blocks',
-      },
-      {
-        id: 'image',
-        label: 'Image',
-        description: 'Embed an image from a URL',
-        icon: icon.image,
-        group: 'Blocks',
-        keywords: ['picture', 'photo', 'img'],
-        action: () => {
-          if (slash) this.#removeSlashQuery(slash);
-          this.#convertBlock(blockId, 'image');
-        },
-      }
-    );
-
-    const align = (name: string, value: TextAlign, iconMarkup: string, shortcut: string): MenuItem => ({
-      id: `align-${value}`,
-      label: name,
-      icon: iconMarkup,
-      group: 'Alignment',
-      keywords: ['align', value, name.toLowerCase()],
-      shortcut,
-      action: () => {
-        const offset = slash?.start ?? 0;
-        if (slash) this.#removeSlashQuery(slash);
-        this.#alignBlockAt(blockId, value, offset);
-      },
-    });
-    items.push(
-      align('Align left', 'left', icon.alignLeft, '⇧L'),
-      align('Align center', 'center', icon.alignCenter, '⇧E'),
-      align('Align right', 'right', icon.alignRight, '⇧R')
-    );
-
-    const dateItem = (
-      id: string,
-      label: string,
-      description: string,
-      iconMarkup: string,
-      value: () => string
-    ): MenuItem => ({
-      id,
-      label,
-      description,
-      icon: iconMarkup,
-      group: 'Date',
-      keywords: ['date', 'time', label.toLowerCase()],
-      action: () => {
-        const text = value();
-        if (slash) this.#insertSlashText(slash, blockId, text);
-        else this.#insertText(blockId, text);
-      },
-    });
-    items.push(
-      dateItem('today', 'Today', formatDateValue(new Date()), icon.calendar, () => formatDateValue(new Date())),
-      dateItem(
-        'tomorrow',
-        'Tomorrow',
-        formatDateValue(addDays(new Date(), 1)),
-        icon.calendar,
-        () => formatDateValue(addDays(new Date(), 1))
-      ),
-      dateItem(
-        'yesterday',
-        'Yesterday',
-        formatDateValue(addDays(new Date(), -1)),
-        icon.calendar,
-        () => formatDateValue(addDays(new Date(), -1))
-      ),
-      dateItem('now', 'Now', formatDateTimeValue(new Date()), icon.clock, () =>
-        formatDateTimeValue(new Date())
-      )
-    );
-
-    items.push(
-      {
-        id: 'table',
-        label: 'Table',
-        description: 'Simple rows and columns',
-        icon: icon.table,
-        group: 'Data',
-        keywords: ['grid', 'spreadsheet', 'sheet', 'rows'],
-        action: () => {
-          if (slash) this.#removeSlashQuery(slash);
-          this.#convertBlock(blockId, 'database', {
-            database: createDatabaseData({ variant: 'table' }),
-          });
-        },
-      },
-      {
-        id: 'database',
-        label: 'Database',
-        description: 'Rows with typed properties',
-        icon: icon.database,
-        group: 'Data',
-        keywords: ['properties', 'data', 'table', 'records', 'select'],
-        action: () => {
-          if (slash) this.#removeSlashQuery(slash);
-          this.#convertBlock(blockId, 'database', {
-            database: createDatabaseData({ variant: 'database' }),
-          });
-        },
-      }
-    );
-
-    const slashOffset = slash?.start ?? this.#pointFromCaret(blockId).offset;
-    items.push(
-      {
-        id: 'move-up',
-        label: 'Move Up',
-        description: 'Move this block one position up',
-        icon: icon.arrowUp,
-        group: 'Actions',
-        keywords: ['move', 'up', 'moveup', 'shift', 'reorder'],
-        action: () => {
-          if (slash) this.#removeSlashQuery(slash);
-          this.#moveBlockVertically(blockId, 'before', slashOffset);
-        },
-      },
-      {
-        id: 'move-down',
-        label: 'Move Down',
-        description: 'Move this block one position down',
-        icon: icon.arrowDown,
-        group: 'Actions',
-        keywords: ['move', 'down', 'movedown', 'shift', 'reorder'],
-        action: () => {
-          if (slash) this.#removeSlashQuery(slash);
-          this.#moveBlockVertically(blockId, 'after', slashOffset);
-        },
-      },
-      {
-        id: 'copy',
-        label: 'Copy',
-        description: 'Copy this block to the clipboard',
-        icon: icon.copy,
-        group: 'Actions',
-        keywords: ['copy', 'clipboard', 'duplicate'],
-        action: () => {
-          if (slash) this.#removeSlashQuery(slash);
-          this.#copyBlockToClipboard(blockId, slashOffset);
-        },
-      }
-    );
-
-    return items;
-  }
-
-  #blockMenuItems(blockId: string): MenuItem[] {
-    const block = findBlock(this.store.doc.blocks, blockId);
-    if (!block) return [];
-    const items: MenuItem[] = [];
-    for (const entry of TURN_INTO_TYPES) {
-      const active =
-        block.type === entry.type &&
-        (entry.type !== 'heading' ||
-          (block.props.level ?? 1) === (entry.level ?? 1));
-      items.push({
-        id: `turn-${entry.type}-${entry.level ?? ''}`,
-        label: entry.label,
-        icon: blockIcon(entry.type, entry.level),
-        group: 'Turn into',
-        ...(active ? { description: 'Current type' } : {}),
-        action: () => {
-          const point = this.#pointFromCaret(blockId);
-          const next = setBlockType(
-            this.store.doc,
-            blockId,
-            entry.type,
-            entry.level ? { level: entry.level } : {}
-          );
-          this.#commit(next, { anchor: point, focus: point });
-        },
-      });
-    }
-
-    items.push(
-      {
-        id: 'copy',
-        label: 'Copy',
-        description: 'Copy this block to the clipboard',
-        icon: icon.copy,
-        group: 'Actions',
-        action: () => {
-          const offset = this.#pointFromCaret(blockId).offset;
-          this.#copyBlockToClipboard(blockId, offset);
-        },
-      },
-      {
-        id: 'duplicate',
-        label: 'Duplicate',
-        icon: icon.duplicate,
-        group: 'Actions',
-        shortcut: '⌘D',
-        action: () => {
-          const copy = duplicateBlockTree(block);
-          const next = insertBlockRelative(this.store.doc, blockId, copy, 'after');
-          const caret: Point = { blockId: copy.id, offset: 0 };
-          this.#commit(next, { anchor: caret, focus: caret });
-          this.#focusBlock(copy.id, 0);
-        },
-      },
-      {
-        id: 'copy-markdown',
-        label: 'Copy as Markdown',
-        icon: icon.copy,
-        group: 'Actions',
-        action: () => {
-          const markdown = blocksToMarkdown(
-            { version: 1, id: 'clipboard', title: '', blocks: [duplicateBlockTree(block)] },
-            { title: false }
-          );
-          void navigator.clipboard?.writeText(markdown);
-        },
-      },
-      {
-        id: 'indent',
-        label: 'Indent',
-        icon: icon.indent,
-        group: 'Actions',
-        shortcut: 'Tab',
-        action: () => {
-          const point = this.#pointFromCaret(blockId);
-          this.#commit(indentBlock(this.store.doc, blockId), { anchor: point, focus: point });
-        },
-      },
-      {
-        id: 'dedent',
-        label: 'Outdent',
-        icon: icon.outdent,
-        group: 'Actions',
-        shortcut: '⇧Tab',
-        action: () => {
-          const point = this.#pointFromCaret(blockId);
-          this.#commit(dedentBlock(this.store.doc, blockId), { anchor: point, focus: point });
-        },
-      },
-      {
-        id: 'delete',
-        label: 'Delete',
-        icon: icon.trash,
-        group: 'Actions',
-        action: () => this.#deleteBlock(blockId),
-      }
-    );
-    return items;
   }
 
   #deleteBlock(blockId: string): void {
@@ -2704,24 +2352,8 @@ export class NobitaEditor implements BlockHost {
 
 /** ---- helpers without DOM ---- */
 
-function formatDateValue(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
 
-function formatDateTimeValue(date: Date): string {
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${formatDateValue(date)} ${hours}:${minutes}`;
-}
 
-function addDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
 
 function replaceBlockText(doc: Doc, blockId: string, runs: Block['text']): Doc {  const blocks = replaceTextIn(doc.blocks, blockId, runs);
   return blocks === doc.blocks ? doc : { ...doc, blocks };
