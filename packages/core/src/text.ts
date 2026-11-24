@@ -67,7 +67,8 @@ export function normalizeRuns(runs: readonly InlineRun[]): InlineRun[] {
     if (run.text.length === 0) continue;
     const marks = normalizeMark(run.marks);
     const previous = out[out.length - 1];
-    if (previous && marksEqual(previous.marks, marks)) {
+    // Adjacent references stay separate so each remains one atomic mention.
+    if (previous && marksEqual(previous.marks, marks) && !marks?.mention) {
       previous.text += run.text;
     } else {
       out.push(marks ? { text: run.text, marks } : { text: run.text });

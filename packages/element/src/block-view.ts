@@ -536,6 +536,8 @@ export class BlockView {
   }
 
   setReadonly(readonly: boolean): void {
+    if (this.#codeLang) this.#codeLang.disabled = readonly;
+    if (this.#toneSelect) this.#toneSelect.disabled = readonly;
     if (this.#caption) this.#caption.contentEditable = readonly ? 'false' : 'true';
     this.#database?.setReadonly(readonly);
     for (const view of this.#childViews.values()) view.setReadonly(readonly);

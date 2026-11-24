@@ -6,6 +6,7 @@ import {
   marksEqual,
   mentionRangeAt,
   normalizeMark,
+  normalizeRuns,
   runsToHtml,
 } from '../src/text.js';
 
@@ -55,6 +56,16 @@ describe('mention marks', () => {
     expect(mentionRangeAt(runs, 3)).toEqual({ start: 3, end: 7 });
     expect(mentionRangeAt(runs, 2)).toBeNull();
     expect(mentionRangeAt(runs, 7)).toBeNull();
+  });
+
+  it('keeps adjacent identical mentions separate', () => {
+    const mention = { mention: { id: 'u1', label: 'Ada' } } as const;
+    expect(
+      normalizeRuns([
+        { text: '@Ada', marks: mention },
+        { text: '@Ada', marks: mention },
+      ])
+    ).toHaveLength(2);
   });
 
   it('renders mention HTML metadata and round-trips JSON', () => {

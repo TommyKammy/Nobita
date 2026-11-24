@@ -870,9 +870,10 @@ export class NobitaEditor implements BlockHost {
 
   async #uploadImage(blockId: string, file: File): Promise<void> {
     const upload = this.#options.uploadImage;
-    if (!upload) return;
+    if (!upload || this.#readonly) return;
     try {
       const result = await upload(file);
+      if (this.#destroyed || this.#readonly) return;
       const src = typeof result === 'string' ? result : result.src;
       if (!src) return;
       const alt = typeof result === 'string' ? undefined : result.alt;
@@ -1146,13 +1147,31 @@ export class NobitaEditor implements BlockHost {
     );
 
     body.addEventListener(
+      'dragover',
+      event => {
+        const types = Array.from(event.dataTransfer?.types ?? []);
+        if (!types.includes('Files')) return;
+        event.preventDefault();
+        if (
+          !this.#readonly &&
+          this.#options.uploadImage &&
+          event.dataTransfer
+        ) {
+          event.dataTransfer.dropEffect = 'copy';
+        }
+      },
+      { signal }
+    );
+
+    body.addEventListener(
       'drop',
       event => {
         const file = Array.from(event.dataTransfer?.files ?? []).find(item =>
           item.type.startsWith('image/')
         );
-        if (file && this.#options.uploadImage) {
+        if (file) {
           event.preventDefault();
+          if (this.#readonly || !this.#options.uploadImage) return;
           const blockId =
             this.#activeBlockId(event.target) ?? this.#nearestBlock(event.clientY);
           if (blockId) void this.#uploadImage(blockId, file);
@@ -2166,6 +2185,8 @@ export class NobitaEditor implements BlockHost {
       if (!block) return;
       const base = this.#pendingMarks ?? marksAt(block.text, selection.anchor.offset) ?? {};
       const next: InlineMark = { ...base };
+      // Typing after a mention must not extend the atomic reference.
+      delete next.mention;
       if (next[key]) delete next[key];
       else next[key] = true;
       this.#pendingMarks = next;
@@ -2522,6 +2543,7 @@ export class NobitaEditor implements BlockHost {
     this.#lastSelectionKey = key;
     this.#updateToolbar();
     this.#syncSlashMenu();
+    this.#syncMentionMenu();
     this.#syncPlaceholders();
     this.#options.onSelectionChange?.(selection);
   }

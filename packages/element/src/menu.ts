@@ -122,6 +122,7 @@ export class Menu {
   setItems(items: readonly MenuItem[]): void {
     this.#items = [...items];
     this.#filter();
+    if (this.#open) this.#repositionToAnchor();
   }
 
   setQuery(query: string): void {

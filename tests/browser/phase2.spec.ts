@@ -336,3 +336,261 @@ test('does not open the mention picker inside code blocks', async ({ page }) => 
   await expect(page.locator('.nb-menu')).toHaveCount(0);
   expect(blockById(await getDoc(page), 'code')?.text).toContain('@');
 });
+
+test('keeps the mention range correct after deleting query text', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, textDoc('Hello'));
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        setMentionProvider(provider: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    editor?.setMentionProvider({
+      search: () => [{ id: 'u1', label: 'Ada' }],
+    });
+    editor?.focus('b1', 0);
+  });
+  await page.keyboard.type('@a');
+  await expect(page.locator('.nb-menu')).toBeVisible();
+  await page.keyboard.press('Backspace');
+  await expect(page.locator('.nb-menu')).toBeVisible();
+  await page.locator('.nb-menu-item', { hasText: 'Ada' }).click();
+
+  const block = blockById(await getDoc(page), 'b1');
+  expect(block?.text).toBe('@AdaHello');
+  expect(block?.runs.some(run => run.marks?.mention)).toBe(true);
+});
+
+test('does not extend a mention when formatting is pending', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'mention-format',
+    title: '',
+    blocks: [
+      {
+        id: 'b1',
+        type: 'paragraph',
+        text: [
+          { text: 'Hi ' },
+          { text: '@Ada', marks: { mention: { id: 'u1', label: 'Ada' } } },
+        ],
+        props: {},
+        children: [],
+      },
+    ],
+  });
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { focus(blockId: string, offset?: number): void };
+    }).__editor;
+    editor?.focus('b1', 7);
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('[data-block-id="b1"] .nb-text')
+      ?.dispatchEvent(
+        new InputEvent('beforeinput', {
+          bubbles: true,
+          cancelable: true,
+          inputType: 'formatBold',
+        })
+      );
+  });
+  await page.keyboard.type('!');
+
+  const runs = blockById(await getDoc(page), 'b1')?.runs ?? [];
+  const typed = runs.find(run => run.text === '!');
+  expect(typed?.marks?.bold).toBe(true);
+  expect(typed?.marks?.mention).toBeUndefined();
+});
+
+test('keeps adjacent identical mentions as separate atomic references', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'mention-adjacent',
+    title: '',
+    blocks: [
+      {
+        id: 'b1',
+        type: 'paragraph',
+        text: [
+          { text: 'Hi ' },
+          { text: '@Ada', marks: { mention: { id: 'u1', label: 'Ada' } } },
+          { text: ' ' },
+          { text: '@Ada', marks: { mention: { id: 'u1', label: 'Ada' } } },
+        ],
+        props: {},
+        children: [],
+      },
+    ],
+  });
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { focus(blockId: string, offset?: number): void };
+    }).__editor;
+    editor?.focus('b1', 8);
+  });
+  const mentionCount = async (): Promise<number> =>
+    ((await getDoc(page)).blocks[0]?.runs ?? []).filter(run => run.marks?.mention).length;
+
+  await page.keyboard.press('Backspace');
+  await expect.poll(mentionCount).toBe(2);
+  await page.keyboard.press('Backspace');
+  await expect.poll(mentionCount).toBe(1);
+  expect((await getDoc(page)).blocks[0]?.text).toBe('Hi @Ada');
+});
+
+test('enables code and callout pickers when readonly is turned off', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, textDoc());
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { setReadonly(value: boolean): void };
+    }).__editor;
+    editor?.setReadonly(true);
+  });
+  await expect(page.locator('.nb-code-lang')).toBeDisabled();
+  await expect(page.locator('.nb-callout-tone')).toBeDisabled();
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { setReadonly(value: boolean): void };
+    }).__editor;
+    editor?.setReadonly(false);
+  });
+  await expect(page.locator('.nb-code-lang')).toBeEnabled();
+  await expect(page.locator('.nb-callout-tone')).toBeEnabled();
+});
+
+test('accepts image file drags and ignores drops while readonly', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, textDoc('Drop target'));
+  const setup = await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        setUploadImage(handler: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    const calls: string[] = [];
+    (window as unknown as { __uploadCalls: string[] }).__uploadCalls = calls;
+    editor?.setUploadImage(async (file: File) => {
+      calls.push(file.name);
+      return { src: `https://example.com/${file.name}`, alt: file.name };
+    });
+    editor?.focus('b1', 0);
+    const target = document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('[data-block-id="b1"] .nb-text');
+    if (!target) return false;
+    const data = new DataTransfer();
+    data.items.add(
+      new File([new Uint8Array([137, 80, 78, 71])], 'drop.png', { type: 'image/png' })
+    );
+    const over = new DragEvent('dragover', {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: data,
+    });
+    target.dispatchEvent(over);
+    target.dispatchEvent(
+      new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: data,
+      })
+    );
+    return over.defaultPrevented;
+  });
+  expect(setup).toBe(true);
+  await expect
+    .poll(async () => {
+      const doc = await getDoc(page);
+      return doc.blocks.filter(block => block.type === 'image').length;
+    })
+    .toBe(1);
+
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { setReadonly(value: boolean): void };
+    }).__editor;
+    editor?.setReadonly(true);
+    const target = document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('[data-block-id="b1"] .nb-text');
+    const data = new DataTransfer();
+    data.items.add(
+      new File([new Uint8Array([137, 80, 78, 71])], 'readonly.png', {
+        type: 'image/png',
+      })
+    );
+    target?.dispatchEvent(
+      new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: data,
+      })
+    );
+  });
+  await page.waitForTimeout(100);
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { __uploadCalls: string[] }).__uploadCalls
+    )
+  ).toEqual(['drop.png']);
+  expect((await getDoc(page)).blocks.filter(block => block.type === 'image')).toHaveLength(1);
+});
+
+test('does not insert an upload that finishes after readonly', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, textDoc('Late upload'));
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        setUploadImage(handler: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    (window as unknown as { __uploadStarted: boolean }).__uploadStarted = false;
+    editor?.setUploadImage(
+      () =>
+        new Promise(resolve => {
+          (window as unknown as { __uploadStarted: boolean }).__uploadStarted = true;
+          (window as unknown as { __finishUpload: () => void }).__finishUpload = () =>
+            resolve({ src: 'https://example.com/late.png' });
+        })
+    );
+    editor?.focus('b1', 0);
+    const data = new DataTransfer();
+    data.items.add(
+      new File([new Uint8Array([137, 80, 78, 71])], 'late.png', { type: 'image/png' })
+    );
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('[data-block-id="b1"] .nb-text')
+      ?.dispatchEvent(
+        new ClipboardEvent('paste', {
+          bubbles: true,
+          clipboardData: data,
+        })
+      );
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { __uploadStarted: boolean }).__uploadStarted
+      )
+    )
+    .toBe(true);
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { setReadonly(value: boolean): void };
+    }).__editor;
+    editor?.setReadonly(true);
+    (window as unknown as { __finishUpload: () => void }).__finishUpload();
+  });
+  await page.waitForTimeout(100);
+  expect((await getDoc(page)).blocks.some(block => block.type === 'image')).toBe(false);
+});
