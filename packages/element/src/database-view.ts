@@ -188,6 +188,10 @@ function formatDatabaseNumber(value: string, column: DatabaseColumn): string {
 
 const cellKey = (rowId: string, columnId: string): string => `${rowId}\u0000${columnId}`;
 
+function detailFieldSchema(column: DatabaseColumn): string {
+  return `${column.type}\u0000${(column.options ?? []).join('\u0001')}`;
+}
+
 /** Parse spreadsheet-friendly TSV, including quoted tabs/newlines and quotes. */
 function parseTsv(source: string): string[][] {
   const text = source.replace(/\r\n?/gu, '\n');
@@ -885,7 +889,10 @@ export class DatabaseView {
       ? this.#data.columns.find(item => item.id === view.groupBy)
       : undefined;
     group.dataset.active = String(Boolean(groupColumn));
-    group.innerHTML = `${icon.group}<span>${groupColumn ? `Group: ${groupColumn.name}` : 'Group'}</span>`;
+    group.innerHTML = icon.group;
+    const groupLabel = document.createElement('span');
+    groupLabel.textContent = groupColumn ? `Group: ${groupColumn.name}` : 'Group';
+    group.append(groupLabel);
     group.title = 'Group rows';
     group.addEventListener('click', () => this.#openGroupPopover(group), {
       signal: this.#events.signal,
@@ -2503,10 +2510,19 @@ export class DatabaseView {
   }
 
   #deleteSelectedRows(): void {
-    if (this.#selectedRows.size === 0) return;
-    const rows = this.#data.rows.filter(row => !this.#selectedRows.has(row.id));
-    this.#selectedRows.clear();
+    const selected = this.#selectedVisibleRows();
+    if (selected.length === 0) return;
+    const ids = new Set(selected.map(row => row.id));
+    const rows = this.#data.rows.filter(row => !ids.has(row.id));
+    for (const id of ids) this.#selectedRows.delete(id);
     this.#host.commit({ ...this.#data, rows });
+  }
+
+  #selectedVisibleRows(): DatabaseRow[] {
+    if (this.#selectedRows.size === 0) return [];
+    return this.#renderedRows(this.#activeView()).filter(row =>
+      this.#selectedRows.has(row.id)
+    );
   }
 
   #closeDetailPanel(): void {
@@ -2661,6 +2677,7 @@ export class DatabaseView {
     const field = document.createElement('label');
     field.className = 'nb-db-detail-field';
     field.dataset.columnId = column.id;
+    field.dataset.schema = detailFieldSchema(column);
     const name = document.createElement('span');
     name.className = 'nb-db-detail-field-name';
     const typeIcon = document.createElement('span');
@@ -3176,22 +3193,30 @@ export class DatabaseView {
       const current = [
         ...fields.querySelectorAll<HTMLElement>('.nb-db-detail-field'),
       ];
-      const currentIds = current.map(field => field.dataset.columnId ?? '');
-      const desiredIds = columns.map(column => column.id);
+      const currentKeys = current.map(
+        field => `${field.dataset.columnId ?? ''}\u0000${field.dataset.schema ?? ''}`
+      );
+      const desiredKeys = columns.map(
+        column => `${column.id}\u0000${detailFieldSchema(column)}`
+      );
       if (
-        currentIds.length !== desiredIds.length ||
-        currentIds.some((id, index) => id !== desiredIds[index])
+        currentKeys.length !== desiredKeys.length ||
+        currentKeys.some((key, index) => key !== desiredKeys[index])
       ) {
         const byId = new Map(
           current.map(field => [field.dataset.columnId ?? '', field])
         );
-        const wanted = new Set(desiredIds);
+        const wanted = new Set(columns.map(column => column.id));
         for (const field of current) {
           if (!wanted.has(field.dataset.columnId ?? '')) field.remove();
         }
         for (const column of columns) {
-          const field =
-            byId.get(column.id) ?? this.#renderDetailField(row, column);
+          const schema = detailFieldSchema(column);
+          let field = byId.get(column.id);
+          if (field?.dataset.schema !== schema) {
+            field?.remove();
+            field = this.#renderDetailField(row, column);
+          }
           fields.append(field);
         }
       }
@@ -4559,8 +4584,7 @@ export class DatabaseView {
     if (this.#selectedRows.size === 0) return '';
     const view = this.#activeView();
     const columns = this.#visibleColumns(view);
-    return this.#rowsFor(view)
-      .filter(row => this.#selectedRows.has(row.id))
+    return this.#selectedVisibleRows()
       .map(row =>
         columns
           .map(column =>
