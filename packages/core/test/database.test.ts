@@ -227,6 +227,33 @@ describe('database model', () => {
     expect(databaseStatValue(data.rows, data.columns[2]!, 'range')).toBe('2');
   });
 
+  it('ignores empty nested filter groups', () => {
+    const name = createDatabaseColumn('Name');
+    const data: DatabaseData = {
+      variant: 'database',
+      columns: [name],
+      rows: [
+        createDatabaseRow({ [name.id]: { text: 'One' } }),
+        createDatabaseRow({ [name.id]: { text: 'Two' } }),
+      ],
+      view: {
+        type: 'table',
+        filters: [],
+        filter: {
+          type: 'group',
+          op: 'or',
+          conditions: [
+            { columnId: name.id, operator: 'is', value: 'One' },
+            { type: 'group', op: 'and', conditions: [] },
+          ],
+        },
+      },
+    };
+    expect(
+      filteredDatabaseRows(data).map(row => row.cells[name.id]?.text)
+    ).toEqual(['One']);
+  });
+
   it('filters, sorts and groups rows for table and board views', () => {
     const status = createDatabaseColumn('Status', 'select', ['Todo', 'Done']);
     const name = createDatabaseColumn('Name');

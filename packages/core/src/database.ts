@@ -1108,6 +1108,11 @@ function matchesFilter(
   }
 }
 
+function hasFilterConditions(node: DatabaseFilterNode): boolean {
+  if (node.type !== 'group') return true;
+  return node.conditions.some(condition => hasFilterConditions(condition));
+}
+
 function matchesFilterNode(
   row: DatabaseRow,
   node: DatabaseFilterNode,
@@ -1116,6 +1121,7 @@ function matchesFilterNode(
   if (node.type === 'group') {
     const matches: boolean[] = [];
     for (const item of node.conditions) {
+      if (item.type === 'group' && !hasFilterConditions(item)) continue;
       if (
         item.type !== 'group' &&
         !data.columns.some(column => column.id === item.columnId)

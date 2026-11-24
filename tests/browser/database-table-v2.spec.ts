@@ -59,7 +59,7 @@ async function setDoc(page: Page, doc = v2Doc()): Promise<void> {
       .__editor;
     editor?.setDoc(JSON.stringify(value));
   }, doc);
-  await expect(page.locator('.nb-db-table').first()).toBeVisible();
+  await expect(page.locator('.nb-db').first()).toBeVisible();
 }
 
 async function dragCells(page: Page, from: string, to: string): Promise<void> {
@@ -434,6 +434,136 @@ test('synchronizes the detail panel after an external undo', async ({ page }) =>
   await expect(
     page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]')
   ).toContainText('One');
+});
+
+test('edits raw numeric board titles and formats on blur', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'board-number-title',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'score',
+            columns: [
+              {
+                id: 'score',
+                name: 'Score',
+                type: 'number',
+                data: { format: 'currency' },
+              },
+              {
+                id: 'status',
+                name: 'Status',
+                type: 'select',
+                options: ['Todo'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { score: { text: '1234' }, status: { text: 'Todo' } },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Board',
+                type: 'board',
+                filters: [],
+                groupBy: 'status',
+                columns: [
+                  { id: 'score', width: 180 },
+                  { id: 'status', width: 180 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  const title = page.locator('.nb-db-card-title');
+  await expect(title).toHaveText('$1,234.00');
+  await title.click();
+  await expect(title).toHaveText('1234');
+  await page.keyboard.type('5');
+  await page.keyboard.press('Enter');
+  await expect(title).toHaveText('$12,345.00');
+  const doc = await getDoc(page);
+  expect(
+    (
+      doc.blocks[0]?.props.database as {
+        rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+      }
+    ).rows[0]?.cells.score?.text
+  ).toBe('12345');
+});
+
+test('adds a property to the open detail panel', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  const fields = page.locator('.nb-db-detail-field');
+  await expect(fields).toHaveCount(2);
+  await page.getByRole('button', { name: 'Add Property' }).click();
+  await page
+    .locator('.nb-db-popover')
+    .getByRole('button', { name: 'Text', exact: true })
+    .click();
+  await expect(fields).toHaveCount(3);
+  const added = fields.last();
+  await expect(added).toContainText('Column 4');
+  await added.locator('.nb-db-detail-text').click();
+  await page.keyboard.type('Note');
+  const doc = await getDoc(page);
+  const database = doc.blocks[0]?.props.database as {
+    columns: Array<{ id: string }>;
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  };
+  const columnId = database.columns[3]?.id;
+  expect(columnId).toBeTruthy();
+  expect(database.rows[0]?.cells[columnId!]?.text).toBe('Note');
+});
+
+test('expands saved collapsed groups in readonly views', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const view = (doc.blocks[0]?.props.database as { views: Array<Record<string, unknown>> })
+    .views[0]!;
+  view.groupBy = 'status';
+  view.groupProperties = [{ key: 'Todo' }, { key: 'Done', collapsed: true }];
+  await setDoc(page, doc);
+  await page.evaluate(() => {
+    const element = document.querySelector('nobita-editor') as unknown as {
+      setReadonly(value: boolean): void;
+    };
+    element.setReadonly(true);
+  });
+  const done = page.locator('.nb-db-group[data-group="Done"]');
+  await expect(done.locator('.nb-db-table')).toHaveCount(0);
+  await done.locator('.nb-db-group-toggle').click();
+  await expect(done.locator('.nb-db-table')).toBeVisible();
+  await expect(
+    done.locator('.nb-db-cell[data-row-id="r2"][data-column-id="name"]')
+  ).toContainText('Two');
+  const saved = await getDoc(page);
+  expect(
+    (
+      saved.blocks[0]?.props.database as {
+        views: Array<{ groupProperties?: Array<Record<string, unknown>> }>;
+      }
+    ).views[0]?.groupProperties
+  ).toEqual([{ key: 'Todo' }, { key: 'Done', collapsed: true }]);
 });
 
 test('deletes a selected range while a cell editor is focused', async ({ page }) => {

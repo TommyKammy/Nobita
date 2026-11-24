@@ -290,6 +290,7 @@ export class DatabaseView {
   } | null = null;
   #rangeCells = new Set<string>();
   #selectedRows = new Set<string>();
+  #groupOverrides = new Map<string, { hide?: boolean; collapsed?: boolean }>();
   #dragSelect: {
     anchorRowId: string;
     anchorColumnId: string;
@@ -350,6 +351,7 @@ export class DatabaseView {
   setReadonly(readonly: boolean): void {
     if (readonly === this.#readonly) return;
     this.#readonly = readonly;
+    if (!readonly) this.#groupOverrides.clear();
     this.element.dataset.readonly = String(readonly);
     this.render();
   }
@@ -478,6 +480,14 @@ export class DatabaseView {
   }
 
   #setGroupProperty(key: string, patch: { hide?: boolean; collapsed?: boolean }): void {
+    if (this.#readonly) {
+      this.#groupOverrides.set(key, {
+        ...(this.#groupOverrides.get(key) ?? {}),
+        ...patch,
+      });
+      this.render();
+      return;
+    }
     const view = this.#activeView();
     const existing = new Map(
       (view.groupProperties ?? []).map(group => [group.key, { ...group }])
@@ -522,10 +532,19 @@ export class DatabaseView {
     view: DatabaseViewConfig = this.#activeView()
   ): ReturnType<typeof groupedDatabaseRows> {
     const allowed = new Set(this.#rowsFor(view).map(row => row.id));
-    return groupedDatabaseRows(this.#data, view).map(group => ({
-      ...group,
-      rows: group.rows.filter(row => allowed.has(row.id)),
-    }));
+    return groupedDatabaseRows(this.#data, view).map(group => {
+      const override = this.#readonly
+        ? this.#groupOverrides.get(group.key)
+        : undefined;
+      return {
+        ...group,
+        ...(override?.hide !== undefined ? { hidden: override.hide } : {}),
+        ...(override?.collapsed !== undefined
+          ? { collapsed: override.collapsed }
+          : {}),
+        rows: group.rows.filter(row => allowed.has(row.id)),
+      };
+    });
   }
 
   #keyFor(data: DatabaseData): string {
@@ -1852,6 +1871,11 @@ export class DatabaseView {
             window.clearTimeout(this.#boardBlurTimer);
             this.#boardBlurTimer = null;
           }
+          if (titleColumn.type === 'number') {
+            title.textContent =
+              this.#currentCell(row.id, titleColumn.id)?.text ?? '';
+            placeCaret(title, 'end');
+          }
           if (view.groupBy === titleColumn.id) {
             this.#boardTitleEditing = { rowId: row.id, columnId: titleColumn.id };
           }
@@ -1871,6 +1895,11 @@ export class DatabaseView {
               this.#boardBlurTimer = null;
               this.render();
             }, 0);
+          } else if (titleColumn.type === 'number') {
+            title.textContent = formatDatabaseNumber(
+              this.#currentCell(row.id, titleColumn.id)?.text ?? '',
+              titleColumn
+            );
           }
         },
         { signal: this.#events.signal }
@@ -1878,10 +1907,15 @@ export class DatabaseView {
       title.addEventListener(
         'input',
         () => {
+          const raw = (title.textContent ?? '').replace(/\r?\n/gu, ' ');
+          const value =
+            titleColumn.type === 'number'
+              ? raw.replace(/[^0-9eE+.-]/gu, '')
+              : raw;
           this.#commitCell(
             row.id,
             titleColumn.id,
-            this.#withText(cell, (title.textContent ?? '').replace(/\r?\n/gu, ' ')),
+            this.#withText(cell, value),
             `db:${row.id}:${titleColumn.id}`
           );
         },
@@ -3037,6 +3071,36 @@ export class DatabaseView {
     if (!detail || !rowId) return;
     const row = this.#data.rows.find(item => item.id === rowId);
     if (!row) return;
+    const view = this.#activeView();
+    const titleColumn = this.#titleColumn(view);
+    const fields = detail.querySelector<HTMLElement>('.nb-db-detail-fields');
+    if (fields) {
+      const columns = this.#visibleColumns(view).filter(
+        column => column.id !== titleColumn?.id
+      );
+      const current = [
+        ...fields.querySelectorAll<HTMLElement>('.nb-db-detail-field'),
+      ];
+      const currentIds = current.map(field => field.dataset.columnId ?? '');
+      const desiredIds = columns.map(column => column.id);
+      if (
+        currentIds.length !== desiredIds.length ||
+        currentIds.some((id, index) => id !== desiredIds[index])
+      ) {
+        const byId = new Map(
+          current.map(field => [field.dataset.columnId ?? '', field])
+        );
+        const wanted = new Set(desiredIds);
+        for (const field of current) {
+          if (!wanted.has(field.dataset.columnId ?? '')) field.remove();
+        }
+        for (const column of columns) {
+          const field =
+            byId.get(column.id) ?? this.#renderDetailField(row, column);
+          fields.append(field);
+        }
+      }
+    }
     const title = detail.querySelector<HTMLInputElement>('.nb-db-detail-title');
     if (title) {
       const column = title.dataset.columnId
@@ -3496,7 +3560,7 @@ export class DatabaseView {
       button.textContent = type.label;
       button.addEventListener('click', () => {
         this.#closePopover();
-        this.#addColumnOfType(type.type);
+        this.#addColumnOfType(type.type, false);
       });
       list.append(button);
     }
@@ -3508,7 +3572,7 @@ export class DatabaseView {
     this.#addColumnOfType('text');
   }
 
-  #addColumnOfType(type: DatabaseColumnType): void {
+  #addColumnOfType(type: DatabaseColumnType, openSettings = true): void {
     if (this.#readonly) return;
     const column = createDatabaseColumn(
       `Column ${this.#data.columns.length + 1}`,
@@ -3529,6 +3593,7 @@ export class DatabaseView {
       activeViewId: view.id,
     });
     queueMicrotask(() => {
+      if (!openSettings) return;
       const button = this.element.querySelector<HTMLElement>(
         `th[data-column-id="${CSS.escape(column.id)}"] .nb-db-col-head`
       );
