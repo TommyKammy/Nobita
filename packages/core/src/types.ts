@@ -61,7 +61,9 @@ export interface DatabaseColumn {
   type: DatabaseColumnType;
   /** Available values for a select or multi-select column. */
   options?: string[];
-  /** Persisted table width in CSS pixels. */
+  /** Optional per-type settings such as number format and decimals. */
+  data?: Record<string, unknown>;
+  /** Persisted table width in CSS pixels (legacy, view columns take precedence). */
   width?: number;
 }
 
@@ -104,11 +106,15 @@ export interface DatabaseSort {
 export type DatabaseStatType =
   | 'count'
   | 'countValues'
+  | 'countUnique'
+  | 'countEmpty'
+  | 'countNotEmpty'
   | 'sum'
   | 'average'
   | 'median'
   | 'min'
-  | 'max';
+  | 'max'
+  | 'range';
 
 export type DatabaseViewType = 'table' | 'board';
 
@@ -139,9 +145,33 @@ export type DatabaseFilterOperator =
   | 'doesNotContainAll';
 
 export interface DatabaseFilter {
+  type?: 'filter';
   columnId: string;
   operator: DatabaseFilterOperator;
   value?: string;
+}
+
+export interface DatabaseFilterGroup {
+  type: 'group';
+  op: 'and' | 'or';
+  conditions: DatabaseFilterNode[];
+}
+
+export type DatabaseFilterNode = DatabaseFilter | DatabaseFilterGroup;
+
+export interface DatabaseViewColumn {
+  id: string;
+  width?: number;
+  hide?: boolean;
+  stat?: DatabaseStatType;
+}
+
+export interface DatabaseGroupProperty {
+  key: string;
+  hide?: boolean;
+  collapsed?: boolean;
+  /** Manual row order inside this group (used when the view has no sort). */
+  manuallyCardSort?: string[];
 }
 
 export interface DatabaseView {
@@ -150,18 +180,32 @@ export interface DatabaseView {
   type: DatabaseViewType;
   filters: DatabaseFilter[];
   filterMode?: 'and' | 'or';
+  /** Nested AND/OR filter tree. Takes precedence over legacy filters. */
+  filter?: DatabaseFilterGroup;
   groupBy?: string | null;
+  /** Group order, visibility and collapsed state. */
+  groupProperties?: DatabaseGroupProperty[];
+  /** Hide groups with no rows. */
+  hideEmptyGroups?: boolean;
   /** Multiple sort keys. `sort` is the legacy single-key form. */
   sorts?: DatabaseSort[];
   sort?: DatabaseSort | null;
+  /** Ordered view columns with per-view width/visibility/statistics. */
+  columns?: DatabaseViewColumn[];
   hiddenColumns?: string[];
   stats?: Record<string, DatabaseStatType>;
+  header?: {
+    titleColumnId?: string;
+    iconColumnId?: string;
+  };
 }
 
 export interface DatabaseData {
   variant: DatabaseVariant;
   /** Optional database title displayed by the data view. */
   title?: string;
+  /** The column used as the record title. Defaults to the first column. */
+  titleColumnId?: string;
   columns: DatabaseColumn[];
   rows: DatabaseRow[];
   /** Legacy global sort retained for older documents. */

@@ -277,7 +277,8 @@ A `database` block stores typed columns, row records and named views:
 interface DatabaseData {
   variant: 'database' | 'table'; // 'table' is legacy-only
   title?: string;
-  columns: { id; name; type; options?; width? }[];
+  titleColumnId?: string;
+  columns: { id; name; type; options?; data?; width? }[];
   rows: {
     id;
     cells: Record<columnId, {
@@ -287,7 +288,7 @@ interface DatabaseData {
       people?: { id; label }[];
     }>;
   }[];
-  views?: DatabaseView[];
+  views: DatabaseView[];
   activeViewId?: string;
   view?: DatabaseView; // legacy single view
 }
@@ -295,32 +296,41 @@ interface DatabaseData {
 interface DatabaseView {
   id?; name?;
   type: 'table' | 'board';
-  filters: { columnId; operator; value? }[];
-  filterMode?: 'and' | 'or';
+  filter: { type: 'group'; op: 'and' | 'or'; conditions: FilterNode[] };
+  columns: { id; width?; hide?; stat? }[];
   groupBy?: columnId;
+  groupProperties?: { key; hide?; collapsed?; manuallyCardSort? }[];
+  hideEmptyGroups?: boolean;
   sorts?: { columnId; direction }[];
-  hiddenColumns?: string[];
-  stats?: Record<columnId, 'count' | 'countValues' | 'sum' | 'average' | 'median' | 'min' | 'max'>;
+  header?: { titleColumnId?; iconColumnId? };
 }
+
+type FilterNode =
+  | { type?: 'filter'; columnId; operator; value? }
+  | { type: 'group'; op: 'and' | 'or'; conditions: FilterNode[] };
 ```
 
 - `table` defaults to a 3×3 plain-text grid; `database` defaults to Name / Status / Due / Done.
 - Column types are text, number, select, multi-select, date, checkbox, URL, files and people.
-- Empty cells are omitted, so row data stays compact. `parseDoc` normalizes table grids, database columns, view ids/names, filters, filter mode, multiple sorts, hidden columns and footer statistics.
-- `duplicateBlockTree` remaps every row, column and view id, so duplicated pages and pasted blocks never share database identity.
+- Empty cells are omitted, so row data stays compact. `parseDoc` normalizes table grids, database columns, view ids/names, nested filters, view columns, group settings and title columns.
+- Legacy `filters` / `filterMode` / `hiddenColumns` / `stats` fields are accepted and converted to the v2 view shape. Writers keep `filters` and `filterMode` as compatibility aliases for flat roots.
+- `duplicateBlockTree` remaps every row, column, filter and view id, so duplicated pages and pasted blocks never share database identity.
+- The table consumes view columns in their saved order and width; the title column is explicit (`titleColumnId`) but falls back to the first column for older documents.
 
 Rendering lives in `SimpleTableView` (`packages/element/src/table-view.ts`) for simple grids and `DatabaseView` (`packages/element/src/database-view.ts`) for typed data. Both cards are `contenteditable="false"`; their cells opt back in as nested editing hosts. The body-level editor ignores events from `.nb-table` and `.nb-db`, exactly as it ignores image captions and image URL inputs. This is the same pattern as the single-editing-host design, scoped one level deeper:
 
 - The card container disables editing so the table structure cannot be typed into.
-- Text/URL cells are nested `contenteditable` hosts.
-- Number, date, checkbox and select cells are native controls or buttons.
-- Tab / Shift+Tab move between cells; Enter moves down; arrow keys cross cell boundaries at caret edges; Escape returns to the document.
+- Table cells support click, Shift+click and drag range selection. Drag the fill handle to copy the focused cell down a single column.
+- The row gutter exposes hover row selection and dragging; selected rows can be copied, cut or deleted.
+- The row expand control opens a record detail panel with previous/next navigation, inline title/property editing and Add Property.
+- Column headers open the AFFiNE-style menu: number format, hide in view, filter, sort, insert, move, duplicate and delete. Headers can be resized and reordered.
+- Active view tabs and the toolbar `⋯` open View Settings: view name, table/board layout, properties, filter, sort, group, view move, duplicate and delete.
+- Filter builders support nested AND/OR groups, per-type operators and a chip toolbar summary. Sort supports multiple keys. Group settings persist order, visibility and collapsed state, and can hide empty groups.
 - Cell edits commit through `updateDatabase`/`updateTable` without restoring the body selection, which would steal focus from the cell. Text commits use a `mergeKey`, so one typing burst is one undo step.
-- A cell write does not rebuild the grid. Both views compare a structural key (columns, rows, views, hidden columns, stats, readonly). Values are synced in place; structure changes re-render and restore focus to the active cell when possible.
+- A cell write does not rebuild the grid. Both views compare a structural key (title column, columns, view columns, filters, groups, sorts, readonly). Values are synced in place; structure changes re-render and restore focus to the active cell when possible.
 - Sorting, filtering, search and grouping are derived at render time (`filteredDatabaseRows`, `searchDatabaseRows`, `groupedDatabaseRows`), so the underlying row order is never mutated.
-- A database can hold multiple named views. Each view owns its table/board mode, filters, filter mode, multiple sort keys, grouping, hidden columns and footer statistics. Board cards can be dragged between select, multi-select and checkbox groups; table views can group and collapse by text, number, date, select, multi-select or checkbox columns.
-- Column headers open a popover for rename/type/options/insert/delete/sort and expose a resize handle. Row handles open insert/duplicate/delete. Select/multi-select/files/people cells open pickers.
-- Shift+click selects a cell rectangle; copy/paste uses TSV and can import spreadsheet ranges.
+- A database can hold multiple named views. Each view owns its table/board mode, nested filters, sort keys, grouping, view columns, hidden columns and footer statistics. Board cards can be dragged between select, multi-select and checkbox groups.
+- Select/multi-select/files/people cells open pickers. Copy/paste uses TSV and can import spreadsheet ranges.
 - Readonly mode disables controls, removes row/column actions and leaves plain text cells non-editable.
 
 Exports are part of the core, not the UI:
@@ -372,7 +382,7 @@ changing the document format.
 - The optional D1 adapter stores the whole document as one JSON row. D1 caps a
   row at 2 MB, so images belong in R2 and very large documents need splitting or
   a different backend.
-- Data views support multiple named table/board views, per-view filters, multi-sort, search, hidden columns, footer statistics and table grouping. Calendar view, per-view column widths and nested filter groups are not implemented yet. Date cells store ISO strings and are edited with a date input.
+- Data views support multiple named table/board views, nested per-view filters, multi-sort, search, per-view column order/widths/visibility, footer statistics and table grouping with persisted group order/collapse. Calendar view, rich-text cells, formulas/relations and full board card parity are not implemented yet. Date cells store ISO strings and are edited with a date input.
 - Simple tables follow AFFiNE's interaction model: hover row/column handles are overlaid on the first row/column cells, dragging across cells selects a range for copy/cut/paste/clear, handles open AFFiNE-style row/column menus, hover plus controls add rows/columns (including drag-to-add), and row/column background colors are stored on the grid and adapt to the dark theme. Cell text keeps Shift+Enter line breaks, and Markdown export/import round-trips multiline and literal `<br>` text. Text cells, column resize and Markdown/HTML/TSV import are implemented; rich-text cells, merged cells and drag reorder are not yet implemented.
 - No synced blocks, comments, math or embeds. Mentions are represented as inline marks with a host-provided provider.
 - Page links are references to host-owned documents; there is no page registry, backlink index, page tree or in-editor router.

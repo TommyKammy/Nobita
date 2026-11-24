@@ -107,8 +107,11 @@ Stable exports include:
   `blocksToHtml`
 - Editing commands: `setBlockType`, `setBlockAlign`, `toggleChecked`,
   `setCodeLanguage`, `setCalloutTone`, `insertBlockAfter`, etc.
-- Data views: `DatabaseView`, `DatabaseFilter`, `DatabaseStatType`, `databaseView`,
-  `databaseViews`, `databaseSorts`, `filteredDatabaseRows`, `searchDatabaseRows`,
+- Data views: `DatabaseView`, `DatabaseViewColumn`, `DatabaseFilter`,
+  `DatabaseFilterGroup`, `DatabaseFilterNode`, `DatabaseGroupProperty`,
+  `DatabaseStatType`, `databaseView`, `databaseViews`, `databaseSorts`,
+  `databaseFilterGroup`, `databaseTitleColumn`, `databaseVisibleColumns`,
+  `databaseViewColumnStates`, `filteredDatabaseRows`, `searchDatabaseRows`,
   `groupedDatabaseRows`, `databaseStatValue`
 - Simple tables: `createTableData`, `normalizeTableData`, `duplicateTableData`,
   `insertTableRow`, `insertTableColumn`, `deleteTableRow`, `deleteTableColumn`,

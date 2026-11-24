@@ -1,0 +1,256 @@
+import { expect, test, type Page } from '@playwright/test';
+import { getDoc, openFixture } from './helpers';
+
+const v2Doc = () => ({
+  version: 1,
+  id: 'database-v2',
+  title: '',
+  blocks: [
+    {
+      id: 'db1',
+      type: 'database',
+      text: [],
+      props: {
+        database: {
+          variant: 'database',
+          title: 'Tasks',
+          titleColumnId: 'name',
+          columns: [
+            { id: 'name', name: 'Name', type: 'text' },
+            { id: 'status', name: 'Status', type: 'select', options: ['Todo', 'Done'] },
+            { id: 'done', name: 'Done', type: 'checkbox' },
+          ],
+          views: [
+            {
+              id: 'v1',
+              name: 'Table',
+              type: 'table',
+              filters: [],
+              columns: [
+                { id: 'name', width: 200 },
+                { id: 'status', width: 180 },
+                { id: 'done', width: 120 },
+              ],
+            },
+          ],
+          activeViewId: 'v1',
+          rows: [
+            { id: 'r1', cells: { name: { text: 'One' }, status: { text: 'Todo' } } },
+            {
+              id: 'r2',
+              cells: {
+                name: { text: 'Two' },
+                status: { text: 'Done' },
+                done: { checked: true },
+              },
+            },
+            { id: 'r3', cells: { name: { text: 'Three' }, status: { text: 'Todo' } } },
+          ],
+        },
+      },
+      children: [],
+    },
+  ],
+});
+
+async function setDoc(page: Page, doc = v2Doc()): Promise<void> {
+  await page.evaluate(value => {
+    const editor = (window as unknown as { __editor?: { setDoc(value: string): void } })
+      .__editor;
+    editor?.setDoc(JSON.stringify(value));
+  }, doc);
+  await expect(page.locator('.nb-db-table').first()).toBeVisible();
+}
+
+async function dragCells(page: Page, from: string, to: string): Promise<void> {
+  const start = await page.locator(from).boundingBox();
+  const end = await page.locator(to).boundingBox();
+  if (!start || !end) throw new Error('Missing table cells');
+  await page.mouse.move(start.x + 8, start.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width - 8, end.y + end.height - 8, {
+    steps: 8,
+  });
+  await page.mouse.up();
+}
+
+test('drags across cells to select and copy a range', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await dragCells(
+    page,
+    '.nb-db-cell[data-row-id="r1"][data-column-id="name"]',
+    '.nb-db-cell[data-row-id="r2"][data-column-id="status"]'
+  );
+  await expect(page.locator('.nb-db-cell.is-selected')).toHaveCount(4);
+  const copied = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const data = new DataTransfer();
+    root?.querySelector('.nb-db')?.dispatchEvent(
+      new ClipboardEvent('copy', {
+        bubbles: true,
+        clipboardData: data,
+      })
+    );
+    return data.getData('text/plain');
+  });
+  expect(copied).toBe('One\tTodo\nTwo\tDone');
+});
+
+test('supports row selection, clipboard and delete', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-row-check').first().click();
+  await expect(page.locator('.nb-db-table tbody tr.is-row-selected')).toHaveCount(1);
+  const copied = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const data = new DataTransfer();
+    root?.querySelector('.nb-db')?.dispatchEvent(
+      new ClipboardEvent('copy', {
+        bubbles: true,
+        clipboardData: data,
+      })
+    );
+    return data.getData('text/plain');
+  });
+  expect(copied).toBe('One\tTodo\t""');
+  await page.keyboard.press('Delete');
+  await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(2);
+  const doc = await getDoc(page);
+  const rows = (doc.blocks[0]?.props.database as { rows: { id: string }[] }).rows;
+  expect(rows.map(row => row.id)).toEqual(['r2', 'r3']);
+});
+
+test('fills a column by dragging the selection handle', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').click();
+  const handle = page.locator('.nb-db-fill-handle');
+  await expect(handle).toHaveAttribute('data-visible', 'true');
+  const handleBox = await handle.boundingBox();
+  const target = await page
+    .locator('.nb-db-cell[data-row-id="r3"][data-column-id="name"]')
+    .boundingBox();
+  if (!handleBox || !target) throw new Error('Missing fill target');
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  const doc = await getDoc(page);
+  const rows = (doc.blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  }).rows;
+  expect(rows.find(row => row.id === 'r2')?.cells.name?.text).toBe('One');
+  expect(rows.find(row => row.id === 'r3')?.cells.name?.text).toBe('One');
+});
+
+test('opens the row detail panel and edits the title', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  const titleCell = page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]');
+  await titleCell.hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  await expect(page.locator('.nb-db-detail')).toBeVisible();
+  const title = page.locator('.nb-db-detail-title');
+  await expect(title).toHaveValue('One');
+  await title.fill('Renamed');
+  await page.locator('.nb-db-detail-navbtn').nth(1).click();
+  await expect(page.locator('.nb-db-detail-title')).toHaveValue('Two');
+  const doc = await getDoc(page);
+  const row = (doc.blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  }).rows.find(item => item.id === 'r1');
+  expect(row?.cells.name?.text).toBe('Renamed');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.nb-db-detail')).toHaveCount(0);
+});
+
+test('opens view settings and toggles a property', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-viewtab[data-active="true"]').click();
+  await expect(page.locator('.nb-db-view-menu')).toBeVisible();
+  await expect(page.locator('.nb-db-view-name')).toHaveValue('Table');
+  await page.locator('.nb-db-pop-actions button', { hasText: 'Properties' }).click();
+  await expect(page.locator('.nb-db-view-properties')).toBeVisible();
+  const statusRow = page.locator('.nb-db-property-row', { hasText: 'Status' });
+  await statusRow.locator('.nb-db-property-eye').click();
+  await expect(page.locator('.nb-db-th[data-column-id="status"]')).toHaveCount(0);
+
+  await page.locator('.nb-db-viewtab[data-active="true"]').click();
+  await page.locator('.nb-db-pop-actions button', { hasText: 'Properties' }).click();
+  await page
+    .locator('.nb-db-property-row', { hasText: 'Status' })
+    .locator('.nb-db-property-eye')
+    .click();
+  await expect(page.locator('.nb-db-th[data-column-id="status"]')).toHaveCount(1);
+
+  await page.locator('.nb-db-viewtab[data-active="true"]').click();
+  await page.locator('.nb-db-view-layout-btn', { hasText: 'Board' }).click();
+  await expect(page.locator('.nb-db-board')).toBeVisible();
+});
+
+test('uses the column menu to hide, sort and duplicate columns', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-th[data-column-id="status"] .nb-db-col-head').click();
+  await page.locator('.nb-db-pop-actions button', { hasText: 'Sort Descending' }).click();
+  const statusTexts = await page
+    .locator('.nb-db-cell[data-column-id="status"] .nb-db-select')
+    .allTextContents();
+  expect(statusTexts).toEqual(['Todo', 'Todo', 'Done']);
+
+  await page.locator('.nb-db-th[data-column-id="status"] .nb-db-col-head').click();
+  await page.locator('.nb-db-pop-actions button', { hasText: 'Duplicate' }).click();
+  await expect(page.locator('.nb-db-th')).toHaveCount(4);
+
+  await page.locator('.nb-db-th[data-column-id="status"] .nb-db-col-head').click();
+  await page.locator('.nb-db-pop-actions button', { hasText: 'Hide In View' }).click();
+  await expect(page.locator('.nb-db-th[data-column-id="status"]')).toHaveCount(0);
+});
+
+test('applies nested filter groups', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-btn', { hasText: 'Filter' }).click();
+  await page.getByRole('button', { name: '+ Add group', exact: true }).click();
+  await page
+    .locator('.nb-db-filter-group')
+    .getByRole('button', { name: '+ Add condition' })
+    .click();
+  await page.locator('.nb-db-filter-row select').nth(0).selectOption('status');
+  await page.locator('.nb-db-filter-row select').nth(1).selectOption('is');
+  await page.locator('.nb-db-filter-row select').nth(2).selectOption('Todo');
+  await page.getByRole('button', { name: 'Apply' }).click();
+  await expect(page.locator('.nb-db-filter-chip')).toContainText('1 rule');
+  await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(2);
+  const doc = await getDoc(page);
+  const view = (doc.blocks[0]?.props.database as {
+    views: Array<{ filter?: { conditions: Array<{ type?: string }> } }>;
+  }).views[0];
+  expect(view.filter?.conditions[0]?.type).toBe('group');
+});
+
+test('hides groups and persists collapsed group state', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const view = (doc.blocks[0]?.props.database as { views: Array<Record<string, unknown>> })
+    .views[0]!;
+  view.groupBy = 'status';
+  view.groupProperties = [{ key: 'Todo' }, { key: 'Done' }];
+  await setDoc(page, doc);
+  await expect(page.locator('.nb-db-group')).toHaveCount(2);
+  await page.locator('.nb-db-btn', { hasText: 'Group' }).click();
+  await page
+    .locator('.nb-db-group-setting', { hasText: 'Done' })
+    .locator('.nb-db-property-eye')
+    .click();
+  await expect(page.locator('.nb-db-group')).toHaveCount(1);
+  const state = await getDoc(page);
+  const saved = (state.blocks[0]?.props.database as {
+    views: Array<{ groupProperties?: Array<{ key: string; hide?: boolean }> }>;
+  }).views[0];
+  expect(saved.groupProperties?.find(group => group.key === 'Done')?.hide).toBe(true);
+});
