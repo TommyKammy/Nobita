@@ -54,9 +54,6 @@ export const icon = {
     '<rect x="2.5" y="3.5" width="15" height="13" rx="3.5"/><path d="M10 8.6v4"/><circle cx="10" cy="6.2" r="0.4" fill="currentColor"/>'
   ),
   page: wrap('<path d="M5.5 3.5h6L15 7v9.5h-9.5z"/><path d="M11.5 3.5V7H15"/>'),
-  image: wrap(
-    '<rect x="2.5" y="3.5" width="15" height="13" rx="3"/><circle cx="7" cy="8" r="1.4"/><path d="m3.4 14.4 4-4 3 3 2.4-2.2 3.8 3.8"/>'
-  ),
   plus: wrap('<path d="M10 4.5v11M4.5 10h11"/>'),
   drag: wrap(
     '<circle cx="7" cy="5" r="1.1" fill="currentColor" stroke="none"/><circle cx="13" cy="5" r="1.1" fill="currentColor" stroke="none"/><circle cx="7" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="13" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="7" cy="15" r="1.1" fill="currentColor" stroke="none"/><circle cx="13" cy="15" r="1.1" fill="currentColor" stroke="none"/>'
@@ -99,10 +96,8 @@ export const icon = {
   turnInto: textIcon,
   filter: wrap('<path d="M3.5 5.5h13M6 10h8M8.5 14.5h3"/>'),
   sort: wrap('<path d="M7 16V4M4 7l3-3 3 3M12 6h5M12 10h3.5M12 14h2"/>'),
-  search: wrap('<circle cx="8.8" cy="8.8" r="5.3"/><path d="m12.8 12.8 4.2 4.2"/>'),
   columns: wrap('<rect x="3" y="3.5" width="14" height="13" rx="2.5"/><path d="M8 3.5v13M13 3.5v13"/>'),
   group: wrap('<rect x="3" y="3.5" width="6" height="5" rx="1.5"/><rect x="11" y="3.5" width="6" height="5" rx="1.5"/><rect x="3" y="11.5" width="6" height="5" rx="1.5"/><rect x="11" y="11.5" width="6" height="5" rx="1.5"/>'),
-  settings: wrap('<circle cx="10" cy="10" r="2.5"/><path d="M10 3.5v2M10 14.5v2M3.5 10h2M14.5 10h2M5.4 5.4l1.4 1.4M13.2 13.2l1.4 1.4M14.6 5.4l-1.4 1.4M6.8 13.2l-1.4 1.4"/>'),
   expand: wrap('<path d="M3.5 7V3.5H7M13 3.5h3.5V7M16.5 13v3.5H13M7 16.5H3.5V13"/>'),
 } as const;
 
