@@ -134,6 +134,17 @@ export function nativeSelection(root: ShadowRoot): Selection | null {
   return window.getSelection();
 }
 
+/** Place a collapsed caret at the start or end of an element's contents. */
+export function placeCaret(element: HTMLElement, at: 'start' | 'end'): void {
+  const selection = nativeSelection(element.getRootNode() as ShadowRoot);
+  if (!selection) return;
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  range.collapse(at === 'start');
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 export function caretRect(
   root: HTMLElement,
   offset: number,

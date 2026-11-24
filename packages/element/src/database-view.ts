@@ -21,7 +21,6 @@ import {
   groupedDatabaseRows,
   safeHref,
   searchDatabaseRows,
-  sortedDatabaseRows,
 } from '@nobita/core';
 import type {
   DatabaseCell,
@@ -38,9 +37,10 @@ import type {
   DatabaseView as DatabaseViewConfig,
   DatabaseViewColumn,
 } from '@nobita/core';
-import { nativeSelection } from './dom.js';
+import { nativeSelection, placeCaret } from './dom.js';
 import { dismissFloating, placeFloating } from './floating.js';
 import { icon } from './icons.js';
+import { parseTsv, tsvCell } from './tsv.js';
 
 export interface DatabaseHost {
   readonly readonly: boolean;
@@ -197,72 +197,6 @@ function titleTextEditable(column: DatabaseColumn | undefined): boolean {
   return Boolean(
     column && ['text', 'number', 'date', 'url'].includes(column.type)
   );
-}
-
-/** Parse spreadsheet-friendly TSV, including quoted tabs/newlines and quotes. */
-function parseTsv(source: string): string[][] {
-  const text = source.replace(/\r\n?/gu, '\n');
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let quoted = false;
-  let fieldStarted = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (quoted) {
-      if (char === '"' && text[index + 1] === '"') {
-        field += '"';
-        fieldStarted = true;
-        index += 1;
-      } else if (char === '"') {
-        quoted = false;
-      } else {
-        field += char;
-        fieldStarted = true;
-      }
-      continue;
-    }
-    if (char === '"' && field === '') {
-      quoted = true;
-      fieldStarted = true;
-    } else if (char === '\t') {
-      row.push(field);
-      field = '';
-      fieldStarted = false;
-    } else if (char === '\n') {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
-      fieldStarted = false;
-    } else {
-      field += char;
-      fieldStarted = true;
-    }
-  }
-  if (fieldStarted || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-  return rows;
-}
-
-function tsvField(value: string): string {
-  if (value === '') return '""';
-  return /[\t\n\r"]/u.test(value)
-    ? `"${value.replace(/"/gu, '""')}"`
-    : value;
-}
-
-function placeCaret(element: HTMLElement, at: 'start' | 'end'): void {
-  const root = element.getRootNode() as ShadowRoot;
-  const selection = nativeSelection(root);
-  if (!selection) return;
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  range.collapse(at === 'start');
-  selection.removeAllRanges();
-  selection.addRange(range);
 }
 
 function selectionOffsets(
@@ -777,7 +711,7 @@ export class DatabaseView {
     fillHandle.addEventListener('pointerdown', event => {
       event.preventDefault();
       event.stopPropagation();
-      this.#beginFillDrag(event);
+      this.#beginFillDrag();
     }, { signal: this.#events.signal });
     this.element.append(fillHandle);
     this.#fillHandle = fillHandle;
@@ -4564,7 +4498,7 @@ export class DatabaseView {
     handle.dataset.visible = 'true';
   }
 
-  #beginFillDrag(event: PointerEvent): void {
+  #beginFillDrag(): void {
     if (this.#readonly) return;
     const active = this.#active;
     if (!active) return;
@@ -4668,7 +4602,7 @@ export class DatabaseView {
         const dataColumn = bounds.columns[column];
         if (!dataColumn) continue;
         cells.push(
-          tsvField(databaseCellText(dataRow.cells[dataColumn.id], dataColumn.type))
+          tsvCell(databaseCellText(dataRow.cells[dataColumn.id], dataColumn.type))
         );
       }
       lines.push(cells.join('\t'));
@@ -4857,7 +4791,7 @@ export class DatabaseView {
       .map(row =>
         columns
           .map(column =>
-            tsvField(databaseCellText(row.cells[column.id], column.type))
+            tsvCell(databaseCellText(row.cells[column.id], column.type))
           )
           .join('\t')
       )

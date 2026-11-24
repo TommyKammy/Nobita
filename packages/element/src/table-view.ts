@@ -18,9 +18,10 @@ import {
   tableCellText,
 } from '@nobita/core';
 import type { TableData } from '@nobita/core';
-import { nativeSelection } from './dom.js';
+import { nativeSelection, placeCaret } from './dom.js';
 import { dismissFloating, placeFloating } from './floating.js';
 import { icon } from './icons.js';
+import { parseTsv, tsvCell } from './tsv.js';
 
 export interface TableHost {
   readonly readonly: boolean;
@@ -41,58 +42,6 @@ const TABLE_COLORS = PALETTE_COLORS.map(color => ({
 
 function cellKey(rowId: string, columnId: string): string {
   return `${rowId}\u0000${columnId}`;
-}
-
-function tsvCell(value: string): string {
-  if (value === '') return '""';
-  return /[\t\n\r"]/u.test(value) ? `"${value.replace(/"/gu, '""')}"` : value;
-}
-
-function parseTsv(source: string): string[][] {
-  const text = source.replace(/\r\n?/gu, '\n');
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let quoted = false;
-  let fieldStarted = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (quoted) {
-      if (char === '"' && text[index + 1] === '"') {
-        field += '"';
-        fieldStarted = true;
-        index += 1;
-      } else if (char === '"') {
-        quoted = false;
-      } else {
-        field += char;
-        fieldStarted = true;
-      }
-      continue;
-    }
-    if (char === '"' && field === '') {
-      quoted = true;
-      fieldStarted = true;
-    } else if (char === '\t') {
-      row.push(field);
-      field = '';
-      fieldStarted = false;
-    } else if (char === '\n') {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
-      fieldStarted = false;
-    } else {
-      field += char;
-      fieldStarted = true;
-    }
-  }
-  if (fieldStarted || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-  return rows;
 }
 
 interface TableAreaBounds {
@@ -129,17 +78,6 @@ function writeCellText(element: HTMLElement, value: string): void {
     if (index > 0) element.append(document.createElement('br'));
     if (line) element.append(document.createTextNode(line));
   });
-}
-
-function placeCaret(element: HTMLElement, at: 'start' | 'end'): void {
-  const root = element.getRootNode() as ShadowRoot;
-  const selection = nativeSelection(root);
-  if (!selection) return;
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  range.collapse(at === 'start');
-  selection.removeAllRanges();
-  selection.addRange(range);
 }
 
 function dots(vertical = false): HTMLElement {
