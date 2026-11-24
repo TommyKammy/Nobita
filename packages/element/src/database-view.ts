@@ -622,16 +622,20 @@ export class DatabaseView {
   #syncBoardValues(): void {
     const view = databaseView(this.#data);
     if (view.type !== 'board') return;
+    const root = this.element.getRootNode() as ShadowRoot;
+    const activeElement = root.activeElement;
     const titleColumn = this.#data.columns[0];
     for (const card of this.element.querySelectorAll<HTMLElement>('.nb-db-card[data-row-id]')) {
       const row = this.#data.rows.find(item => item.id === card.dataset.rowId);
       if (!row) continue;
       const title = card.querySelector<HTMLElement>('.nb-db-card-title');
-      if (title && document.activeElement !== title) {
+      if (title && activeElement !== title) {
         const value = titleColumn
           ? databaseCellDisplay(row.cells[titleColumn.id], titleColumn.type)
           : '';
-        title.textContent = value || (title.contentEditable === 'true' ? '' : 'Untitled');
+        const nextText =
+          value || (title.contentEditable === 'true' ? '' : 'Untitled');
+        if (title.textContent !== nextText) title.textContent = nextText;
       }
       const previous = card.querySelector('.nb-db-card-fields');
       const next = this.#boardFields(row, titleColumn, view);
@@ -1779,12 +1783,12 @@ export class DatabaseView {
     );
     const bounds = this.#rangeBounds();
     const startRowId =
-      cell?.dataset.rowId ??
       bounds?.rows[bounds.startRow]?.id ??
+      cell?.dataset.rowId ??
       this.#active?.rowId;
     const startColumnId =
-      cell?.dataset.columnId ??
       bounds?.columns[bounds.startColumn]?.id ??
+      cell?.dataset.columnId ??
       this.#active?.columnId;
     if (!startRowId || !startColumnId) return;
     event.preventDefault();

@@ -591,16 +591,16 @@ export function groupedDatabaseRows(
 
   const values = new Map<string, DatabaseRow[]>();
   for (const row of rows) {
-    const value = databaseCellDisplay(row.cells[column.id], column.type) || 'No value';
+    const value = databaseCellDisplay(row.cells[column.id], column.type);
     const group = values.get(value) ?? [];
     group.push(row);
     values.set(value, group);
   }
   return [...values.entries()]
-    .sort(([a], [b]) => (a === 'No value' ? 1 : b === 'No value' ? -1 : a.localeCompare(b)))
-    .map(([value, groupRows]) => ({
-      key: value,
-      label: value,
+    .sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
+    .map(([key, groupRows]) => ({
+      key,
+      label: key || 'No value',
       rows: groupRows,
     }));
 }

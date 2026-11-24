@@ -195,6 +195,52 @@ test('initializes checkbox filters to the displayed value', async ({ page }) => 
   await expect(page.locator('.nb-db-count')).toContainText('1 of 3 rows');
 });
 
+test('keeps the caret while editing a board card title', async ({ page }) => {
+  await openFixture(page);
+  await setDatabase(page);
+
+  await page.locator('.nb-db-viewbtn[data-view="board"]').click();
+  const title = page
+    .locator('.nb-db-card', { hasText: 'One' })
+    .locator('.nb-db-card-title');
+  await title.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type('XYZ');
+
+  await expect(title).toHaveText('OneXYZ');
+  const data = await databaseState(page);
+  expect(data.rows[0]?.cells.name?.text).toBe('OneXYZ');
+});
+
+test('pastes into the top-left corner of a selected range', async ({ page }) => {
+  await openFixture(page);
+  await setDatabase(page);
+
+  await page.locator('.nb-db-cell[data-row-id="r2"][data-column-id="name"] .nb-db-text').click();
+  await page
+    .locator('.nb-db-cell[data-row-id="r1"][data-column-id="status"]')
+    .click({ modifiers: ['Shift'] });
+
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', 'A\tB\nC\tD');
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      clipboardData: data,
+    });
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db-cell[data-row-id="r2"][data-column-id="name"]')
+      ?.dispatchEvent(event);
+  });
+
+  const data = await databaseState(page);
+  expect(data.rows[0]?.cells.name?.text).toBe('A');
+  expect(data.rows[0]?.cells.status?.text).toBe('B');
+  expect(data.rows[1]?.cells.name?.text).toBe('C');
+  expect(data.rows[1]?.cells.status?.text).toBe('D');
+});
+
 test('uses the clicked picker cell as the paste destination', async ({ page }) => {
   await openFixture(page);
   await setDatabase(page);

@@ -162,6 +162,23 @@ describe('database model', () => {
     ]);
   });
 
+  it('keeps empty board group keys distinct from the No value label', () => {
+    const name = createDatabaseColumn('Name');
+    const data: DatabaseData = {
+      variant: 'database',
+      columns: [name],
+      rows: [
+        createDatabaseRow({ [name.id]: { text: 'No value' } }),
+        createDatabaseRow({}),
+      ],
+      view: { type: 'board', groupBy: name.id, filters: [] },
+    };
+    const groups = groupedDatabaseRows(data);
+    expect(groups.map(group => group.key)).toEqual(['No value', '']);
+    expect(groups.map(group => group.label)).toEqual(['No value', 'No value']);
+    expect(groups.map(group => group.rows.length)).toEqual([1, 1]);
+  });
+
   it('preserves board groups beyond fifty distinct values', () => {
     const name = createDatabaseColumn('Name');
     const data: DatabaseData = {
