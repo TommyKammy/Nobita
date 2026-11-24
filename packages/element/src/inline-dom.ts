@@ -1,4 +1,4 @@
-import { normalizeRuns } from '@nobita/core';
+import { isHighlightColor, normalizeRuns } from '@nobita/core';
 import type { InlineMark, InlineRun } from '@nobita/core';
 
 const MARK_TOKENS = ['bold', 'italic', 'underline', 'strike', 'code'] as const;
@@ -15,6 +15,12 @@ function marksFromElement(element: Element, inherited: InlineMark | undefined): 
   }
   const href = element.getAttribute('data-link');
   if (href) next = { ...(next ?? {}), link: href };
+  const highlight =
+    element.getAttribute('data-highlight') ??
+    element.getAttribute('data-nb-highlight');
+  if (isHighlightColor(highlight)) {
+    next = { ...(next ?? {}), highlight };
+  }
   return next;
 }
 
@@ -50,7 +56,8 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
       (bufferMarks !== undefined &&
         marks !== undefined &&
         MARK_TOKENS.every(key => Boolean(bufferMarks?.[key]) === Boolean(marks[key])) &&
-        bufferMarks.link === marks.link);
+        bufferMarks.link === marks.link &&
+        bufferMarks.highlight === marks.highlight);
     if (!same) {
       flush();
       bufferMarks = marks;

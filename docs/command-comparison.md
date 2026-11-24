@@ -2,10 +2,12 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **42.2 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **44.5 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
-> `Mod-Backspace` are now implemented. Statuses below reflect that pass.
+> `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
+> Down, standard block Copy and the eight-color highlight palette. Statuses
+> below reflect those passes.
 
 Scope: the **document editor** and its Table / Database surfaces. AFFiNE's
 edgeless canvas, cloud account, sync, AI and admin features are listed only as
@@ -38,11 +40,10 @@ typed data view.
 
 Against AFFiNE, the remaining gaps are not "missing block types" but
 **convenience commands around selection, formatting and data-view querying**.
-The P0 pass has already closed alignment, dates, Heading 4–6 and
-`Mod-Backspace`; the current gaps are:
+The P0/P1 passes have already closed alignment, dates, Heading 4–6,
+`Mod-Backspace`, move/copy and highlight colors; the current gaps are:
 
-1. **Highlight colors** (and inline equation) are absent. Highlight needs one
-   small mark extension; alignment is already done.
+1. **Inline equation** is absent and needs a math renderer.
 2. **Block selection** (Escape, Shift+Arrow, Cmd+A stages) is absent. Nobita can
    select text across blocks, but non-text blocks (image, database, divider)
    cannot be selected as blocks.
@@ -116,7 +117,7 @@ in Nobita's toolbar or block menu.
 | Inline code | `Mod-E` | ✅ | — |
 | Link | `Mod-K` | ✅ | Link popover, URL normalization/sanitization |
 | Alignment | `Mod-Shift-L/E/R` | ✅ | Toolbar, slash menu, hotkeys |
-| Highlight colors | Toolbar dropdown | ❌ | Needs a mark/color extension |
+| Highlight colors | Toolbar dropdown | ✅ | 8 background colors; toggles off; HTML round-trip; Markdown drops color |
 | Inline equation | Toolbar | ❌ | Needs a math renderer |
 | Auto-pair brackets | Type `(`, `[`, `{`, quotes | ❌ | Does not insert closing pair |
 | Backtick wraps selection in code | Select text + `` ` `` | ❌ | Inline code shortcut supports markdown only |
@@ -156,7 +157,7 @@ in Nobita's toolbar or block menu.
 | Alignment | ✅ | Selection toolbar, slash menu, hotkeys |
 | Bold / italic / underline / strike / code / link | ✅ | Selection toolbar |
 | Inline equation | ❌ | — |
-| Highlight colors | ❌ | — |
+| Highlight colors | ✅ | Selection toolbar palette; 8 colors |
 | Create Table from selected blocks | ❌ | Convert selection to database rows |
 | Create Linked Doc | ❌ | Page-level feature |
 | Comment | ❌ | No comment model |
@@ -292,7 +293,7 @@ the editor core just for parity:
 
 ## 9. Priorities
 
-### P0 — implemented in this pass
+### P0/P1 — implemented
 
 - ✅ **Alignment** (`Mod-Shift-L/E/R`, toolbar group, `/` entries).
 - ✅ **Date slash commands** (`/today`, `/tomorrow`, `/yesterday`, `/now`).
@@ -303,6 +304,8 @@ the editor core just for parity:
   command.
 - ✅ **Standard block Copy** in `/` and the block menu, using the same
   text/HTML/private-JSON serialization as selection copy.
+- ✅ **Highlight colors** (P1): eight-color background palette in the selection
+  toolbar, HTML `<mark>` round-trip, Markdown degradation.
 
 ### P0 — remaining small wins
 
@@ -310,30 +313,26 @@ the editor core just for parity:
    - `Mod-Alt-D`, `Mod-Shift-D`; add `Mod-Shift-0–6`, `8`, `9` aliases.
    - Est. <0.5 KB.
 
-### P1 — convenient, moderate work
+### P1 — remaining
 
-1. **Highlight colors.**
-   - Add `highlight` (or `background`) to `InlineMark`; toolbar dropdown;
-     HTML span style; Markdown degrades to plain text.
-   - Est. 2–3 KB.
-2. **Block selection model.**
+1. **Block selection model.**
    - Selected block ids independent of text range.
    - Escape, gutter click, Shift+Arrow, Cmd+A stages, Enter to insert after,
      Delete selected, batch duplicate/copy.
    - Makes image/database/divider selectable and unlocks table-from-selection.
    - Est. 4–6 KB plus careful tests.
-3. **Database search and filter bar.**
+2. **Database search and filter bar.**
    - Search over cell text; filter by column/type; derived rows, no schema break.
    - Est. 3–5 KB.
-4. **Database row/area selection + keyboard delete + `Mod-A`.**
+3. **Database row/area selection + keyboard delete + `Mod-A`.**
    - Builds on cell navigation; no new data model.
    - Est. 2–3 KB.
-5. **Multi-select property + column move/hide/duplicate.**
+4. **Multi-select property + column move/hide/duplicate.**
    - Est. 2–3 KB.
-6. **Create Table from selected blocks** (toolbar/block selection).
+5. **Create Table from selected blocks** (toolbar/block selection).
    - Convert blocks into database rows; requires block selection first.
    - Est. 2–3 KB.
-7. **Bracket auto-pair and backtick-wrap-selection.**
+6. **Bracket auto-pair and backtick-wrap-selection.**
    - Text-only, small but edge-case heavy.
    - Est. 1–2 KB.
 
@@ -358,6 +357,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 42.2 KB gzip. The implemented P0 items added about
-1.7 KB gzip; the remaining divider/alias item should stay under ~0.5 KB. That
-keeps the bundle in the low-40s while closing the most visible interaction gaps.
+The current editor is 44.5 KB gzip. The implemented P0/P1 items added about
+4.0 KB gzip; the remaining divider/alias item should stay under ~0.5 KB. That
+keeps the bundle in the mid-40s while closing the most visible interaction gaps.

@@ -37,6 +37,13 @@ Invariants:
 - Untouched branches keep **reference identity** across updates. This is what
   makes rendering and history cheap.
 
+Inline marks are five boolean flags (`bold`, `italic`, `underline`, `strike`,
+`code`) plus two value marks: `link` (a URL string) and `highlight` (one of
+eight named colors). A highlight is stored as a palette token, not a CSS string,
+so documents stay small and HTML import can whitelist values. `parseDoc` drops
+unknown colors. The editor renders the token as `data-highlight`, HTML export
+uses `<mark data-nb-highlight>`, and Markdown intentionally drops the color.
+
 `core/doc.ts` implements structural updates by recursively copying only the path
 to the changed block. `core/store.ts` builds transactions and history on top.
 
@@ -206,7 +213,7 @@ consistent.
 Copy writes three representations:
 
 - `text/plain` — readable text with list markers.
-- `text/html` — semantic HTML with inline marks.
+- `text/html` — semantic HTML with inline marks, including `<mark data-nb-highlight>`.
 - `application/x-nobita+json` — exact blocks, including nesting and props.
 
 Selection copy, the block menu Copy and `/copy` share this serializer. The

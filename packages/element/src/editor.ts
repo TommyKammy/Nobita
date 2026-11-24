@@ -32,6 +32,7 @@ import {
   safeHref,
   setBlockAlign,
   setBlockType,
+  setHighlightInRange,
   setImageProps,
   sliceRuns,
   splitBlock,
@@ -45,6 +46,7 @@ import {
   type Doc,
   type EditorSelection,
   type HeadingLevel,
+  type HighlightColor,
   type InlineMark,
   type Point,
   type TextAlign,
@@ -252,7 +254,8 @@ export class NobitaEditor implements BlockHost {
       this.#overlay,
       key => this.#toggleMark(key),
       () => this.#toggleLink(),
-      align => this.#applyAlignment(align)
+      align => this.#applyAlignment(align),
+      color => this.#applyHighlight(color)
     );
     this.#linkPopover = new LinkPopover(this.#overlay);
 
@@ -1865,10 +1868,34 @@ export class NobitaEditor implements BlockHost {
       this.#toolbar.hide();
       return;
     }
-    const state =
-      start.blockId === end.blockId
-        ? markStateInRange(block.text, start.offset, end.offset)
-        : { ...markStateInRange(block.text, start.offset, runsLength(block.text)) };
+    let state: InlineMark;
+    if (start.blockId === end.blockId) {
+      state = markStateInRange(block.text, start.offset, end.offset);
+    } else {
+      state = {
+        ...markStateInRange(block.text, start.offset, runsLength(block.text)),
+      };
+      const flat = flattenBlocks(this.store.doc.blocks);
+      const startIndex = flat.findIndex(item => item.id === start.blockId);
+      const endIndex = flat.findIndex(item => item.id === end.blockId);
+      let highlight: HighlightColor | undefined;
+      let first = true;
+      for (let index = startIndex; index <= endIndex; index += 1) {
+        const current = flat[index];
+        if (!current) continue;
+        const from = index === startIndex ? start.offset : 0;
+        const to = index === endIndex ? end.offset : runsLength(current.text);
+        const part = markStateInRange(current.text, from, to);
+        if (first) {
+          highlight = part.highlight;
+          first = false;
+        } else if (highlight !== part.highlight) {
+          highlight = undefined;
+        }
+      }
+      if (highlight) state.highlight = highlight;
+      else delete state.highlight;
+    }
     this.#toolbar.show(rect, state, block.props.align ?? 'left');
   }
 
@@ -1908,6 +1935,52 @@ export class NobitaEditor implements BlockHost {
     this.#focusBlock(blockId, offset);
   }
 
+  #applyHighlight(highlight: HighlightColor | null): void {
+    if (this.#readonly) return;
+    const changed = this.#transformSelection((runs, from, to) =>
+      setHighlightInRange(runs, from, to, highlight)
+    );
+    if (changed) this.#updateToolbar();
+  }
+
+  #transformSelection(
+    transform: (runs: Block['text'], from: number, to: number) => Block['text']
+  ): boolean {
+    const selection = this.#currentSelection() ?? this.#lastSelection;
+    if (!selection || this.#isCollapsed(selection)) return false;
+    const { start, end } = this.#ordered(selection);
+    let doc = this.store.doc;
+    if (start.blockId === end.blockId) {
+      const block = findBlock(doc.blocks, start.blockId);
+      if (!block) return false;
+      doc = replaceBlockText(
+        doc,
+        start.blockId,
+        transform(block.text, start.offset, end.offset)
+      );
+    } else {
+      const flat = flattenBlocks(doc.blocks);
+      const startIndex = flat.findIndex(block => block.id === start.blockId);
+      const endIndex = flat.findIndex(block => block.id === end.blockId);
+      if (startIndex < 0 || endIndex < 0) return false;
+      for (let index = startIndex; index <= endIndex; index += 1) {
+        const block = flat[index];
+        if (!block) continue;
+        const current = findBlock(doc.blocks, block.id);
+        if (!current) continue;
+        const from = index === startIndex ? start.offset : 0;
+        const to = index === endIndex ? end.offset : runsLength(current.text);
+        doc = replaceBlockText(
+          doc,
+          block.id,
+          transform(current.text, from, to)
+        );
+      }
+    }
+    this.#commit(doc, selection);
+    return true;
+  }
+
   #toggleMark(key: ToolbarMark): void {
     if (this.#readonly) return;
     const selection = this.#currentSelection() ?? this.#lastSelection;
@@ -1925,36 +1998,10 @@ export class NobitaEditor implements BlockHost {
       this.#toolbar.hide();
       return;
     }
-    const { start, end } = this.#ordered(selection);
-    let doc = this.store.doc;
-    if (start.blockId === end.blockId) {
-      const block = findBlock(doc.blocks, start.blockId);
-      if (!block) return;
-      doc = replaceBlockText(
-        doc,
-        start.blockId,
-        toggleMarkInRange(block.text, start.offset, end.offset, key)
-      );
-    } else {
-      const flat = flattenBlocks(doc.blocks);
-      const startIndex = flat.findIndex(block => block.id === start.blockId);
-      const endIndex = flat.findIndex(block => block.id === end.blockId);
-      for (let index = startIndex; index <= endIndex; index += 1) {
-        const block = flat[index];
-        if (!block) continue;
-        const from = index === startIndex ? start.offset : 0;
-        const to = index === endIndex ? end.offset : runsLength(block.text);
-        const current = findBlock(doc.blocks, block.id);
-        if (!current) continue;
-        doc = replaceBlockText(
-          doc,
-          block.id,
-          toggleMarkInRange(current.text, from, to, key)
-        );
-      }
-    }
-    this.#commit(doc, selection);
-    this.#updateToolbar();
+    const changed = this.#transformSelection((runs, from, to) =>
+      toggleMarkInRange(runs, from, to, key)
+    );
+    if (changed) this.#updateToolbar();
   }
 
   #toggleLink(): void {

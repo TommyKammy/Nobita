@@ -86,6 +86,7 @@ export const icon = {
   alignCenter: wrap('<path d="M3 4.5h14M5.5 8h9M3 11.5h14M6 15h8"/>'),
   alignRight: wrap('<path d="M3 4.5h14M8 8h9M3 11.5h14M9 15h8"/>'),
   clock: wrap('<circle cx="10" cy="10" r="7"/><path d="M10 6v4.3l2.8 1.7"/>'),
+  highlight: wrap('<path d="m5 14.5 2.4-6.3a1.4 1.4 0 0 1 1.3-.9h2.6a1.4 1.4 0 0 1 1.3.9l2.4 6.3"/><path d="M3.5 17.5h13"/><path d="M8 10.8h4"/>'),
 } as const;
 
 export type IconName = keyof typeof icon;

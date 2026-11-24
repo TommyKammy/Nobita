@@ -5,11 +5,18 @@ import {
   createBlock,
   createDatabaseColumn,
   createDatabaseRow,
+  isHighlightColor,
   markdownToBlocks,
   normalizeRuns,
   parseDoc,
 } from '@nobita/core';
-import type { Block, DatabaseData, InlineMark, InlineRun } from '@nobita/core';
+import type {
+  Block,
+  DatabaseData,
+  HighlightColor,
+  InlineMark,
+  InlineRun,
+} from '@nobita/core';
 
 const BLOCK_TAGS = new Set([
   'ADDRESS',
@@ -48,8 +55,22 @@ function tag(element: Element): string {
   return element.tagName.toUpperCase();
 }
 
+function highlightForElement(element: Element): HighlightColor | undefined {
+  const explicit =
+    element.getAttribute('data-nb-highlight') ??
+    element.getAttribute('data-highlight');
+  if (isHighlightColor(explicit)) return explicit;
+  if (tag(element) === 'MARK') {
+    const color = element.getAttribute('data-color');
+    return isHighlightColor(color) ? color : 'yellow';
+  }
+  return undefined;
+}
+
 function marksForElement(element: Element, inherited: InlineMark | undefined): InlineMark | undefined {
   const next: InlineMark = { ...(inherited ?? {}) };
+  const highlight = highlightForElement(element);
+  if (highlight) next.highlight = highlight;
   switch (tag(element)) {
     case 'STRONG':
     case 'B':

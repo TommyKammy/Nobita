@@ -1,4 +1,11 @@
-import type { InlineMark, InlineRun, MarkKey } from './types.js';
+import { isHighlightColor } from './types.js';
+import type {
+  BooleanMarkKey,
+  HighlightColor,
+  InlineMark,
+  InlineRun,
+  MarkKey,
+} from './types.js';
 import { safeHref } from './url.js';
 
 export const MARK_KEYS: readonly MarkKey[] = [
@@ -7,6 +14,7 @@ export const MARK_KEYS: readonly MarkKey[] = [
   'underline',
   'strike',
   'code',
+  'highlight',
   'link',
 ];
 
@@ -16,8 +24,20 @@ const KEY_ORDER: readonly MarkKey[] = [
   'underline',
   'strike',
   'code',
+  'highlight',
   'link',
 ];
+
+const HIGHLIGHT_HTML: Record<HighlightColor, string> = {
+  red: '#fee2e2',
+  orange: '#ffedd5',
+  yellow: '#fef3c7',
+  green: '#dcfce7',
+  teal: '#ccfbf1',
+  blue: '#dbeafe',
+  purple: '#ede9fe',
+  grey: '#eeeeec',
+};
 
 /** Drop falsy marks and unknown keys, returning `undefined` for "plain". */
 export function normalizeMark(mark: InlineMark | undefined): InlineMark | undefined {
@@ -28,6 +48,7 @@ export function normalizeMark(mark: InlineMark | undefined): InlineMark | undefi
   if (mark.underline === true) out.underline = true;
   if (mark.strike === true) out.strike = true;
   if (mark.code === true) out.code = true;
+  if (isHighlightColor(mark.highlight)) out.highlight = mark.highlight;
   if (typeof mark.link === 'string' && mark.link.length > 0) out.link = mark.link;
   return Object.keys(out).length === 0 ? undefined : out;
 }
@@ -155,6 +176,7 @@ export interface MarkPatch {
   underline?: boolean;
   strike?: boolean;
   code?: boolean;
+  highlight?: HighlightColor | null;
   link?: string | null;
 }
 
@@ -179,6 +201,10 @@ function patchedMark(mark: InlineMark | undefined, patch: MarkPatch): InlineMark
   if (patch.code !== undefined) {
     if (patch.code) next.code = true;
     else delete next.code;
+  }
+  if (patch.highlight !== undefined) {
+    if (patch.highlight) next.highlight = patch.highlight;
+    else delete next.highlight;
   }
   if (patch.link !== undefined) {
     if (patch.link) next.link = patch.link;
@@ -238,6 +264,8 @@ export function markStateInRange(
     for (const key of MARK_KEYS) {
       if (key === 'link') {
         if (state.link !== marks.link) delete state.link;
+      } else if (key === 'highlight') {
+        if (state.highlight !== marks.highlight) delete state.highlight;
       } else if (marks[key] !== true) {
         delete state[key];
       }
@@ -250,10 +278,19 @@ export function toggleMarkInRange(
   runs: readonly InlineRun[],
   start: number,
   end: number,
-  key: Exclude<MarkKey, 'link'>
+  key: BooleanMarkKey
 ): InlineRun[] {
   const state = markStateInRange(runs, start, end);
   return applyMarkPatch(runs, start, end, { [key]: state[key] !== true });
+}
+
+export function setHighlightInRange(
+  runs: readonly InlineRun[],
+  start: number,
+  end: number,
+  highlight: HighlightColor | null
+): InlineRun[] {
+  return applyMarkPatch(runs, start, end, { highlight });
 }
 
 export function setLinkInRange(
@@ -279,6 +316,9 @@ export function runsToHtml(runs: readonly InlineRun[], escape: (text: string) =>
     if (marks.italic) inner = `<em>${inner}</em>`;
     if (marks.underline) inner = `<u>${inner}</u>`;
     if (marks.strike) inner = `<s>${inner}</s>`;
+    if (marks.highlight) {
+      inner = `<mark data-nb-highlight="${marks.highlight}" style="background-color:var(--nb-hl-${marks.highlight}, ${HIGHLIGHT_HTML[marks.highlight]})">${inner}</mark>`;
+    }
     if (marks.link) {
       const href = safeHref(marks.link);
       if (href) {

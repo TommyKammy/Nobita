@@ -57,6 +57,26 @@ export interface DatabaseData {
  * Inline character formatting. Missing keys mean "off", which keeps serialized
  * documents small and diffs stable.
  */
+export const HIGHLIGHT_COLORS = [
+  'red',
+  'orange',
+  'yellow',
+  'green',
+  'teal',
+  'blue',
+  'purple',
+  'grey',
+] as const;
+
+export type HighlightColor = (typeof HIGHLIGHT_COLORS)[number];
+
+export function isHighlightColor(value: unknown): value is HighlightColor {
+  return (
+    typeof value === 'string' &&
+    (HIGHLIGHT_COLORS as readonly string[]).includes(value)
+  );
+}
+
 export interface InlineMark {
   bold?: true;
   italic?: true;
@@ -64,9 +84,13 @@ export interface InlineMark {
   strike?: true;
   code?: true;
   link?: string;
+  highlight?: HighlightColor;
 }
 
 export type MarkKey = keyof InlineMark;
+
+/** Marks that are simple on/off toggles. */
+export type BooleanMarkKey = 'bold' | 'italic' | 'underline' | 'strike' | 'code';
 
 /** A run of text sharing one set of marks. */
 export interface InlineRun {

@@ -16,6 +16,8 @@ export type {
   DocChange,
   EditorSelection,
   HeadingLevel,
+  HighlightColor,
+  BooleanMarkKey,
   InlineContent,
   InlineMark,
   InlineRun,
@@ -23,7 +25,13 @@ export type {
   Point,
   TextAlign,
 } from './types.js';
-export { DOC_VERSION, isListBlock, isTextualBlock } from './types.js';
+export {
+  DOC_VERSION,
+  HIGHLIGHT_COLORS,
+  isHighlightColor,
+  isListBlock,
+  isTextualBlock,
+} from './types.js';
 
 export {
   DATABASE_COLUMN_TYPES,
@@ -103,6 +111,7 @@ export {
   runsFromText,
   runsLength,
   runsToHtml,
+  setHighlightInRange,
   setLinkInRange,
   sliceRuns,
   toggleMarkInRange,

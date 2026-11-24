@@ -251,6 +251,7 @@ export class BlockView {
             span.title = safe;
           }
         }
+        if (marks.highlight) span.dataset.highlight = marks.highlight;
         if (classes.length > 0) span.className = classes.join(' ');
         if (tokens.length > 0) span.dataset.mark = tokens.join(' ');
       }
