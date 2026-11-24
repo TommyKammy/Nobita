@@ -294,3 +294,25 @@ test('filters mention candidates after an async provider resolves', async ({ pag
   const runs = blockById(await getDoc(page), 'b1')?.runs ?? [];
   expect(runs.some(run => run.marks?.mention)).toBe(true);
 });
+
+test('closes the mention picker when the trigger is deleted', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, textDoc(''));
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        setMentionProvider(provider: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    editor?.setMentionProvider({
+      search: () => [{ id: 'u1', label: 'Ada' }],
+    });
+    editor?.focus('b1', 0);
+  });
+  await page.keyboard.type('@');
+  await expect(page.locator('.nb-menu')).toBeVisible();
+  await page.keyboard.press('Backspace');
+  await expect(page.locator('.nb-menu')).toHaveCount(0);
+  expect(blockById(await getDoc(page), 'b1')?.text).toBe('');
+});

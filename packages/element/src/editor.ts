@@ -201,6 +201,7 @@ export class NobitaEditor implements BlockHost {
   #slash: SlashState | null = null;
   #mention: MentionState | null = null;
   #mentionQueryToken = 0;
+  #mentionSyncQueued = false;
   #drag: DragState | null = null;
   #savedSelection: EditorSelection | null = null;
   #destroyed = false;
@@ -1582,6 +1583,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   #deleteSelection(): void {
+    this.#scheduleMentionSync();
     const selection = this.#currentSelection();
     if (!selection || this.#isCollapsed(selection)) return;
     const { doc, caret } = this.#applyDeletion(this.store.doc, selection);
@@ -1642,6 +1644,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   #onBackspace(blockId: string): void {
+    this.#scheduleMentionSync();
     const selection = this.#currentSelection();
     if (selection && !this.#isCollapsed(selection)) {
       this.#deleteSelection();
@@ -1687,6 +1690,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   #onDelete(blockId: string): void {
+    this.#scheduleMentionSync();
     const selection = this.#currentSelection();
     if (selection && !this.#isCollapsed(selection)) {
       this.#deleteSelection();
@@ -2274,6 +2278,15 @@ export class NobitaEditor implements BlockHost {
     });
     // The query may have advanced while the initial search was in flight.
     if (mention.query.length > 0) this.#syncMentionMenu();
+  }
+
+  #scheduleMentionSync(): void {
+    if (!this.#mention || this.#mentionSyncQueued) return;
+    this.#mentionSyncQueued = true;
+    queueMicrotask(() => {
+      this.#mentionSyncQueued = false;
+      if (this.#mention) this.#syncMentionMenu();
+    });
   }
 
   #syncMentionMenu(): void {
