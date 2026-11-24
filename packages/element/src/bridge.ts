@@ -7,6 +7,7 @@ export interface BlockHost {
   registerView(view: BlockView): void;
   unregisterView(blockId: string): void;
   focusBlock(blockId: string, offset?: number): void;
+  setFocusedBlock(blockId: string): void;
   toggleTodo(blockId: string): void;
   setImage(blockId: string, patch: { src?: string; alt?: string; caption?: string }): void;
   setCodeLanguage(blockId: string, language: string): void;

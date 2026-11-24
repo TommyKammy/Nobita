@@ -73,7 +73,7 @@ function parseProps(value: unknown): BlockProps {
   if (typeof value.caption === 'string') props.caption = value.caption;
   if (typeof value.collapsed === 'boolean') props.collapsed = value.collapsed;
   if (typeof value.pageId === 'string' && value.pageId.length > 0) {
-    props.pageId = value.pageId.slice(0, 200);
+    props.pageId = value.pageId;
   }
   if (typeof value.pageTitle === 'string' && value.pageTitle.length > 0) {
     props.pageTitle = value.pageTitle.slice(0, 200);
@@ -257,7 +257,7 @@ export function blocksToHtml(blocks: readonly Block[]): string {
             pageId
           )}" data-page-title="${escapeHtml(pageTitle)}" href="#page-${encodeURIComponent(
             pageId
-          )}">${icon}${escapeHtml(pageTitle)}</a>`
+          )}">${icon}${escapeHtml(pageTitle)}</a>${children}`
         );
         break;
       }

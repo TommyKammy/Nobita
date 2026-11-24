@@ -90,11 +90,19 @@ test('opens page references and refreshes resolved metadata', async ({ page }) =
         event as CustomEvent<{ pageId: string }>
       ).detail.pageId;
     });
-    editor.resolvePage = pageId => ({ id: pageId, title: 'Live roadmap', icon: '🚀' });
-    editor.refreshPageLinks();
+    host.resolvePage = pageId => ({ id: pageId, title: 'Live roadmap', icon: '🚀' });
   });
   await expect(page.locator('.nb-page-label')).toHaveText('Live roadmap');
   await expect(page.locator('.nb-page-icon')).toHaveText('🚀');
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        resolvePage?: (pageId: string) => { id: string; title: string } | null;
+      };
+    }).__editor;
+    if (editor) editor.resolvePage = pageId => ({ id: pageId, title: 'Renamed roadmap' });
+  });
+  await expect(page.locator('.nb-page-label')).toHaveText('Renamed roadmap');
 
   await page.locator('.nb-page-link').click();
   expect(
@@ -156,4 +164,37 @@ test('opens page references in readonly mode and handles missing pages', async (
   expect(
     await page.evaluate(() => (window as unknown as { __openedPage: string }).__openedPage)
   ).toBe('p1');
+});
+
+
+test('inserts after a focused page card without an explicit anchor', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'page-focus',
+    title: '',
+    blocks: [
+      {
+        id: 'page',
+        type: 'page',
+        text: [],
+        props: { pageId: 'p1', pageTitle: 'Roadmap' },
+        children: [],
+      },
+      { id: 'after', type: 'paragraph', text: [{ text: 'After' }], props: {}, children: [] },
+    ],
+  });
+  const blocks = await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        focus(blockId: string, offset?: number): void;
+        insertPageLink(page: { id: string; title: string }): string | null;
+      };
+    }).__editor;
+    editor?.focus('after', 0);
+    editor?.focus('page', 0);
+    editor?.insertPageLink({ id: 'p2', title: 'Second page' });
+    return document.querySelector('nobita-editor')?.doc?.blocks.map(block => block.id);
+  });
+  expect(blocks).toEqual(['page', expect.any(String), 'after']);
 });

@@ -456,6 +456,7 @@ export class NobitaEditor implements BlockHost {
     this.#options = handler
       ? { ...this.#options, resolvePage: handler }
       : (({ resolvePage: _resolvePage, ...rest }) => rest)(this.#options);
+    this.refreshPageLinks();
   }
 
   setDoc(doc: Doc | string, options: { history?: boolean } = {}): void {
@@ -1168,6 +1169,13 @@ export class NobitaEditor implements BlockHost {
     body.addEventListener(
       'focusin',
       event => {
+        const target = event.target instanceof Node ? event.target : null;
+        const pageLink = target ? closestElement(target, '.nb-page-link') : null;
+        if (pageLink) {
+          const pageBlock = closestElement(pageLink, '.nb-block');
+          if (pageBlock?.dataset.blockId) this.setFocusedBlock(pageBlock.dataset.blockId);
+          return;
+        }
         if (this.#isNestedField(event.target)) return;
         const element = closestElement(event.target as Node, '.nb-block');
         const blockId = element?.dataset.blockId;
@@ -1434,6 +1442,7 @@ export class NobitaEditor implements BlockHost {
       return;
     }
     if (block.type === 'page') {
+      this.#focusedBlockId = blockId;
       view.focusPageLink();
       return;
     }

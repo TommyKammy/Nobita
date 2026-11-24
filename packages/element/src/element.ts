@@ -166,6 +166,7 @@ export class NobitaEditorElement extends Base {
 
   set resolvePage(value: ((pageId: string) => PageInfo | null) | undefined) {
     this.#resolvePage = value;
+    this.#editor?.refreshPageLinks();
   }
 
   get value(): string {

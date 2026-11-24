@@ -374,7 +374,9 @@ export class BlockView {
 
   #openPage(): void {
     const pageId = this.block.props.pageId;
-    if (pageId) this.#host.openPage(pageId);
+    if (!pageId) return;
+    this.#host.setFocusedBlock(this.id);
+    this.#host.openPage(pageId);
   }
 
   #syncPageLink(block: Block): void {

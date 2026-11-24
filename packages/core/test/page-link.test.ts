@@ -29,6 +29,38 @@ describe('page link block', () => {
     expect(blockSearchText(doc.blocks[0]!)).toBe('Roadmap');
   });
 
+  it('preserves long host page ids through parsing', () => {
+    const id = 'p'.repeat(300);
+    const doc = parseDoc({
+      version: 1,
+      id: 'long-id',
+      title: '',
+      blocks: [
+        {
+          id: 'page',
+          type: 'page',
+          text: [],
+          props: { pageId: id, pageTitle: 'Long' },
+          children: [],
+        },
+      ],
+    });
+    expect(doc.blocks[0]?.props.pageId).toBe(id);
+  });
+
+  it('keeps page block children in HTML exports', () => {
+    const doc = createDoc({
+      blocks: [
+        createBlock('page', {
+          id: 'page',
+          props: { pageId: 'p1', pageTitle: 'Roadmap' },
+          children: [createBlock('paragraph', { id: 'child', text: 'Child note' })],
+        }),
+      ],
+    });
+    expect(blocksToHtml(doc.blocks)).toContain('Child note');
+  });
+
   it('exports the page id to HTML and Markdown', () => {
     const doc = createDoc({ blocks: [pageBlock()] });
     const html = blocksToHtml(doc.blocks);
