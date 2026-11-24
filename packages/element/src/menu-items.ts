@@ -216,14 +216,11 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
     {
       id: 'table',
       label: 'Table',
-      description: 'Simple rows and columns',
+      description: 'Simple editable table',
       icon: icon.table,
       group: 'Data',
       keywords: ['grid', 'spreadsheet', 'sheet', 'rows'],
-      action: () =>
-        context.convert('database', {
-          database: createDatabaseData({ variant: 'table' }),
-        }),
+      action: () => context.convert('table'),
     },
     {
       id: 'database',

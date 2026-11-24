@@ -3,11 +3,13 @@ import {
   createDatabaseColumn,
   createDatabaseData,
   createDatabaseRow,
+  databaseStatValue,
   databaseView,
   duplicateDatabaseData,
   filteredDatabaseRows,
   groupedDatabaseRows,
   normalizeDatabaseData,
+  searchDatabaseRows,
   sortedDatabaseRows,
 } from '../src/database.js';
 import { createBlock, createDoc, duplicateBlockTree } from '../src/doc.js';
@@ -230,9 +232,12 @@ describe('database serialization', () => {
     const parsed = markdownToBlocks(markdown);
     expect(parsed.blocks).toHaveLength(1);
     const block = parsed.blocks[0]!;
-    expect(block.type).toBe('database');
-    expect(block.props.database?.columns.map(column => column.name)).toEqual(['Task', 'Owner']);
-    expect(block.props.database?.rows).toHaveLength(2);
+    expect(block.type).toBe('table');
+    const table = block.props.table!;
+    expect(table.columns).toHaveLength(2);
+    expect(table.rows).toHaveLength(3);
+    expect(table.rows[1]?.cells[table.columns[0]!.id]?.text).toBe('Ship');
+    expect(table.rows[1]?.cells[table.columns[1]!.id]?.text).toBe('Ada');
     const output = blocksToMarkdown(createDoc({ blocks: [block] }), { title: false });
     expect(output).toContain('| Task | Owner |');
     expect(output).toContain('| Ship | Ada |');
@@ -298,5 +303,219 @@ describe('database serialization', () => {
       ],
     });
     expect(doc.blocks[0]?.props.database?.columns[0]?.type).toBe('text');
+  });
+});
+
+
+describe('database P1 queries', () => {
+  const name = createDatabaseColumn('Name');
+  const score = createDatabaseColumn('Score', 'number');
+  const due = createDatabaseColumn('Due', 'date');
+  const status = createDatabaseColumn('Status', 'select', ['Todo', 'Done']);
+  const tags = createDatabaseColumn('Tags', 'multi-select', ['A', 'B']);
+  const done = createDatabaseColumn('Done', 'checkbox');
+  const data: DatabaseData = {
+    variant: 'database',
+    columns: [name, score, due, status, tags, done],
+    rows: [
+      createDatabaseRow({
+        [name.id]: { text: 'Alpha' },
+        [score.id]: { text: '10' },
+        [due.id]: { text: '2026-01-01' },
+        [status.id]: { text: 'Todo' },
+        [tags.id]: { values: ['A', 'B'] },
+        [done.id]: { checked: true },
+      }),
+      createDatabaseRow({
+        [name.id]: { text: 'Beta' },
+        [score.id]: { text: '5' },
+        [due.id]: { text: '2026-02-01' },
+        [status.id]: { text: 'Done' },
+        [tags.id]: { values: ['B'] },
+        [done.id]: { checked: false },
+      }),
+      createDatabaseRow({
+        [name.id]: { text: 'Gamma' },
+        [score.id]: { text: '20' },
+        [due.id]: { text: '2026-03-01' },
+        [status.id]: { text: 'Todo' },
+        [tags.id]: { values: ['A'] },
+        [done.id]: { checked: false },
+      }),
+    ],
+    views: [
+      {
+        id: 'v1',
+        name: 'Main',
+        type: 'table',
+        filters: [],
+      },
+    ],
+    activeViewId: 'v1',
+  };
+
+  const names = (rows: readonly { cells: Record<string, { text?: string }> }[]) =>
+    rows.map(row => row.cells[name.id]?.text);
+
+  it('applies multiple sort keys', () => {
+    data.views = [
+      {
+        id: 'v1',
+        name: 'Main',
+        type: 'table',
+        filters: [],
+        sorts: [
+          { columnId: status.id, direction: 'asc' },
+          { columnId: score.id, direction: 'desc' },
+        ],
+      },
+    ];
+    expect(names(sortedDatabaseRows(data))).toEqual(['Beta', 'Gamma', 'Alpha']);
+  });
+
+  it('filters by type-aware operators and or mode', () => {
+    data.views = [
+      {
+        id: 'v1',
+        name: 'Main',
+        type: 'table',
+        filters: [
+          { columnId: score.id, operator: 'greaterThan', value: '8' },
+          { columnId: status.id, operator: 'is', value: 'Done' },
+        ],
+        filterMode: 'or',
+      },
+    ];
+    expect(filteredDatabaseRows(data).map(row => row.cells[name.id]?.text)).toEqual([
+      'Alpha',
+      'Beta',
+      'Gamma',
+    ]);
+
+    data.views = [
+      {
+        id: 'v1',
+        name: 'Main',
+        type: 'table',
+        filters: [
+          { columnId: score.id, operator: 'greaterThan', value: '8' },
+          { columnId: due.id, operator: 'before', value: '2026-02-15' },
+        ],
+      },
+    ];
+    expect(filteredDatabaseRows(data).map(row => row.cells[name.id]?.text)).toEqual(['Alpha']);
+
+    data.views = [
+      {
+        id: 'v1',
+        name: 'Main',
+        type: 'table',
+        filters: [
+          { columnId: tags.id, operator: 'containsAll', value: 'A, B' },
+        ],
+      },
+    ];
+    expect(filteredDatabaseRows(data).map(row => row.cells[name.id]?.text)).toEqual(['Alpha']);
+  });
+
+  it('computes search and footer statistics', () => {
+    expect(searchDatabaseRows(data, data.rows, 'amm').map(row => row.cells[name.id]?.text)).toEqual([
+      'Gamma',
+    ]);
+    expect(databaseStatValue(data.rows, score, 'sum')).toBe('35');
+    expect(databaseStatValue(data.rows, score, 'average')).toBe('11.67');
+    expect(databaseStatValue(data.rows, score, 'count')).toBe('3');
+  });
+
+  it('ignores filters for deleted columns instead of passing all rows', () => {
+    data.views = [
+      {
+        id: 'v1',
+        name: 'Main',
+        type: 'table',
+        filters: [
+          { columnId: 'deleted', operator: 'is', value: 'anything' },
+          { columnId: status.id, operator: 'is', value: 'Done' },
+        ],
+        filterMode: 'or',
+      },
+    ];
+    expect(filteredDatabaseRows(data).map(row => row.cells[name.id]?.text)).toEqual(['Beta']);
+  });
+
+  it('preserves more than twenty named views', () => {
+    const parsed = parseDoc({
+      version: 1,
+      id: 'many-views',
+      title: '',
+      blocks: [
+        {
+          id: 'db',
+          type: 'database',
+          text: [],
+          props: {
+            database: {
+              variant: 'database',
+              title: 'Roadmap',
+              columns: [{ id: 'name', name: 'Name', type: 'text' }],
+              rows: [],
+              views: Array.from({ length: 21 }, (_, index) => ({
+                id: `v${index}`,
+                name: `View ${index}`,
+                type: 'table',
+                filters: [],
+              })),
+              activeViewId: 'v20',
+            },
+          },
+          children: [],
+        },
+      ],
+    });
+    expect(parsed.blocks[0]?.props.database?.views).toHaveLength(21);
+    expect(parsed.blocks[0]?.props.database?.title).toBe('Roadmap');
+  });
+
+  it('normalizes multiple views and view-specific settings', () => {
+    const parsed = parseDoc({
+      version: 1,
+      id: 'views',
+      title: '',
+      blocks: [
+        {
+          id: 'db',
+          type: 'database',
+          text: [],
+          props: {
+            database: {
+              variant: 'database',
+              columns: [
+                { id: 'name', name: 'Name', type: 'text' },
+                { id: 'score', name: 'Score', type: 'number' },
+              ],
+              rows: [],
+              views: [
+                {
+                  id: 'v1',
+                  name: 'Table',
+                  type: 'table',
+                  filters: [],
+                  hiddenColumns: ['score'],
+                  stats: { score: 'sum' },
+                },
+                { id: 'v2', name: 'Board', type: 'board', filters: [], groupBy: 'name' },
+              ],
+              activeViewId: 'v2',
+            },
+          },
+          children: [],
+        },
+      ],
+    });
+    const database = parsed.blocks[0]?.props.database;
+    expect(database?.views).toHaveLength(2);
+    expect(database?.activeViewId).toBe('v2');
+    expect(database?.views?.[0]?.hiddenColumns).toEqual(['score']);
+    expect(database?.views?.[0]?.stats?.score).toBe('sum');
   });
 });

@@ -53,6 +53,7 @@ import {
   type HighlightColor,
   type InlineMark,
   type PageInfo,
+  type TableData,
   type Point,
   type TextAlign,
   type TextColor,
@@ -923,6 +924,18 @@ export class NobitaEditor implements BlockHost {
     this.#focusBlock(block.id, 0);
   }
 
+  updateTable(blockId: string, data: TableData, options: { mergeKey?: string } = {}): void {
+    if (this.#readonly) return;
+    const next = updateBlock(this.store.doc, blockId, block => ({
+      ...block,
+      props: { ...block.props, table: data },
+    }));
+    this.store.update(() => next, {
+      ...(options.mergeKey ? { mergeKey: options.mergeKey } : {}),
+      source: 'table',
+    });
+  }
+
   setImage(blockId: string, patch: { src?: string; alt?: string; caption?: string }): void {
     if (this.#readonly) return;
     const next = setImageProps(this.store.doc, blockId, patch);
@@ -1040,7 +1053,7 @@ export class NobitaEditor implements BlockHost {
   #isNestedField(target: EventTarget | null): boolean {
     if (!(target instanceof Node)) return false;
     const element = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement;
-    return Boolean(element?.closest('.nb-caption, .nb-db, .nb-image-placeholder, .nb-page-link, input, textarea, select'));
+    return Boolean(element?.closest('.nb-caption, .nb-db, .nb-image-placeholder, .nb-page-link, .nb-table, input, textarea, select'));
   }
 
   #activeBlockId(target: EventTarget | null): string | null {
@@ -1341,7 +1354,7 @@ export class NobitaEditor implements BlockHost {
         this.#focusBlock(block.id, 0);
         return;
       }
-      if (last.type === 'database' || last.type === 'image' || last.type === 'divider' || last.type === 'page') {
+      if (last.type === 'database' || last.type === 'image' || last.type === 'divider' || last.type === 'page' || last.type === 'table') {
         const { doc, block } = appendParagraphAfter(this.store.doc, last.id);
         const caret: Point = { blockId: block.id, offset: 0 };
         this.#commit(doc, { anchor: caret, focus: caret });
@@ -1350,7 +1363,7 @@ export class NobitaEditor implements BlockHost {
       }
       const flat = flattenBlocks(blocks);
       const lastText = [...flat].reverse().find(
-        item => item.type !== 'divider' && item.type !== 'image' && item.type !== 'database' && item.type !== 'page'
+        item => item.type !== 'divider' && item.type !== 'image' && item.type !== 'database' && item.type !== 'page' && item.type !== 'table'
       );
       if (lastText) this.#focusBlock(lastText.id, runsLength(lastText.text));
     });
@@ -1716,6 +1729,10 @@ export class NobitaEditor implements BlockHost {
       this.#insertParagraphAfter(blockId);
       return;
     }
+    if (block.type === 'table') {
+      this.#insertParagraphAfter(blockId);
+      return;
+    }
     const length = runsLength(block.text);
     const text = plainText(block.text);
 
@@ -1787,7 +1804,8 @@ export class NobitaEditor implements BlockHost {
       block.type !== 'divider' &&
       block.type !== 'image' &&
       block.type !== 'database' &&
-      block.type !== 'page'
+      block.type !== 'page' &&
+      block.type !== 'table'
     ) {
       const next = setBlockType(this.store.doc, blockId, 'paragraph');
       const caret: Point = { blockId, offset: 0 };
@@ -1802,7 +1820,7 @@ export class NobitaEditor implements BlockHost {
     const previous = location ? location.siblings[location.index - 1] : undefined;
     if (
       previous &&
-      (previous.type === 'image' || previous.type === 'divider' || previous.type === 'database' || previous.type === 'page')
+      (previous.type === 'image' || previous.type === 'divider' || previous.type === 'database' || previous.type === 'page' || previous.type === 'table')
     ) {
       return;
     }
@@ -1837,7 +1855,7 @@ export class NobitaEditor implements BlockHost {
     }
     const location = locateBlock(this.store.doc.blocks, blockId);
     const next = location ? location.siblings[location.index + 1] : undefined;
-    if (next && (next.type === 'image' || next.type === 'divider' || next.type === 'database' || next.type === 'page')) return;
+    if (next && (next.type === 'image' || next.type === 'divider' || next.type === 'database' || next.type === 'page' || next.type === 'table')) return;
     const merged = mergeBlockWithNext(this.store.doc, blockId);
     if (!merged) return;
     const caret: Point = { blockId, offset: point.offset };
@@ -2008,7 +2026,7 @@ export class NobitaEditor implements BlockHost {
       return;
     }
     const flat = flattenBlocks(this.store.doc.blocks).filter(
-      item => item.type !== 'divider' && item.type !== 'image' && item.type !== 'database' && item.type !== 'page'
+      item => item.type !== 'divider' && item.type !== 'image' && item.type !== 'database' && item.type !== 'page' && item.type !== 'table'
     );
     const first = flat[0];
     const last = flat[flat.length - 1];
@@ -2022,7 +2040,7 @@ export class NobitaEditor implements BlockHost {
 
   #previousTextBlock(blockId: string): Block | null {
     const flat = flattenBlocks(this.store.doc.blocks).filter(
-      block => block.type !== 'divider' && block.type !== 'image' && block.type !== 'database' && block.type !== 'page'
+      block => block.type !== 'divider' && block.type !== 'image' && block.type !== 'database' && block.type !== 'page' && block.type !== 'table'
     );
     const index = flat.findIndex(block => block.id === blockId);
     return index > 0 ? flat[index - 1] ?? null : null;
@@ -2030,7 +2048,7 @@ export class NobitaEditor implements BlockHost {
 
   #nextTextBlock(blockId: string): Block | null {
     const flat = flattenBlocks(this.store.doc.blocks).filter(
-      block => block.type !== 'divider' && block.type !== 'image' && block.type !== 'database' && block.type !== 'page'
+      block => block.type !== 'divider' && block.type !== 'image' && block.type !== 'database' && block.type !== 'page' && block.type !== 'table'
     );
     const index = flat.findIndex(block => block.id === blockId);
     return index >= 0 ? flat[index + 1] ?? null : null;
@@ -2064,7 +2082,7 @@ export class NobitaEditor implements BlockHost {
     if (!first) return;
     let caret: Point;
 
-    if (block.type === 'database' || block.type === 'divider' || block.type === 'image' || block.type === 'page') {
+    if (block.type === 'database' || block.type === 'divider' || block.type === 'image' || block.type === 'page' || block.type === 'table') {
       doc = insertBlocksAfter(doc, block.id, inserted);
       const last = inserted[inserted.length - 1] ?? block;
       caret = { blockId: last.id, offset: runsLength(last.text) };

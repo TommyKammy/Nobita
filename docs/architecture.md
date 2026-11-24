@@ -258,13 +258,25 @@ changes rather than from a document-wide "is empty" flag.
 - All per-editor state is instance-local. The block-view registry is a `Map` on
   the editor, so two editors can show the same JSON (same block ids) at once.
 
-## Data views
+## Tables and data views
 
-Tables and databases are one block type:
+A simple table and a database are separate blocks.
+
+A `table` block stores a plain grid:
+
+```ts
+interface TableData {
+  columns: { id; width?; backgroundColor? }[];
+  rows: { id; backgroundColor?; cells: Record<columnId, { text }> }[];
+}
+```
+
+A `database` block stores typed columns, row records and named views:
 
 ```ts
 interface DatabaseData {
-  variant: 'table' | 'database';
+  variant: 'database' | 'table'; // 'table' is legacy-only
+  title?: string;
   columns: { id; name; type; options?; width? }[];
   rows: {
     id;
@@ -275,41 +287,47 @@ interface DatabaseData {
       people?: { id; label }[];
     }>;
   }[];
-  sort?: { columnId; direction };
-  view?: {
-    type: 'table' | 'board';
-    filters: { columnId; operator; value? }[];
-    groupBy?: columnId;
-    sort?: { columnId; direction };
-  };
+  views?: DatabaseView[];
+  activeViewId?: string;
+  view?: DatabaseView; // legacy single view
+}
+
+interface DatabaseView {
+  id?; name?;
+  type: 'table' | 'board';
+  filters: { columnId; operator; value? }[];
+  filterMode?: 'and' | 'or';
+  groupBy?: columnId;
+  sorts?: { columnId; direction }[];
+  hiddenColumns?: string[];
+  stats?: Record<columnId, 'count' | 'countValues' | 'sum' | 'average' | 'median' | 'min' | 'max'>;
 }
 ```
 
-- `table` defaults to three text columns; `database` defaults to Name / Status / Due / Done.
+- `table` defaults to a 3×3 plain-text grid; `database` defaults to Name / Status / Due / Done.
 - Column types are text, number, select, multi-select, date, checkbox, URL, files and people.
-- Empty cells are omitted, so row data stays compact. `parseDoc` normalizes column ids, types, select/multi-select options, widths, row ids, filters, grouping and sort state.
-- `duplicateBlockTree` remaps every row and column id, so duplicated pages and pasted blocks never share database identity.
+- Empty cells are omitted, so row data stays compact. `parseDoc` normalizes table grids, database columns, view ids/names, filters, filter mode, multiple sorts, hidden columns and footer statistics.
+- `duplicateBlockTree` remaps every row, column and view id, so duplicated pages and pasted blocks never share database identity.
 
-Rendering lives in `DatabaseView` (`packages/element/src/database-view.ts`). The `.nb-db` card is `contenteditable="false"`; text cells opt back in as nested editing hosts. The body-level editor ignores events from `.nb-db`, exactly as it ignores image captions and image URL inputs. This is the same pattern as the single-editing-host design, scoped one level deeper:
+Rendering lives in `SimpleTableView` (`packages/element/src/table-view.ts`) for simple grids and `DatabaseView` (`packages/element/src/database-view.ts`) for typed data. Both cards are `contenteditable="false"`; their cells opt back in as nested editing hosts. The body-level editor ignores events from `.nb-table` and `.nb-db`, exactly as it ignores image captions and image URL inputs. This is the same pattern as the single-editing-host design, scoped one level deeper:
 
 - The card container disables editing so the table structure cannot be typed into.
 - Text/URL cells are nested `contenteditable` hosts.
 - Number, date, checkbox and select cells are native controls or buttons.
 - Tab / Shift+Tab move between cells; Enter moves down; arrow keys cross cell boundaries at caret edges; Escape returns to the document.
-- Cell edits commit through `updateDatabase` without restoring the body selection, which would steal focus from the cell. Text commits use a `mergeKey`, so one typing burst is one undo step.
-- A cell write does not rebuild the grid. `DatabaseView` compares a structural key (columns, types, names, options, row ids, sort, readonly). Values are synced in place; structure changes re-render and restore focus to the active cell when possible.
-- Sorting, filtering and grouping are derived at render time (`filteredDatabaseRows`, `groupedDatabaseRows`), so the underlying row order is never mutated.
-- The active view stores table/board mode, filters, grouping and sort. Board cards can be dragged between select, multi-select and checkbox groups.
+- Cell edits commit through `updateDatabase`/`updateTable` without restoring the body selection, which would steal focus from the cell. Text commits use a `mergeKey`, so one typing burst is one undo step.
+- A cell write does not rebuild the grid. Both views compare a structural key (columns, rows, views, hidden columns, stats, readonly). Values are synced in place; structure changes re-render and restore focus to the active cell when possible.
+- Sorting, filtering, search and grouping are derived at render time (`filteredDatabaseRows`, `searchDatabaseRows`, `groupedDatabaseRows`), so the underlying row order is never mutated.
+- A database can hold multiple named views. Each view owns its table/board mode, filters, filter mode, multiple sort keys, grouping, hidden columns and footer statistics. Board cards can be dragged between select, multi-select and checkbox groups; table views can group and collapse by text, number, date, select, multi-select or checkbox columns.
 - Column headers open a popover for rename/type/options/insert/delete/sort and expose a resize handle. Row handles open insert/duplicate/delete. Select/multi-select/files/people cells open pickers.
 - Shift+click selects a cell rectangle; copy/paste uses TSV and can import spreadsheet ranges.
 - Readonly mode disables controls, removes row/column actions and leaves plain text cells non-editable.
 
 Exports are part of the core, not the UI:
 
-- `blocksToMarkdown` emits a pipe table, including `[x]` for checkboxes.
-- `markdownToBlocks` recognizes pipe tables and creates a table block.
-- `blocksToHtml` emits a `<table>`; HTML paste converts `<table>` into a table block.
-- `blocksToPlainText` and `countWords` include data-view rows and cells.
+- Simple tables emit Markdown pipe tables, HTML `<table>` and TSV; Markdown/HTML table paste creates a simple `table` block.
+- Database exports still render a pipe/HTML table from typed rows and preserve the database JSON.
+- `blocksToPlainText` and `countWords` include simple-table cells, database rows and cells.
 
 The data view intentionally uses no grid library. 100 rows × 6 columns render in about 12 ms in the benchmark environment; the browser is the layout engine.
 
@@ -354,9 +372,8 @@ changing the document format.
 - The optional D1 adapter stores the whole document as one JSON row. D1 caps a
   row at 2 MB, so images belong in R2 and very large documents need splitting or
   a different backend.
-- Data views use one saved view per block; multiple named views, calendar view
-  and column hide/move are not implemented yet. Date cells store ISO strings
-  and are edited as text.
+- Data views support multiple named table/board views, per-view filters, multi-sort, search, hidden columns, footer statistics and table grouping. Calendar view, per-view column widths and nested filter groups are not implemented yet. Date cells store ISO strings and are edited with a date input.
+- Simple tables follow AFFiNE's interaction model: hover row/column handles are overlaid on the first row/column cells, handles open AFFiNE-style row/column menus, hover plus controls add rows/columns (including drag-to-add), and row/column background colors are stored on the grid and adapt to the dark theme. Cell text keeps Shift+Enter line breaks. Text cells, column resize and Markdown/HTML/TSV import are implemented; rich-text cells, merges and drag reorder are not yet implemented.
 - No synced blocks, comments, math or embeds. Mentions are represented as inline marks with a host-provided provider.
 - Page links are references to host-owned documents; there is no page registry, backlink index, page tree or in-editor router.
 - Images support URL insertion plus a host-provided `uploadImage` adapter for pasted/dropped files; Nobita does not host storage.

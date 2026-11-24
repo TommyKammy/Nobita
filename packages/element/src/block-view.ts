@@ -1,7 +1,8 @@
 import type { Block } from '@nobita/core';
-import { createDatabaseData, safeHref, safeImageSrc } from '@nobita/core';
+import { createDatabaseData, createTableData, safeHref, safeImageSrc } from '@nobita/core';
 import type { BlockHost } from './bridge.js';
 import { DatabaseView, type DatabaseHost } from './database-view.js';
+import { SimpleTableView } from './table-view.js';
 import { domPointToOffset, nativeSelection } from './dom.js';
 import { icon } from './icons.js';
 
@@ -56,6 +57,7 @@ export class BlockView {
   #image: HTMLElement | null = null;
   #caption: HTMLElement | null = null;
   #database: DatabaseView | null = null;
+  #table: SimpleTableView | null = null;
   #childViews = new Map<string, BlockView>();
   #context: BlockRenderContext | null = null;
   #markerKey = '';
@@ -113,7 +115,7 @@ export class BlockView {
     this.#row.addEventListener('click', event => {
       const target = event.target as Element | null;
       if (!target) return;
-      if (target.closest('button, input, select, .nb-text, .nb-caption, .nb-db')) return;
+      if (target.closest('button, input, select, .nb-text, .nb-caption, .nb-db, .nb-table')) return;
       host.focusBlock(this.id, 0);
     });
 
@@ -155,6 +157,9 @@ export class BlockView {
     if (block.type === 'database' && this.#database) {
       this.#database.update(block.props.database ?? createDatabaseData({ variant: 'database' }));
     }
+    if (block.type === 'table' && this.#table) {
+      this.#table.update(block.props.table ?? createTableData());
+    }
 
     if (this.#text) {
       if (rebuild || previous.text !== block.text) {
@@ -188,6 +193,8 @@ export class BlockView {
   #buildContent(block: Block): void {
     this.#database?.destroy();
     this.#database = null;
+    this.#table?.destroy();
+    this.#table = null;
     this.#text = null;
     this.#codeLang = null;
     this.#toneSelect = null;
@@ -229,6 +236,23 @@ export class BlockView {
       this.#pageLabel = label;
       this.#content.append(link);
       this.#syncPageLink(block);
+      return;
+    }
+
+    if (block.type === 'table') {
+      const host = this.#host;
+      const blockId = this.id;
+      const view = new SimpleTableView(
+        {
+          get readonly() {
+            return host.readonly;
+          },
+          commit: (data, options) => host.updateTable(blockId, data, options),
+        },
+        block.props.table ?? createTableData()
+      );
+      this.#table = view;
+      this.#content.append(view.element);
       return;
     }
 
@@ -600,6 +624,10 @@ export class BlockView {
     if (this.#text) this.#text.dataset.placeholder = value;
   }
 
+  focusTable(): void {
+    this.#table?.focusFirstCell();
+  }
+
   focusImageInput(): void {
     const input = this.#image?.querySelector<HTMLInputElement>('input.nb-image-input');
     input?.focus();
@@ -614,6 +642,7 @@ export class BlockView {
   }
 
   setReadonly(readonly: boolean): void {
+    this.#table?.setReadonly(readonly);
     if (this.#codeLang) this.#codeLang.disabled = readonly;
     if (this.#toneSelect) this.#toneSelect.disabled = readonly;
     if (this.#caption) this.#caption.contentEditable = readonly ? 'false' : 'true';
@@ -634,6 +663,8 @@ export class BlockView {
   destroy(): void {
     this.#database?.destroy();
     this.#database = null;
+    this.#table?.destroy();
+    this.#table = null;
     for (const view of this.#childViews.values()) view.destroy();
     this.#childViews.clear();
     this.#host.unregisterView(this.id);

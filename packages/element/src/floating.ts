@@ -65,6 +65,8 @@ export interface DismissFloatingOptions {
   resize?: boolean;
   /** Set to true for panels that intentionally close on their own scroll. */
   dismissOnInsideScroll?: boolean;
+  /** Close on the Escape key (default true). */
+  escape?: boolean;
 }
 
 /**
@@ -113,6 +115,17 @@ export function dismissFloating(options: DismissFloatingOptions): () => void {
     const onResize = (): void => options.onDismiss();
     window.addEventListener('resize', onResize);
     cleanups.push(() => window.removeEventListener('resize', onResize));
+  }
+
+  if (options.escape !== false) {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      options.onDismiss();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    cleanups.push(() => window.removeEventListener('keydown', onKeyDown, true));
   }
 
   return () => {

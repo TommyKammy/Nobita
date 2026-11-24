@@ -3,6 +3,7 @@ import {
   createDatabaseColumn,
   createDatabaseRow,
   createDoc,
+  createTableData,
   parseDoc,
   parseInlineMarkdown,
   createId,
@@ -55,10 +56,23 @@ const code = (text: string, language = 'ts'): Block =>
 const divider = (): Block => createBlock('divider');
 
 const database = (
-  variant: 'table' | 'database',
+  _variant: 'table' | 'database',
   columns: ReturnType<typeof createDatabaseColumn>[],
   rows: ReturnType<typeof createDatabaseRow>[]
-): Block => createBlock('database', { props: { database: { variant, columns, rows } } });
+): Block => createBlock('database', { props: { database: { variant: 'database', columns, rows } } });
+
+const simpleTable = (rows: string[][]): Block => {
+  const table = createTableData({ rows: rows.length, columns: rows[0]?.length ?? 1 });
+  rows.forEach((values, rowIndex) => {
+    const row = table.rows[rowIndex];
+    if (!row) return;
+    values.forEach((text, columnIndex) => {
+      const column = table.columns[columnIndex];
+      if (column && text) row.cells[column.id] = { text };
+    });
+  });
+  return createBlock('table', { props: { table } });
+};
 
 function page(
   id: string,
@@ -248,9 +262,6 @@ const editor = createEditor(document.querySelector('#editor'), {
   const owner = createDatabaseColumn('Owner');
   const due = createDatabaseColumn('Due', 'date');
   const done = createDatabaseColumn('Done', 'checkbox');
-  const blockName = createDatabaseColumn('Block');
-  const shortcut = createDatabaseColumn('Shortcut');
-  const notes = createDatabaseColumn('Notes');
 
   pages['data-views'] = page(
     'data-views',
@@ -288,25 +299,13 @@ const editor = createEditor(document.querySelector('#editor'), {
         }),
       ]),
       heading(2, 'Simple table'),
-      database('table', [blockName, shortcut, notes], [
-        createDatabaseRow({
-          [blockName.id]: { text: 'Slash menu' },
-          [shortcut.id]: { text: '/' },
-          [notes.id]: { text: 'Insert any block' },
-        }),
-        createDatabaseRow({
-          [blockName.id]: { text: 'Block menu' },
-          [shortcut.id]: { text: 'Click ⠿' },
-          [notes.id]: { text: 'Turn into, duplicate, delete' },
-        }),
-        createDatabaseRow({
-          [blockName.id]: { text: 'Move block' },
-          [shortcut.id]: { text: '⌘⌥↑ / ↓' },
-          [notes.id]: { text: 'Reorder without dragging' },
-        }),
+      simpleTable([
+        ['Slash menu', '/', 'Insert any block'],
+        ['Block menu', 'Click ⠿', 'Turn into, duplicate, delete'],
+        ['Move block', '⌘⌥↑ / ↓', 'Reorder without dragging'],
       ]),
       paragraph(
-        'Use `+ Column` to add properties, click a column header to rename it or change its type, and click the row handle for insert/duplicate/delete.'
+        'Use `+ Row` / `+ Column` for the simple table. The Database above uses view tabs, typed filters, multi-sort, search, column visibility and footer statistics.'
       ),
     ],
     true

@@ -30,8 +30,10 @@ Stable exports:
 - `icon`
 
 The following are internal and are not exported from the package entry:
-`Menu`, `Toolbar`, `PopoverList`, `BlockView`, `DatabaseView`, floating and
-selection helpers, and menu item builders. Do not import these files directly.
+`Menu`, `Toolbar`, `PopoverList`, `BlockView`, the internal `DatabaseView` UI
+class, floating and selection helpers, and menu item builders. Do not import
+these files directly. The core `DatabaseView` type is exported from
+`@nobita/core`; the UI class is not.
 
 ### `NobitaOptions`
 
@@ -100,13 +102,19 @@ Events:
 
 Stable exports include:
 
-- Document types: `Doc`, `Block`, `BlockProps`, `InlineRun`, `InlineMark`, `MentionRef`, `PageInfo`, `EditorSelection`
+- Document types: `Doc`, `Block`, `BlockProps`, `InlineRun`, `InlineMark`, `MentionRef`, `PageInfo`, `TableData`, `TableRow`, `TableColumn`, `TableCell`, `EditorSelection`
 - Serialization: `parseDoc`, `docToJSON`, `blocksToMarkdown`, `markdownToBlocks`,
   `blocksToHtml`
 - Editing commands: `setBlockType`, `setBlockAlign`, `toggleChecked`,
   `setCodeLanguage`, `setCalloutTone`, `insertBlockAfter`, etc.
-- Data views: `DatabaseView`, `DatabaseFilter`, `databaseView`,
-  `filteredDatabaseRows`, `groupedDatabaseRows`
+- Data views: `DatabaseView`, `DatabaseFilter`, `DatabaseStatType`, `databaseView`,
+  `databaseViews`, `databaseSorts`, `filteredDatabaseRows`, `searchDatabaseRows`,
+  `groupedDatabaseRows`, `databaseStatValue`
+- Simple tables: `createTableData`, `normalizeTableData`, `duplicateTableData`,
+  `insertTableRow`, `insertTableColumn`, `deleteTableRow`, `deleteTableColumn`,
+  `duplicateTableRow`, `duplicateTableColumn`, `moveTableRow`, `moveTableColumn`,
+  `clearTableRow`, `clearTableColumn`, `setTableCellText`, `setTableColumnWidth`,
+  `setTableRowColor`, `setTableColumnColor`
 - Store: `EditorStore`
 - Validation/URL helpers: `safeHref`, `safeImageSrc`
 

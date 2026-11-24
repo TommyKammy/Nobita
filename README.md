@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **59.2 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
+- **70.9 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -26,10 +26,10 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 
 | Area | Included |
 | --- | --- |
-| Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, table/database, page links |
+| Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, simple table, database, page links |
 | Inline | Bold, italic, underline, strikethrough, inline code, links, mentions, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo |
-| Data views | Table and board views, filters, grouping, column resize, cell range copy/paste and TSV import; typed columns (text, number, select, multi-select, date, checkbox, URL, files, people), row menus, sort, Markdown table round-trip, HTML table paste/export |
+| Data views | Multiple table/board views per database, view tabs, multi-sort, typed filters with AND/OR, search, column hide/show, footer statistics, table grouping/collapse, column resize, cell range copy/paste and TSV import; typed columns (text, number, select, multi-select, date, checkbox, URL, files, people), row menus |
 | Menus | Slash menu with fuzzy search and block actions (move/copy/link), block handle menu, selection toolbar with Turn into / Align / format / Color, link popover, mention picker |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
@@ -37,7 +37,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Persistence | JSON in / JSON out, `onChange`, `setDoc`, readonly mode, theming; optional `@nobita/storage` adapters for localStorage, SQLite/D1 and HTTP |
 | A11y | Keyboard menus, labels, focus-visible states, `aria-pressed` toolbar |
 
-Not in the box: multiple named saved views, synced blocks, comments, math, embeds, collaboration, a managed image host, and virtualization for very large documents. Image uploads are supported through a host adapter. See [Roadmap](#roadmap).
+Not in the box: synced blocks, comments, math, embeds, collaboration, a managed image host, and virtualization for very large documents. Image uploads are supported through a host adapter. See [Roadmap](#roadmap).
 
 ## Quick start
 
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 59.2 KB bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 70.9 KB bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -167,12 +167,15 @@ A document is deliberately simple, stable JSON:
 
 - `text` is an array of runs. Each run has `text` and optional `marks`.
 - `children` is a tree, used by nested lists and callouts.
-- `props` is small and typed: heading `level`, todo `checked`, code `language`, callout `tone`, image `src` / `caption`, alignment, collapsed state.
+- `props` is small and typed: heading `level`, todo `checked`, code `language`, callout `tone`, image `src` / `caption`, table `table`, database `database`, alignment, collapsed state.
 - `parseDoc()` validates unknown JSON before it reaches the editor, deduplicates block ids, and fills defaults.
 
 ### Data views
 
-A **Table** and a **Database** are the same `database` block with a different default schema (`props.database.variant`). Tables default to plain text columns; databases default to Name / Status / Due / Done properties.
+**Table** and **Database** are separate blocks.
+
+- A `table` block is a simple editable grid (`props.table`). It follows AFFiNE's table model: row/column handles sit on the first cell edges, selection and menus are integrated into the grid, hover plus controls add rows/columns, and row/column background colors are available. It has no properties or views.
+- A `database` block is the typed data view (`props.database`). It has typed columns, row records and one or more named views.
 
 ```json
 {
@@ -181,13 +184,12 @@ A **Table** and a **Database** are the same `database` block with a different de
   "props": {
     "database": {
       "variant": "database",
+      "title": "Tasks",
       "columns": [
         { "id": "c1", "name": "Task", "type": "text" },
         { "id": "c2", "name": "Status", "type": "select", "options": ["Todo", "Done"] },
         { "id": "c3", "name": "Due", "type": "date" },
-        { "id": "c4", "name": "Done", "type": "checkbox" },
-        { "id": "c5", "name": "Tags", "type": "multi-select", "options": ["Docs", "Release"] },
-        { "id": "c6", "name": "Owner", "type": "people" }
+        { "id": "c4", "name": "Done", "type": "checkbox" }
       ],
       "rows": [
         {
@@ -196,25 +198,34 @@ A **Table** and a **Database** are the same `database` block with a different de
             "c1": { "text": "Ship it" },
             "c2": { "text": "Done" },
             "c3": { "text": "2026-12-01" },
-            "c4": { "checked": true },
-            "c5": { "values": ["Docs", "Release"] },
-            "c6": { "people": [{ "id": "u1", "label": "Ada" }] }
+            "c4": { "checked": true }
           }
         }
       ],
-      "view": {
-        "type": "board",
-        "groupBy": "c2",
-        "filters": [{ "columnId": "c2", "operator": "is", "value": "Todo" }],
-        "sort": { "columnId": "c3", "direction": "asc" }
-      }
+      "views": [
+        {
+          "id": "v1",
+          "name": "Table",
+          "type": "table",
+          "filters": [],
+          "sorts": [{ "columnId": "c3", "direction": "asc" }]
+        },
+        {
+          "id": "v2",
+          "name": "Board",
+          "type": "board",
+          "groupBy": "c2",
+          "filters": [{ "columnId": "c2", "operator": "is", "value": "Todo" }]
+        }
+      ],
+      "activeViewId": "v1"
     }
   },
   "children": []
 }
 ```
 
-Column types are `text`, `number`, `select`, `multi-select`, `date`, `checkbox`, `url`, `files` and `people`. Columns can persist a `width`; empty cells are omitted, so documents stay compact. `view` stores the table/board mode, filters, grouping and sort without reordering the underlying rows. Markdown exports render a standard pipe table; pasting a Markdown, HTML or TSV table creates/updates cells.
+Column types are `text`, `number`, `select`, `multi-select`, `date`, `checkbox`, `url`, `files` and `people`. Columns can persist a `width`; empty cells are omitted, so documents stay compact. Each view stores its own filters, filter mode, sort keys, grouping, hidden columns and footer statistics. Markdown/HTML tables import as simple tables; TSV paste continues to fill database cells. Legacy documents with a single `view` / `sort` still load and are migrated on the next view edit.
 
 ## API
 
@@ -355,8 +366,8 @@ Bundle sizes:
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 216.2 KB | **59.2 KB** |
-| Demo app (editor + UI + seed data) | 246.5 KB | 69.2 KB |
+| Editor ESM (`nobita.js`) | 269.6 KB | **70.9 KB** |
+| Demo app (editor + UI + seed data) | 301.2 KB | 81.1 KB |
 
 The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.
 
@@ -388,6 +399,8 @@ A command-by-command comparison with AFFiNE, including recommended P0/P1 additio
 
 ## Roadmap
 
+- Database: calendar view, row detail pages and per-view column widths.
+- Simple table: rich-text cells, merged cells and row/column drag reorder.
 - Page workspace: navigation, backlinks and page trees.
 - Collaboration adapter (Yjs/Automerge) behind an explicit interface.
 - Virtualized rendering for 10k+ block documents.

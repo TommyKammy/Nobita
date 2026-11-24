@@ -132,6 +132,8 @@ export function blockIcon(type: BlockType, level?: HeadingLevel): string {
       return icon.divider;
     case 'page':
       return icon.page;
+    case 'table':
+      return icon.table;
     default:
       return icon.text;
   }

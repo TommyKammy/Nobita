@@ -7,6 +7,7 @@ import {
   updateBlock,
 } from './doc.js';
 import { createDatabaseData } from './database.js';
+import { createTableData } from './table.js';
 import type {
   Block,
   BlockProps,
@@ -48,6 +49,9 @@ function propsForType(type: BlockType, current: BlockProps, extra: Partial<Block
       next.database =
         extra.database ?? current.database ?? createDatabaseData({ variant: 'database' });
       break;
+    case 'table':
+      next.table = extra.table ?? current.table ?? createTableData();
+      break;
     case 'page': {
       const pageId = extra.pageId ?? current.pageId;
       const pageTitle = extra.pageTitle ?? current.pageTitle;
@@ -77,7 +81,7 @@ export function setBlockType(
     const text =
       type === 'code'
         ? normalizeRuns(block.text.map(run => ({ text: run.text })))
-        : type === 'divider' || type === 'image' || type === 'database' || type === 'page'
+        : type === 'divider' || type === 'image' || type === 'database' || type === 'page' || type === 'table'
           ? []
           : block.text;
     return {
@@ -223,6 +227,8 @@ export function blockPlaceholder(block: Block, isFirst: boolean): string {
       return 'Image';
     case 'database':
       return '';
+    case 'table':
+      return '';
     case 'page':
       return '';
     default:
@@ -232,6 +238,20 @@ export function blockPlaceholder(block: Block, isFirst: boolean): string {
 
 export function blockSearchText(block: Block): string {
   if (block.type === 'page') return block.props.pageTitle ?? block.props.pageId ?? '';
+  if (block.type === 'database') {
+    return block.props.database?.rows
+      .flatMap(row => Object.values(row.cells))
+      .map(cell => cell.text ?? '')
+      .filter(Boolean)
+      .join(' ') ?? '';
+  }
+  if (block.type === 'table') {
+    return block.props.table?.rows
+      .flatMap(row => Object.values(row.cells))
+      .map(cell => cell.text)
+      .filter(Boolean)
+      .join(' ') ?? '';
+  }
   return plainText(block.text);
 }
 
