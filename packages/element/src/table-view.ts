@@ -686,16 +686,24 @@ export class SimpleTableView {
       : -1;
     if (redo) this.#host.redo();
     else this.#host.undo();
-    const focus = (): void => this.#focusHistoryCell(rowIndex, columnIndex);
+    const focus = (): void =>
+      this.#focusHistoryCell(active, rowIndex, columnIndex);
     focus();
     requestAnimationFrame(focus);
   }
 
-  #focusHistoryCell(rowIndex: number, columnIndex: number): void {
+  #focusHistoryCell(
+    active: { rowId: string; columnId: string } | null,
+    rowIndex: number,
+    columnIndex: number
+  ): void {
     if (this.#data.rows.length === 0 || this.#data.columns.length === 0) return;
     const row =
+      (active && this.#data.rows.find(item => item.id === active.rowId)) ||
       this.#data.rows[Math.min(Math.max(rowIndex, 0), this.#data.rows.length - 1)];
     const column =
+      (active &&
+        this.#data.columns.find(item => item.id === active.columnId)) ||
       this.#data.columns[
         Math.min(Math.max(columnIndex, 0), this.#data.columns.length - 1)
       ];

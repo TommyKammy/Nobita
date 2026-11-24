@@ -366,8 +366,8 @@ Bundle sizes:
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 277.3 KB | **73.0 KB** |
-| Demo app (editor + UI + seed data) | 309.0 KB | 83.2 KB |
+| Editor ESM (`nobita.js`) | 277.4 KB | **73.0 KB** |
+| Demo app (editor + UI + seed data) | 309.1 KB | 83.2 KB |
 
 The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.
 
