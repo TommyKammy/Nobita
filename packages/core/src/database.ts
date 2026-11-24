@@ -577,11 +577,20 @@ export function normalizeDatabaseData(value: unknown, fallbackVariant: DatabaseV
     typeof value.title === 'string' && value.title.trim()
       ? value.title.trim().slice(0, 200)
       : undefined;
+  const hasHeaderTitleColumn = [view, ...views].some(item => {
+    const columnId = item?.header?.titleColumnId;
+    return (
+      typeof columnId === 'string' &&
+      columns.some(column => column.id === columnId)
+    );
+  });
   const titleColumnId =
     typeof value.titleColumnId === 'string' &&
     columns.some(column => column.id === value.titleColumnId)
       ? value.titleColumnId
-      : columns[0]?.id;
+      : hasHeaderTitleColumn
+        ? undefined
+        : columns[0]?.id;
   return {
     variant,
     columns,

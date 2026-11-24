@@ -240,6 +240,23 @@ test('keeps the row detail open when an edit changes sort order', async ({ page 
   ).toBe('Zebra');
 });
 
+test('undoes row deletion from the selection context', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-row-check').first().click();
+  await page.keyboard.press('Delete');
+  await expect(
+    page.locator('.nb-db-table tbody tr[data-row-id]')
+  ).toHaveCount(2);
+  await page.keyboard.press('Control+z');
+  await expect(
+    page.locator('.nb-db-table tbody tr[data-row-id]')
+  ).toHaveCount(3);
+  await expect(
+    page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]')
+  ).toContainText('One');
+});
+
 test('does not route header input copy through the cell grid', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
@@ -1263,6 +1280,81 @@ test('keeps group order when dragging rows without saved settings', async ({ pag
   expect(
     groupProperties?.find(group => group.key === 'Todo')?.manuallyCardSort
   ).toEqual(['r3', 'r1']);
+});
+
+test('preserves omitted group settings when reordering groups', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'group-move-settings',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'status',
+                name: 'Status',
+                type: 'select',
+                options: ['A', 'B', 'C'],
+              },
+            ],
+            rows: [
+              { id: 'r1', cells: { name: { text: 'One' }, status: { text: 'A' } } },
+              { id: 'r2', cells: { name: { text: 'Two' }, status: { text: 'C' } } },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                groupBy: 'status',
+                hideEmptyGroups: true,
+                groupProperties: [
+                  { key: 'A' },
+                  { key: 'B', collapsed: true },
+                  { key: 'C' },
+                ],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'status', width: 200 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await expect(page.locator('.nb-db-group')).toHaveCount(2);
+  await page.locator('.nb-db-tools .nb-db-btn', { hasText: 'Group' }).click();
+  const settings = page.locator('.nb-db-group-setting');
+  await expect(settings).toHaveCount(2);
+  await settings.nth(1).locator('.nb-db-property-move').first().click();
+  const doc = await getDoc(page);
+  expect(
+    (
+      doc.blocks[0]?.props.database as {
+        views: Array<{
+          groupProperties?: Array<{ key: string; collapsed?: boolean }>;
+        }>;
+      }
+    ).views[0]?.groupProperties
+  ).toEqual([
+    { key: 'C' },
+    { key: 'B', collapsed: true },
+    { key: 'A' },
+  ]);
 });
 
 test('preserves group order when collapsing a group', async ({ page }) => {

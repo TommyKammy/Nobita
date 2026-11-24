@@ -2488,9 +2488,29 @@ export class DatabaseView {
     const [keyValue] = keys.splice(index, 1);
     if (keyValue === undefined) return;
     keys.splice(target, 0, keyValue);
-    const byKey = new Map((view.groupProperties ?? []).map(group => [group.key, group]));
+    const settings = view.groupProperties ?? [];
+    const byKey = new Map(settings.map(group => [group.key, group]));
+    const visible = new Set(keys);
+    const order: string[] = [];
+    let visibleIndex = 0;
+    for (const item of settings) {
+      if (visible.has(item.key)) {
+        const nextKey = keys[visibleIndex];
+        if (nextKey) {
+          order.push(nextKey);
+          visibleIndex += 1;
+        }
+      } else if (!order.includes(item.key)) {
+        order.push(item.key);
+      }
+    }
+    while (visibleIndex < keys.length) {
+      const nextKey = keys[visibleIndex];
+      if (nextKey) order.push(nextKey);
+      visibleIndex += 1;
+    }
     this.#updateActiveView({
-      groupProperties: keys.map(groupKey => byKey.get(groupKey) ?? { key: groupKey }),
+      groupProperties: order.map(groupKey => byKey.get(groupKey) ?? { key: groupKey }),
     });
   }
 
@@ -4586,6 +4606,21 @@ export class DatabaseView {
   #onDatabaseKeyDown = (event: KeyboardEvent): void => {
     if (this.#readonly) return;
     const target = event.target;
+    if (target === this.element) {
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        event.stopPropagation();
+        this.#history(event.shiftKey);
+        return;
+      }
+      if (mod && event.key.toLowerCase() === 'y') {
+        event.preventDefault();
+        event.stopPropagation();
+        this.#history(true);
+        return;
+      }
+    }
     const editing =
       target instanceof HTMLInputElement ||
       target instanceof HTMLTextAreaElement ||

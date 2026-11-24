@@ -4,6 +4,7 @@ import {
   createDatabaseData,
   createDatabaseRow,
   databaseStatValue,
+  databaseTitleColumn,
   databaseView,
   databaseViewColumnStates,
   databaseVisibleColumns,
@@ -252,6 +253,31 @@ describe('database model', () => {
     expect(
       filteredDatabaseRows(data).map(row => row.cells[name.id]?.text)
     ).toEqual(['One']);
+  });
+
+  it('honors view header title columns when normalizing', () => {
+    const data = normalizeDatabaseData({
+      variant: 'database',
+      columns: [
+        { id: 'status', name: 'Status', type: 'select', options: ['Todo'] },
+        { id: 'name', name: 'Name', type: 'text' },
+      ],
+      rows: [
+        { id: 'r1', cells: { status: { text: 'Todo' }, name: { text: 'One' } } },
+      ],
+      views: [
+        {
+          id: 'v1',
+          name: 'Table',
+          type: 'table',
+          filters: [],
+          header: { titleColumnId: 'name' },
+        },
+      ],
+      activeViewId: 'v1',
+    });
+    expect(data.titleColumnId).toBeUndefined();
+    expect(databaseTitleColumn(data)?.id).toBe('name');
   });
 
   it('filters, sorts and groups rows for table and board views', () => {
