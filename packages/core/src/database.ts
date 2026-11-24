@@ -598,7 +598,6 @@ export function groupedDatabaseRows(
   }
   return [...values.entries()]
     .sort(([a], [b]) => (a === 'No value' ? 1 : b === 'No value' ? -1 : a.localeCompare(b)))
-    .slice(0, 50)
     .map(([value, groupRows]) => ({
       key: value,
       label: value,

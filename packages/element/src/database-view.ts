@@ -142,9 +142,7 @@ export class DatabaseView {
     if (data === this.#data) return;
     this.#data = data;
     const nextKey = this.#keyFor(data);
-    const visibleKey = filteredDatabaseRows(data, databaseView(data))
-      .map(row => row.id)
-      .join('\u0001');
+    const visibleKey = this.#visibleKeyFor(data);
     if (nextKey !== this.#structureKey || visibleKey !== this.#visibleKey) {
       this.render();
     } else {
@@ -211,6 +209,20 @@ export class DatabaseView {
     });
   }
 
+  #visibleKeyFor(
+    data: DatabaseData,
+    view: DatabaseViewConfig = databaseView(data)
+  ): string {
+    if (view.type === 'board') {
+      return groupedDatabaseRows(data, view)
+        .map(group => `${group.key}:${group.rows.map(row => row.id).join(',')}`)
+        .join('\u0001');
+    }
+    return filteredDatabaseRows(data, view)
+      .map(row => row.id)
+      .join('\u0001');
+  }
+
   render(): void {
     this.#events.abort();
     this.#events = new AbortController();
@@ -222,9 +234,7 @@ export class DatabaseView {
     const hadFocus = this.element.contains(root.activeElement);
     const view = databaseView(this.#data);
     this.#structureKey = this.#keyFor(this.#data);
-    this.#visibleKey = filteredDatabaseRows(this.#data, view)
-      .map(row => row.id)
-      .join('\u0001');
+    this.#visibleKey = this.#visibleKeyFor(this.#data, view);
     this.element.dataset.readonly = String(this.#readonly);
     this.element.dataset.view = view.type;
     this.element.replaceChildren();
@@ -585,7 +595,16 @@ export class DatabaseView {
       );
     }
     card.append(title);
+    const fields = this.#boardFields(row, titleColumn, view);
+    if (fields) card.append(fields);
+    return card;
+  }
 
+  #boardFields(
+    row: DatabaseRow,
+    titleColumn: DatabaseColumn | undefined,
+    view: DatabaseViewConfig
+  ): HTMLElement | null {
     const fields = document.createElement('div');
     fields.className = 'nb-db-card-fields';
     for (const column of this.#data.columns) {
@@ -597,8 +616,29 @@ export class DatabaseView {
       field.textContent = `${column.name}: ${display}`;
       fields.append(field);
     }
-    if (fields.childElementCount > 0) card.append(fields);
-    return card;
+    return fields.childElementCount > 0 ? fields : null;
+  }
+
+  #syncBoardValues(): void {
+    const view = databaseView(this.#data);
+    if (view.type !== 'board') return;
+    const titleColumn = this.#data.columns[0];
+    for (const card of this.element.querySelectorAll<HTMLElement>('.nb-db-card[data-row-id]')) {
+      const row = this.#data.rows.find(item => item.id === card.dataset.rowId);
+      if (!row) continue;
+      const title = card.querySelector<HTMLElement>('.nb-db-card-title');
+      if (title && document.activeElement !== title) {
+        const value = titleColumn
+          ? databaseCellDisplay(row.cells[titleColumn.id], titleColumn.type)
+          : '';
+        title.textContent = value || (title.contentEditable === 'true' ? '' : 'Untitled');
+      }
+      const previous = card.querySelector('.nb-db-card-fields');
+      const next = this.#boardFields(row, titleColumn, view);
+      if (previous && next) previous.replaceWith(next);
+      else if (previous) previous.remove();
+      else if (next) card.append(next);
+    }
   }
 
   #setView(patch: Partial<DatabaseViewConfig> & { groupBy?: string | null }): void {
@@ -698,7 +738,8 @@ export class DatabaseView {
         }
         columnSelect.addEventListener('change', () => {
           filter.columnId = columnSelect.value;
-          filter.value = '';
+          const next = this.#data.columns.find(item => item.id === filter.columnId);
+          filter.value = next?.type === 'checkbox' ? 'true' : '';
           render();
         });
 
@@ -713,6 +754,13 @@ export class DatabaseView {
         }
         operatorSelect.addEventListener('change', () => {
           filter.operator = operatorSelect.value as DatabaseFilterOperator;
+          if (
+            column.type === 'checkbox' &&
+            (filter.operator === 'is' || filter.operator === 'isNot') &&
+            !filter.value
+          ) {
+            filter.value = 'true';
+          }
           render();
         });
 
@@ -766,7 +814,11 @@ export class DatabaseView {
     add.addEventListener('click', () => {
       const first = this.#data.columns[0];
       if (!first) return;
-      draft.push({ columnId: first.id, operator: 'contains', value: '' });
+      draft.push({
+        columnId: first.id,
+        operator: 'contains',
+        value: first.type === 'checkbox' ? 'true' : '',
+      });
       render();
     });
     const clear = document.createElement('button');
@@ -780,7 +832,18 @@ export class DatabaseView {
     apply.type = 'button';
     apply.textContent = 'Apply';
     apply.addEventListener('click', () => {
-      this.#setView({ filters: draft });
+      const filters = draft.map(filter => {
+        const column = this.#data.columns.find(item => item.id === filter.columnId);
+        if (
+          column?.type === 'checkbox' &&
+          (filter.operator === 'is' || filter.operator === 'isNot') &&
+          !filter.value
+        ) {
+          return { ...filter, value: 'true' };
+        }
+        return filter;
+      });
+      this.#setView({ filters });
       this.#closePopover();
     });
     footer.append(add, clear, apply);
@@ -877,6 +940,7 @@ export class DatabaseView {
       }
     }
     this.#syncColumnWidths();
+    this.#syncBoardValues();
     this.#updateCount(databaseView(this.#data));
   }
 
@@ -1255,6 +1319,7 @@ export class DatabaseView {
         id: column.id,
         name: patch.name ?? column.name,
         type,
+        ...(column.width ? { width: column.width } : {}),
       };
       if (type === 'select' || type === 'multi-select') {
         const options = patch.options ?? column.options;
@@ -1512,6 +1577,8 @@ export class DatabaseView {
     columnId: string
   ): void {
     if (this.#readonly || event.button !== 0) return;
+    const previous = this.#active;
+    this.#active = { rowId, columnId };
     if (!event.shiftKey) {
       if (this.#range) {
         this.#clearRange();
@@ -1519,8 +1586,8 @@ export class DatabaseView {
       }
       return;
     }
-    const startRowId = this.#active?.rowId ?? rowId;
-    const startColumnId = this.#active?.columnId ?? columnId;
+    const startRowId = previous?.rowId ?? rowId;
+    const startColumnId = previous?.columnId ?? columnId;
     this.#range = { startRowId, startColumnId, endRowId: rowId, endColumnId: columnId };
     this.#renderRange();
     event.preventDefault();
@@ -1600,17 +1667,27 @@ export class DatabaseView {
     const startRow = rows.findIndex(row => row.id === startRowId);
     const startColumn = this.#data.columns.findIndex(column => column.id === startColumnId);
     if (startRow < 0 || startColumn < 0) return;
+
+    const columns = [...this.#data.columns];
+    const width = Math.max(0, ...grid.map(line => line.length));
+    while (columns.length < startColumn + width) {
+      columns.push(createDatabaseColumn(`Column ${columns.length + 1}`));
+    }
+
     const byId = new Map(this.#data.rows.map(row => [row.id, row]));
+    const added: DatabaseRow[] = [];
     let firstRowId: string | null = null;
     let firstColumnId: string | null = null;
     grid.forEach((values, rowOffset) => {
-      const target = rows[startRow + rowOffset];
-      if (!target) return;
-      const current = byId.get(target.id);
-      if (!current) return;
+      let target = rows[startRow + rowOffset];
+      if (!target) {
+        target = createDatabaseRow();
+        added.push(target);
+      }
+      const current = byId.get(target.id) ?? target;
       const cells = { ...current.cells };
       values.forEach((value, columnOffset) => {
-        const column = this.#data.columns[startColumn + columnOffset];
+        const column = columns[startColumn + columnOffset];
         if (!column) return;
         const cell = cells[column.id];
         if (column.type === 'checkbox') {
@@ -1639,7 +1716,11 @@ export class DatabaseView {
     });
     this.#host.commit({
       ...this.#data,
-      rows: this.#data.rows.map(row => byId.get(row.id) ?? row),
+      columns,
+      rows: [
+        ...this.#data.rows.map(row => byId.get(row.id) ?? row),
+        ...added.map(row => byId.get(row.id) ?? row),
+      ],
     });
     if (firstRowId && firstColumnId) {
       this.#pendingFocus = {
@@ -1653,6 +1734,7 @@ export class DatabaseView {
 
   #onCopy = (event: ClipboardEvent): void => {
     if (this.#rangeCells.size <= 1) return;
+    if ((event.target as Element | null)?.closest('.nb-db-popover')) return;
     const text = this.#rangeText();
     if (!text) return;
     event.clipboardData?.setData('text/plain', text);
@@ -1661,6 +1743,7 @@ export class DatabaseView {
 
   #onCut = (event: ClipboardEvent): void => {
     if (this.#rangeCells.size <= 1) return;
+    if ((event.target as Element | null)?.closest('.nb-db-popover')) return;
     const text = this.#rangeText();
     if (!text) return;
     event.clipboardData?.setData('text/plain', text);
@@ -1680,6 +1763,8 @@ export class DatabaseView {
   };
 
   #onPaste = (event: ClipboardEvent): void => {
+    const target = event.target as Element | null;
+    if (target?.closest('.nb-db-popover')) return;
     const text = event.clipboardData?.getData('text/plain') ?? '';
     if (!text) return;
     const hasGrid = text.includes('\t') || text.includes('\n');
@@ -1689,11 +1774,18 @@ export class DatabaseView {
       .split('\n')
       .filter((line, index, lines) => !(index === lines.length - 1 && line === ''))
       .map(line => line.split('\t'));
+    const cell = target?.closest<HTMLElement>(
+      '.nb-db-cell[data-row-id][data-column-id]'
+    );
     const bounds = this.#rangeBounds();
     const startRowId =
-      bounds?.rows[bounds.startRow]?.id ?? this.#active?.rowId;
+      cell?.dataset.rowId ??
+      bounds?.rows[bounds.startRow]?.id ??
+      this.#active?.rowId;
     const startColumnId =
-      bounds?.columns[bounds.startColumn]?.id ?? this.#active?.columnId;
+      cell?.dataset.columnId ??
+      bounds?.columns[bounds.startColumn]?.id ??
+      this.#active?.columnId;
     if (!startRowId || !startColumnId) return;
     event.preventDefault();
     event.stopPropagation();

@@ -19,6 +19,7 @@ const databaseBlock = {
             { id: 'tags', name: 'Tags', type: 'multi-select', options: ['A', 'B'] },
             { id: 'files', name: 'Files', type: 'files' },
             { id: 'people', name: 'People', type: 'people' },
+            { id: 'done', name: 'Done', type: 'checkbox' },
           ],
           rows: [
             {
@@ -31,6 +32,7 @@ const databaseBlock = {
                   files: [{ name: 'Spec', url: 'https://example.com/spec.pdf' }],
                 },
                 people: { people: [{ id: 'u1', label: 'Ada' }] },
+                done: { checked: true },
               },
             },
             {
@@ -39,6 +41,7 @@ const databaseBlock = {
                 name: { text: 'Two' },
                 status: { text: 'Done' },
                 tags: { values: ['B'] },
+                done: { checked: false },
               },
             },
             {
@@ -96,7 +99,7 @@ test('renders table, board and new property types', async ({ page }) => {
     .dragTo(page.locator('.nb-db-board-column[data-group="Todo"]'));
   let data = await databaseState(page);
   expect(data.rows[1]?.cells.status?.text).toBe('Todo');
-  await expect(page.locator('.nb-db-board-column[data-group="Todo"] .nb-db-card')).toHaveCount(2);
+  await expect(page.locator('.nb-db-board-column[data-group="Todo"] .nb-db-card')).toHaveCount(3);
 
   await page.locator('.nb-db-viewbtn[data-view="table"]').click();
   await expect(page.locator('.nb-db-table')).toBeVisible();
@@ -155,6 +158,85 @@ test('filters rows and groups the board', async ({ page }) => {
   await expect(page.locator('.nb-db-card')).toHaveCount(2);
 });
 
+test('extends the table for oversized TSV imports', async ({ page }) => {
+  await openFixture(page);
+  await setDatabase(page);
+
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', 'A\tB\tC\nD\tE\tF\nG\tH\tI\nJ\tK\tL');
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      clipboardData: data,
+    });
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db-cell[data-row-id="r2"][data-column-id="people"]')
+      ?.dispatchEvent(event);
+  });
+
+  const data = await databaseState(page);
+  expect(data.rows).toHaveLength(5);
+  expect(data.columns).toHaveLength(7);
+  expect(data.rows[4]?.cells[data.columns[6]!.id]?.text).toBe('L');
+});
+
+test('initializes checkbox filters to the displayed value', async ({ page }) => {
+  await openFixture(page);
+  await setDatabase(page);
+
+  await page.locator('.nb-db-btn', { hasText: 'Filter' }).click();
+  await page.getByRole('button', { name: '+ Add filter' }).click();
+  await page.locator('.nb-db-filter-row select').nth(0).selectOption('done');
+  await page.locator('.nb-db-filter-row select').nth(1).selectOption('is');
+  await page.getByRole('button', { name: 'Apply' }).click();
+
+  await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(1);
+  await expect(page.locator('.nb-db-count')).toContainText('1 of 3 rows');
+});
+
+test('uses the clicked picker cell as the paste destination', async ({ page }) => {
+  await openFixture(page);
+  await setDatabase(page);
+
+  await page.locator('.nb-db-cell[data-row-id="r2"][data-column-id="status"] button').click();
+  await expect(page.locator('.nb-db-popover')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', 'X	Y');
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      clipboardData: data,
+    });
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db')
+      ?.dispatchEvent(event);
+  });
+
+  const data = await databaseState(page);
+  expect(data.rows[1]?.cells.status?.text).toBe('X');
+  expect(data.rows[1]?.cells.tags?.values).toEqual(['Y']);
+
+  await page.locator('.nb-db-btn', { hasText: 'Filter' }).click();
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', 'P	Q');
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      clipboardData: data,
+    });
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db-popover input')
+      ?.dispatchEvent(event);
+  });
+  const after = await databaseState(page);
+  expect(after.rows[1]?.cells.status?.text).toBe('X');
+});
+
 test('resizes columns and persists the width', async ({ page }) => {
   await openFixture(page);
   await setDatabase(page);
@@ -168,7 +250,12 @@ test('resizes columns and persists the width', async ({ page }) => {
   await page.mouse.move(box!.x + 62, box!.y + box!.height / 2);
   await page.mouse.up();
 
-  const data = await databaseState(page);
+  let data = await databaseState(page);
+  expect(data.columns.find(column => column.id === 'name')?.width).toBeGreaterThan(220);
+
+  await page.locator('th[data-column-id="name"] .nb-db-col-head').click();
+  await page.locator('.nb-db-popover').getByRole('button', { name: 'Done', exact: true }).click();
+  data = await databaseState(page);
   expect(data.columns.find(column => column.id === 'name')?.width).toBeGreaterThan(220);
 });
 

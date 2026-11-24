@@ -162,6 +162,19 @@ describe('database model', () => {
     ]);
   });
 
+  it('preserves board groups beyond fifty distinct values', () => {
+    const name = createDatabaseColumn('Name');
+    const data: DatabaseData = {
+      variant: 'database',
+      columns: [name],
+      rows: Array.from({ length: 51 }, (_, index) =>
+        createDatabaseRow({ [name.id]: { text: `Item ${index}` } })
+      ),
+      view: { type: 'board', groupBy: name.id, filters: [] },
+    };
+    expect(groupedDatabaseRows(data)).toHaveLength(51);
+  });
+
   it('duplicates view column references and deep-clones rich cells', () => {
     const tags = createDatabaseColumn('Tags', 'multi-select', ['A']);
     const data: DatabaseData = {
