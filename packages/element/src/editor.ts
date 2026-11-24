@@ -2299,7 +2299,7 @@ export class NobitaEditor implements BlockHost {
       },
     });
     // The query may have advanced while the initial search was in flight.
-    if (mention.query.length > 0) this.#syncMentionMenu();
+    if (mention.query.length > 0) this.#syncMentionMenu(true);
   }
 
   #scheduleMentionSync(): void {
@@ -2311,7 +2311,7 @@ export class NobitaEditor implements BlockHost {
     });
   }
 
-  #syncMentionMenu(): void {
+  #syncMentionMenu(forceSearch = false): void {
     const mention = this.#mention;
     if (!mention) return;
     const selection = this.#currentSelection();
@@ -2327,12 +2327,13 @@ export class NobitaEditor implements BlockHost {
       this.#menu.close();
       return;
     }
+    const queryChanged = query !== mention.query;
     mention.end = end;
     mention.query = query;
     if (!this.#menu.isOpen) return;
     this.#menu.setQuery(query);
     const provider = this.#options.mentionProvider;
-    if (!provider) return;
+    if (!provider || (!forceSearch && !queryChanged)) return;
     const token = ++this.#mentionQueryToken;
     void Promise.resolve(provider.search(query))
       .then(items => {
