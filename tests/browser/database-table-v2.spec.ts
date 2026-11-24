@@ -165,6 +165,31 @@ test('does not fill when the handle is clicked without dragging', async ({ page 
   expect(rows[1]?.cells.name?.text).toBe('Two');
 });
 
+test('clears row-selection indicators when clicking a cell', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-row-check').first().click();
+  await expect(
+    page.locator('.nb-db-table tbody tr.is-row-selected')
+  ).toHaveCount(1);
+  await expect(page.locator('.nb-db-row-check').first()).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  await page.locator('.nb-db-cell[data-row-id="r2"][data-column-id="name"]').click();
+  await expect(
+    page.locator('.nb-db-table tbody tr.is-row-selected')
+  ).toHaveCount(0);
+  await expect(page.locator('.nb-db-row-check').first()).toHaveAttribute(
+    'aria-checked',
+    'false'
+  );
+  await page.keyboard.press('Delete');
+  await expect(
+    page.locator('.nb-db-table tbody tr[data-row-id]')
+  ).toHaveCount(3);
+});
+
 test('deletes every selected record', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
@@ -2371,6 +2396,13 @@ test('updates manual group order when dragging a row', async ({ page }) => {
   expect(
     groupProperties?.find(group => group.key === 'Todo')?.manuallyCardSort
   ).toEqual(['r1', 'r3']);
+  expect(
+    (
+      saved.blocks[0]?.props.database as {
+        rows: Array<{ id: string }>;
+      }
+    ).rows.map(row => row.id)
+  ).toEqual(['r1', 'r2', 'r3']);
 });
 
 test('preserves filtered records in manual group order', async ({ page }) => {

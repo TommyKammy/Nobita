@@ -3081,6 +3081,65 @@ export class DatabaseView {
 
   #moveRowTo(rowId: string, targetId: string, groupKey?: string): void {
     const view = this.#activeView();
+    if (view.type === 'table' && view.groupBy) {
+      if (databaseSorts(view).length > 0) return;
+      const groups = this.#groupsFor(view);
+      const group =
+        groupKey !== undefined
+          ? groups.find(item => item.key === groupKey)
+          : groups.find(item => item.rows.some(entry => entry.id === rowId));
+      if (!group?.rows.some(entry => entry.id === targetId)) return;
+      const ordered = [...group.rows];
+      const groupFrom = ordered.findIndex(entry => entry.id === rowId);
+      const groupTo = ordered.findIndex(entry => entry.id === targetId);
+      if (groupFrom < 0 || groupTo < 0 || groupFrom === groupTo) return;
+      const [moved] = ordered.splice(groupFrom, 1);
+      if (!moved) return;
+      ordered.splice(groupTo, 0, moved);
+      const settings = view.groupProperties ?? [];
+      const visibleOrder = ordered.map(entry => entry.id);
+      const visible = new Set(visibleOrder);
+      const savedOrder =
+        settings.find(item => item.key === group.key)?.manuallyCardSort ?? [];
+      const order: string[] = [];
+      let visibleIndex = 0;
+      for (const id of savedOrder) {
+        if (visible.has(id)) {
+          const nextId = visibleOrder[visibleIndex];
+          if (nextId !== undefined) {
+            order.push(nextId);
+            visibleIndex += 1;
+          }
+        } else if (!order.includes(id)) {
+          order.push(id);
+        }
+      }
+      while (visibleIndex < visibleOrder.length) {
+        const nextId = visibleOrder[visibleIndex];
+        if (nextId !== undefined) order.push(nextId);
+        visibleIndex += 1;
+      }
+      const keys = groups.map(item => item.key);
+      for (const item of settings) {
+        if (!keys.includes(item.key)) keys.push(item.key);
+      }
+      if (!keys.includes(group.key)) keys.push(group.key);
+      const byKey = new Map(settings.map(item => [item.key, item]));
+      const groupProperties = keys.map(key =>
+        key === group.key
+          ? {
+              ...(byKey.get(key) ?? {}),
+              key,
+              manuallyCardSort: order,
+            }
+          : byKey.get(key) ?? { key }
+      );
+      const views = this.#views().map(item =>
+        item.id === view.id ? { ...item, groupProperties } : item
+      );
+      this.#host.commit({ ...this.#data, views });
+      return;
+    }
     const rows = [...this.#data.rows];
     const from = rows.findIndex(row => row.id === rowId);
     const to = rows.findIndex(row => row.id === targetId);
@@ -3088,74 +3147,7 @@ export class DatabaseView {
     const [row] = rows.splice(from, 1);
     if (!row) return;
     rows.splice(to, 0, row);
-    let views = this.#data.views;
-    if (
-      view.type === 'table' &&
-      view.groupBy &&
-      databaseSorts(view).length === 0
-    ) {
-      const groups = this.#groupsFor(view);
-      const group =
-        groupKey !== undefined
-          ? groups.find(item => item.key === groupKey)
-          : groups.find(item => item.rows.some(entry => entry.id === rowId));
-      if (group?.rows.some(entry => entry.id === targetId)) {
-        const ordered = [...group.rows];
-        const groupFrom = ordered.findIndex(entry => entry.id === rowId);
-        const groupTo = ordered.findIndex(entry => entry.id === targetId);
-        if (groupFrom >= 0 && groupTo >= 0 && groupFrom !== groupTo) {
-          const [moved] = ordered.splice(groupFrom, 1);
-          if (moved) ordered.splice(groupTo, 0, moved);
-          const settings = view.groupProperties ?? [];
-          const visibleOrder = ordered.map(entry => entry.id);
-          const visible = new Set(visibleOrder);
-          const savedOrder =
-            settings.find(item => item.key === group.key)?.manuallyCardSort ??
-            [];
-          const order: string[] = [];
-          let visibleIndex = 0;
-          for (const id of savedOrder) {
-            if (visible.has(id)) {
-              const nextId = visibleOrder[visibleIndex];
-              if (nextId) {
-                order.push(nextId);
-                visibleIndex += 1;
-              }
-            } else if (!order.includes(id)) {
-              order.push(id);
-            }
-          }
-          while (visibleIndex < visibleOrder.length) {
-            const nextId = visibleOrder[visibleIndex];
-            if (nextId) order.push(nextId);
-            visibleIndex += 1;
-          }
-          const keys = this.#groupsFor(view).map(item => item.key);
-          for (const item of settings) {
-            if (!keys.includes(item.key)) keys.push(item.key);
-          }
-          if (!keys.includes(group.key)) keys.push(group.key);
-          const byKey = new Map(settings.map(item => [item.key, item]));
-          const groupProperties = keys.map(key =>
-            key === group.key
-              ? {
-                  ...(byKey.get(key) ?? {}),
-                  key,
-                  manuallyCardSort: order,
-                }
-              : byKey.get(key) ?? { key }
-          );
-          views = this.#views().map(item =>
-            item.id === view.id ? { ...item, groupProperties } : item
-          );
-        }
-      }
-    }
-    this.#host.commit({
-      ...this.#data,
-      rows,
-      ...(views && views !== this.#data.views ? { views } : {}),
-    });
+    this.#host.commit({ ...this.#data, rows });
   }
 
   #commitColumnWidth(columnId: string, width: number): void {
@@ -4351,7 +4343,7 @@ export class DatabaseView {
       ...(groupKey !== undefined ? { groupKey } : {}),
     };
     this.#selectedRows.clear();
-    this.#syncSelectionVisuals();
+    this.#syncRowSelection();
     if (!event.shiftKey) {
       this.#suppressClick = false;
       if (this.#range) {
