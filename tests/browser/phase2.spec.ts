@@ -316,3 +316,23 @@ test('closes the mention picker when the trigger is deleted', async ({ page }) =
   await expect(page.locator('.nb-menu')).toHaveCount(0);
   expect(blockById(await getDoc(page), 'b1')?.text).toBe('');
 });
+
+test('does not open the mention picker inside code blocks', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, textDoc());
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        setMentionProvider(provider: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    editor?.setMentionProvider({
+      search: () => [{ id: 'u1', label: 'Ada' }],
+    });
+    editor?.focus('code', 0);
+  });
+  await page.keyboard.type('@');
+  await expect(page.locator('.nb-menu')).toHaveCount(0);
+  expect(blockById(await getDoc(page), 'code')?.text).toContain('@');
+});

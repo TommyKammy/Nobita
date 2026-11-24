@@ -1523,6 +1523,7 @@ export class NobitaEditor implements BlockHost {
       this.#openSlashMenu(point.blockId, point.offset);
     } else if (
       text === '@' &&
+      block.type !== 'code' &&
       this.#options.mentionProvider &&
       this.#isSlashPosition(before, point.offset)
     ) {
