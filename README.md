@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **47.1 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
+- **48.6 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -30,7 +30,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Inline | Bold, italic, underline, strikethrough, inline code, links, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo |
 | Data views | Rows, typed columns (text, number, select, date, checkbox, URL), add/rename/delete, row menus, sort, Markdown table round-trip, HTML table paste/export |
-| Menus | Slash menu with fuzzy search and block actions (move/copy), block handle menu, formatting toolbar, link popover |
+| Menus | Slash menu with fuzzy search and block actions (move/copy), block handle menu, selection toolbar with Turn into / Align / format / Color, link popover |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
 | Clipboard | Rich HTML, Markdown, plain text, and a private `application/x-nobita+json` format |
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 47.1 KB bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 48.6 KB bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -283,8 +283,8 @@ Bundle sizes:
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 171.5 KB | **47.1 KB** |
-| Demo app (editor + UI + seed data) | 199.9 KB | 56.4 KB |
+| Editor ESM (`nobita.js`) | 176.9 KB | **48.6 KB** |
+| Demo app (editor + UI + seed data) | 205.3 KB | 57.9 KB |
 
 The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.
 

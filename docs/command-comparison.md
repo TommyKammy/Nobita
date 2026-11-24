@@ -2,7 +2,7 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **47.1 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **48.6 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
 > `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
@@ -117,8 +117,8 @@ in Nobita's toolbar or block menu.
 | Inline code | `Mod-E` | ✅ | — |
 | Link | `Mod-K` | ✅ | Link popover, URL normalization/sanitization |
 | Alignment | `Mod-Shift-L/E/R` | ✅ | Toolbar, slash menu, hotkeys |
-| Highlight colors | Toolbar dropdown | ✅ | 8 background colors; toggles off; HTML round-trip; Markdown drops color |
-| Text colors | Toolbar dropdown | ✅ | 8 foreground colors; default color; HTML round-trip; Markdown drops color |
+| Highlight colors | Toolbar dropdown | ✅ | Combined Color / Background menu; 8 colors; HTML round-trip; Markdown drops color |
+| Text colors | Toolbar dropdown | ✅ | Combined Color / Background menu; 8 colors; HTML round-trip; Markdown drops color |
 | Inline equation | Toolbar | ❌ | Needs a math renderer |
 | Auto-pair brackets | Type `(`, `[`, `{`, quotes | ❌ | Does not insert closing pair |
 | Backtick wraps selection in code | Select text + `` ` `` | ❌ | Inline code shortcut supports markdown only |
@@ -154,12 +154,12 @@ in Nobita's toolbar or block menu.
 
 | AFFiNE action | Nobita | Notes |
 | --- | --- | --- |
-| Turn into (text, H1–H6, lists, quote, code, callout…) | ✅ | Block menu and slash menu cover H1–H6, lists, quote, code, callout |
+| Turn into (text, H1–H6, lists, quote, code, callout, divider) | ✅ | Selection toolbar, block menu and slash menu cover the implemented block types |
 | Alignment | ✅ | Selection toolbar, slash menu, hotkeys |
 | Bold / italic / underline / strike / code / link | ✅ | Selection toolbar |
 | Inline equation | ❌ | — |
-| Highlight colors | ✅ | Selection toolbar palette; 8 colors |
-| Text colors | ✅ | Selection toolbar palette; 8 foreground colors |
+| Highlight colors | ✅ | Selection toolbar Color / Background menu; 8 colors |
+| Text colors | ✅ | Selection toolbar Color / Background menu; 8 foreground colors |
 | Create Table from selected blocks | ❌ | Convert selection to database rows |
 | Create Linked Doc | ❌ | Page-level feature |
 | Comment | ❌ | No comment model |
@@ -306,8 +306,8 @@ the editor core just for parity:
   command.
 - ✅ **Standard block Copy** in `/` and the block menu, using the same
   text/HTML/private-JSON serialization as selection copy.
-- ✅ **Highlight colors** (P1): eight-color background palette in the selection
-  toolbar, HTML `<mark>` round-trip, Markdown degradation.
+- ✅ **Highlight colors** (P1): combined Color / Background menu in the
+  selection toolbar, HTML `<mark>` round-trip, Markdown degradation.
 - ✅ **Text colors** (P1): eight-color foreground palette, default-color reset,
   HTML `<span data-nb-color>` round-trip, Markdown degradation.
 
@@ -361,6 +361,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 47.1 KB gzip. The implemented P0/P1 items added about
-6.6 KB gzip; the remaining divider/alias item should stay under ~0.5 KB. That
+The current editor is 48.6 KB gzip. The implemented P0/P1 items added about
+8.1 KB gzip; the remaining divider/alias item should stay under ~0.5 KB. That
 keeps the bundle in the mid-40s while closing the most visible interaction gaps.

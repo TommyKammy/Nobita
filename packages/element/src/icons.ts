@@ -1,6 +1,21 @@
 const wrap = (body: string): string =>
   `<svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${body}</svg>`;
 
+const filled = (body: string): string =>
+  `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" aria-hidden="true" focusable="false">${body}</svg>`;
+
+const textIcon = filled('<path fill="currentColor" fill-rule="evenodd" d="M3.25 4A.75.75 0 0 1 4 3.25h16a.75.75 0 0 1 .75.75v2.667a.75.75 0 0 1-1.5 0V4.75h-6.5v14.5H16a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1 0-1.5h3.25V4.75h-6.5v1.917a.75.75 0 0 1-1.5 0z" clip-rule="evenodd"/>');
+const boldIcon = filled('<path fill="currentColor" fill-rule="evenodd" d="M6.25 4A.75.75 0 0 1 7 3.25h5.958c2.67 0 4.875 2.105 4.875 4.75 0 1.515-.723 2.853-1.843 3.72 1.626.764 2.76 2.383 2.76 4.28 0 2.645-2.204 4.75-4.875 4.75H7a.75.75 0 0 1-.75-.75zm1.5 8.75v6.5h6.125c1.886 0 3.375-1.477 3.375-3.25s-1.49-3.25-3.375-3.25zm0-1.5h5.208c1.886 0 3.375-1.477 3.375-3.25s-1.489-3.25-3.375-3.25H7.75z" clip-rule="evenodd"/>');
+const italicIcon = filled('<path fill="currentColor" fill-rule="evenodd" d="M14.608 3.25H10.25a.75.75 0 0 0 0 1.5h3.34l-4.758 14.5H5a.75.75 0 0 0 0 1.5h8.75a.75.75 0 0 0 0-1.5h-3.34l4.758-14.5H19a.75.75 0 0 0 0-1.5h-4.392" clip-rule="evenodd"/>');
+const underlineIcon = filled('<path fill="currentColor" fill-rule="evenodd" d="M7.744 3.968a.808.808 0 1 0-1.616 0v7.003a5.656 5.656 0 1 0 11.313 0V3.968a.808.808 0 1 0-1.616 0v7.003a4.04 4.04 0 1 1-8.08 0zM4.458 19.32a.808.808 0 0 0 0 1.616h15.084a.808.808 0 1 0 0-1.616z" clip-rule="evenodd"/>');
+const strikeIcon = filled('<path fill="currentColor" fill-rule="evenodd" d="M8.406 7.464a3.468 3.468 0 0 1 6.59-1.513.77.77 0 0 0 1.385-.673 5.009 5.009 0 0 0-9.05 4.3h1.793a3.45 3.45 0 0 1-.718-2.114m6.512 8.476c0-.795-.268-1.528-.718-2.113h1.792a5.008 5.008 0 0 1-9.05 4.299.77.77 0 1 1 1.387-.673 3.468 3.468 0 0 0 6.589-1.513M4.297 10.905a.797.797 0 0 0 0 1.594h15.406a.797.797 0 0 0 0-1.594z" clip-rule="evenodd"/>');
+const codeIcon = filled('<path fill="currentColor" fill-rule="evenodd" d="M13.982 4.272a.75.75 0 0 1 .546.91l-3.6 14.4a.75.75 0 1 1-1.456-.364l3.6-14.4a.75.75 0 0 1 .91-.546M7.13 8.07a.75.75 0 0 1 0 1.06L4.06 12.2l3.07 3.07a.75.75 0 0 1-1.06 1.06l-3.6-3.6a.75.75 0 0 1 0-1.06l3.6-3.6a.75.75 0 0 1 1.06 0m9.74 0a.75.75 0 0 1 1.06 0l3.6 3.6a.75.75 0 0 1 0 1.06l-3.6 3.6a.75.75 0 1 1-1.06-1.06l3.07-3.07-3.07-3.07a.75.75 0 0 1 0-1.06" clip-rule="evenodd"/>');
+const linkIcon = filled('<path fill="currentColor" fill-rule="evenodd" d="M18.428 5.572a2.806 2.806 0 0 0-3.967 0l-.978.977a.75.75 0 0 1-1.06-1.06l.977-.978a4.305 4.305 0 1 1 6.089 6.089l-3.556 3.556a4.306 4.306 0 0 1-6.089 0 .75.75 0 0 1 1.061-1.061 2.805 2.805 0 0 0 3.968 0l3.555-3.556a2.806 2.806 0 0 0 0-3.967m-5.333 5.333a2.805 2.805 0 0 0-3.968 0l-3.555 3.556a2.806 2.806 0 0 0 3.967 3.967l.98-.979a.75.75 0 0 1 1.06 1.06l-.979.98A4.305 4.305 0 1 1 4.511 13.4l3.556-3.556a4.306 4.306 0 0 1 6.089 0 .75.75 0 0 1-1.061 1.061" clip-rule="evenodd"/>');
+const alignLeftIcon = filled('<path fill="currentColor" fill-rule="evenodd" d="M20.75 6a.75.75 0 0 0-.75-.75H5a.75.75 0 0 0 0 1.5h15a.75.75 0 0 0 .75-.75m-7 6a.75.75 0 0 0-.75-.75H5a.75.75 0 0 0 0 1.5h8a.75.75 0 0 0 .75-.75m3 6a.75.75 0 0 0-.75-.75H5a.75.75 0 0 0 0 1.5h11a.75.75 0 0 0 .75-.75" clip-rule="evenodd"/>');
+const alignCenterIcon = filled('<path fill="currentColor" fill-rule="evenodd" d="M3.75 6a.75.75 0 0 1 .75-.75h15a.75.75 0 0 1 0 1.5h-15A.75.75 0 0 1 3.75 6m3.5 6a.75.75 0 0 1 .75-.75h8a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1-.75-.75M6 17.25a.75.75 0 0 0 0 1.5h12a.75.75 0 0 0 0-1.5z" clip-rule="evenodd"/>');
+const alignRightIcon = filled('<path fill="currentColor" fill-rule="evenodd" d="M4.25 6A.75.75 0 0 1 5 5.25h15a.75.75 0 0 1 0 1.5H5A.75.75 0 0 1 4.25 6m7 6a.75.75 0 0 1 .75-.75h8a.75.75 0 0 1 0 1.5h-8a.75.75 0 0 1-.75-.75m-3 6a.75.75 0 0 1 .75-.75h11a.75.75 0 0 1 0 1.5H9a.75.75 0 0 1-.75-.75" clip-rule="evenodd"/>');
+const highlightIcon = filled('<path fill="#7C3AED" d="m5.83 16.441 2.088 2.089-1.34 1.339a.2.2 0 0 1-.18.055L3.37 19.34a.2.2 0 0 1-.103-.338z"/><path fill="#7A7A7A" fill-rule="evenodd" d="M19.01 3.638a2.86 2.86 0 0 0-3.885-.149l-7.804 6.695a2.86 2.86 0 0 0-.74 3.357l.154.337-1.058 1.058a.96.96 0 0 0 0 1.359l2.387 2.386a.96.96 0 0 0 1.359 0l1.058-1.058.336.154a2.86 2.86 0 0 0 3.358-.74l6.694-7.804a2.86 2.86 0 0 0-.148-3.884zm-2.908.99a1.36 1.36 0 0 1 1.847.07L19.66 6.41a1.36 1.36 0 0 1 .07 1.846l-5.088 5.932-4.472-4.472zM9.03 10.696l-.731.626a1.36 1.36 0 0 0-.352 1.597l.352.77c.137.3.081.665-.164.911l-1.015 1.015 1.624 1.625 1.015-1.015a.81.81 0 0 1 .911-.164l.77.351a1.36 1.36 0 0 0 1.597-.351l.627-.731z" clip-rule="evenodd"/>');
+
 const glyph = (text: string): string =>
   wrap(
     `<text x="3" y="14.5" font-size="10.5" font-weight="700" fill="currentColor" stroke="none" font-family="Inter, ui-sans-serif, system-ui, sans-serif" letter-spacing="-0.3">${text}</text>`
@@ -14,7 +29,7 @@ const lines = (dots: boolean): string => {
 };
 
 export const icon = {
-  text: wrap('<path d="M4 5h12M4 10h12M4 15h7"/>'),
+  text: textIcon,
   h1: glyph('H1'),
   h2: glyph('H2'),
   h3: glyph('H3'),
@@ -51,12 +66,12 @@ export const icon = {
   duplicate: wrap('<rect x="6.5" y="6.5" width="10" height="10" rx="2.5"/><path d="M13.5 6V5A2 2 0 0 0 11.5 3H5A2 2 0 0 0 3 5v6.5A2 2 0 0 0 5 13.5h1"/>'),
   indent: wrap('<path d="M3 5h14M9 10h8M9 15h8M3 8.5 5.5 11 3 13.5"/>'),
   outdent: wrap('<path d="M3 5h14M9 10h8M9 15h8M6 8.5 3.5 11 6 13.5"/>'),
-  bold: glyph('B'),
-  italic: glyph('I'),
-  underline: wrap('<path d="M5.5 4v5.2a4.5 4.5 0 0 0 9 0V4M4 16.5h12"/>'),
-  strike: wrap('<path d="M3.5 10h13"/><text x="5" y="8" font-size="9" font-weight="700" fill="currentColor" stroke="none">S</text>'),
-  inlineCode: wrap('<path d="m7 6.5-3.5 3.5L7 13.5M13 6.5l3.5 3.5-3.5 3.5"/>'),
-  link: wrap('<path d="M8.2 11.8 11.8 8.2M7 13l-1.2 1.2a3.2 3.2 0 0 1-4.5-4.5L4 7a3.2 3.2 0 0 1 4.5 0M13 7l1.2-1.2a3.2 3.2 0 0 1 4.5 4.5L16 13a3.2 3.2 0 0 1-4.5 0"/>'),
+  bold: boldIcon,
+  italic: italicIcon,
+  underline: underlineIcon,
+  strike: strikeIcon,
+  inlineCode: codeIcon,
+  link: linkIcon,
   check: wrap('<path d="m4 10.5 4 4L16 5.5"/>'),
   chevron: wrap('<path d="m6 8 4 4 4-4"/>'),
   search: wrap('<circle cx="8.8" cy="8.8" r="5.3"/><path d="m12.8 12.8 4 4"/>'),
@@ -82,12 +97,12 @@ export const icon = {
   rows: wrap('<rect x="2.5" y="3.5" width="15" height="13" rx="2.5"/><path d="M2.5 8h15M2.5 12h15"/>'),
   columns: wrap('<rect x="2.5" y="3.5" width="15" height="13" rx="2.5"/><path d="M8 3.5v13M12.5 3.5v13"/>'),
   trashSmall: wrap('<path d="M4 6h12M8 3.5h4M6 6l.6 9.5a1.5 1.5 0 0 0 1.5 1.4h3.8a1.5 1.5 0 0 0 1.5-1.4L14 6"/>'),
-  alignLeft: wrap('<path d="M3 4.5h14M3 8h9M3 11.5h14M3 15h8"/>'),
-  alignCenter: wrap('<path d="M3 4.5h14M5.5 8h9M3 11.5h14M6 15h8"/>'),
-  alignRight: wrap('<path d="M3 4.5h14M8 8h9M3 11.5h14M9 15h8"/>'),
+  alignLeft: alignLeftIcon,
+  alignCenter: alignCenterIcon,
+  alignRight: alignRightIcon,
   clock: wrap('<circle cx="10" cy="10" r="7"/><path d="M10 6v4.3l2.8 1.7"/>'),
-  highlight: wrap('<path d="m6.2 13.7 5.9-5.9a1.6 1.6 0 0 1 2.3 0l1.8 1.8a1.6 1.6 0 0 1 0 2.3l-5.9 5.9-4.8.9.7-4.9Z"/><path d="m11.6 8.3 3.1 3.1"/><path d="M3.5 18.5h13"/>'),
-  textColor: glyph('A'),
+  highlight: highlightIcon,
+  turnInto: textIcon,
 } as const;
 
 export type IconName = keyof typeof icon;

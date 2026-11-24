@@ -168,12 +168,13 @@ export const TURN_INTO_TYPES: readonly { type: BlockType; level?: HeadingLevel; 
   { type: 'heading', level: 4, label: 'Heading 4' },
   { type: 'heading', level: 5, label: 'Heading 5' },
   { type: 'heading', level: 6, label: 'Heading 6' },
-  { type: 'bulleted', label: 'Bulleted list' },
-  { type: 'numbered', label: 'Numbered list' },
-  { type: 'todo', label: 'To-do list' },
+  { type: 'bulleted', label: 'Bulleted List' },
+  { type: 'numbered', label: 'Numbered List' },
+  { type: 'todo', label: 'To-do List' },
   { type: 'quote', label: 'Quote' },
   { type: 'callout', label: 'Callout' },
-  { type: 'code', label: 'Code block' },
+  { type: 'code', label: 'Code Block' },
+  { type: 'divider', label: 'Divider' },
 ];
 
 /** Placeholder hint per block type, used by both renderer and menu previews. */

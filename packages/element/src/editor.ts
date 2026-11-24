@@ -257,6 +257,7 @@ export class NobitaEditor implements BlockHost {
       key => this.#toggleMark(key),
       () => this.#toggleLink(),
       align => this.#applyAlignment(align),
+      (type, level) => this.#applyTurnInto(type, level),
       color => this.#applyHighlight(color),
       color => this.#applyTextColor(color)
     );
@@ -1904,7 +1905,38 @@ export class NobitaEditor implements BlockHost {
       if (color) state.color = color;
       else delete state.color;
     }
-    this.#toolbar.show(rect, state, block.props.align ?? 'left');
+    this.#toolbar.show(
+      rect,
+      state,
+      block.props.align ?? 'left',
+      block.type,
+      block.props.level
+    );
+  }
+
+  #applyTurnInto(type: BlockType, level?: HeadingLevel): void {
+    if (this.#readonly) return;
+    const selection = this.#currentSelection() ?? this.#lastSelection;
+    if (!selection) return;
+    let ids: string[] = [];
+    if (!this.#isCollapsed(selection)) {
+      const { start, end } = this.#ordered(selection);
+      const flat = flattenBlocks(this.store.doc.blocks);
+      const startIndex = flat.findIndex(item => item.id === start.blockId);
+      const endIndex = flat.findIndex(item => item.id === end.blockId);
+      if (startIndex >= 0 && endIndex >= 0) {
+        ids = flat.slice(startIndex, endIndex + 1).map(item => item.id);
+      }
+    } else {
+      ids = [selection.focus.blockId];
+    }
+    if (ids.length === 0) return;
+    let doc = this.store.doc;
+    for (const id of ids) {
+      doc = setBlockType(doc, id, type, level ? { level } : {});
+    }
+    this.#commit(doc, selection);
+    this.#updateToolbar();
   }
 
   #applyAlignment(align: TextAlign): void {
@@ -2010,7 +2042,12 @@ export class NobitaEditor implements BlockHost {
       else next[key] = true;
       this.#pendingMarks = next;
       this.#lastSelectionKey = this.#selectionKey(selection);
-      this.#toolbar.update(next, block.props.align ?? 'left');
+      this.#toolbar.update(
+        next,
+        block.props.align ?? 'left',
+        block.type,
+        block.props.level
+      );
       this.#toolbar.hide();
       return;
     }

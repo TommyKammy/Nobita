@@ -1,5 +1,11 @@
-import { PALETTE_COLORS } from '@nobita/core';
-import type { InlineMark, PaletteColor, TextAlign } from '@nobita/core';
+import { PALETTE_COLORS, TURN_INTO_TYPES } from '@nobita/core';
+import type {
+  BlockType,
+  HeadingLevel,
+  InlineMark,
+  PaletteColor,
+  TextAlign,
+} from '@nobita/core';
 import { icon } from './icons.js';
 
 export type ToolbarMark = 'bold' | 'italic' | 'underline' | 'strike' | 'code';
@@ -12,6 +18,15 @@ const BUTTONS: readonly { key: ToolbarMark; label: string; icon: string; shortcu
   { key: 'code', label: 'Inline code', icon: icon.inlineCode, shortcut: 'E' },
 ];
 
+const INLINE_ORDER: readonly (ToolbarMark | 'link')[] = [
+  'bold',
+  'code',
+  'italic',
+  'link',
+  'strike',
+  'underline',
+];
+
 const ALIGN_BUTTONS: readonly { align: TextAlign; label: string; icon: string; shortcut: string }[] = [
   { align: 'left', label: 'Align left', icon: icon.alignLeft, shortcut: '⇧L' },
   { align: 'center', label: 'Align center', icon: icon.alignCenter, shortcut: '⇧E' },
@@ -21,83 +36,122 @@ const ALIGN_BUTTONS: readonly { align: TextAlign; label: string; icon: string; s
 const capitalize = (value: string): string =>
   value.charAt(0).toUpperCase() + value.slice(1);
 
-class ColorPalettePopover {
+function turnIntoIcon(type: BlockType, level?: HeadingLevel): string {
+  switch (type) {
+    case 'heading':
+      switch (level) {
+        case 2:
+          return icon.h2;
+        case 3:
+          return icon.h3;
+        case 4:
+          return icon.h4;
+        case 5:
+          return icon.h5;
+        case 6:
+          return icon.h6;
+        default:
+          return icon.h1;
+      }
+    case 'bulleted':
+      return icon.bulleted;
+    case 'numbered':
+      return icon.numbered;
+    case 'todo':
+      return icon.todo;
+    case 'quote':
+      return icon.quote;
+    case 'callout':
+      return icon.callout;
+    case 'code':
+      return icon.code;
+    case 'divider':
+      return icon.divider;
+    default:
+      return icon.text;
+  }
+}
+
+type ColorKind = 'color' | 'background';
+
+const COLOR_SECTIONS: readonly {
+  kind: ColorKind;
+  title: string;
+  defaultLabel: string;
+}[] = [
+  { kind: 'color', title: 'Color', defaultLabel: 'Default Color' },
+  { kind: 'background', title: 'Background', defaultLabel: 'Default Background' },
+];
+
+interface ColorEntry {
+  kind: ColorKind;
+  color: PaletteColor | null;
+  element: HTMLButtonElement;
+}
+
+class ColorPopover {
   readonly element: HTMLElement;
   onHide: (() => void) | null = null;
   #overlay: HTMLElement;
-  #kind: 'highlight' | 'text';
-  #active: PaletteColor | undefined;
-  #current: HTMLElement;
   #trigger: HTMLElement | null = null;
-  #onPick: ((color: PaletteColor | null) => void) | null = null;
-  #buttons: { color: PaletteColor | null; element: HTMLButtonElement }[] = [];
-  #focusIndex = 0;
+  #onPick: ((kind: ColorKind, color: PaletteColor | null) => void) | null = null;
+  #buttons: ColorEntry[] = [];
+  #focusIndex = -1;
   #visible = false;
 
-  constructor(overlay: HTMLElement, kind: 'highlight' | 'text') {
+  constructor(overlay: HTMLElement) {
     this.#overlay = overlay;
-    this.#kind = kind;
     this.element = document.createElement('div');
     this.element.className = 'nb-color-popover';
-    this.element.dataset.kind = kind;
     this.element.setAttribute('role', 'menu');
-    this.element.setAttribute(
-      'aria-label',
-      kind === 'highlight' ? 'Highlight color' : 'Text color'
-    );
+    this.element.setAttribute('aria-label', 'Color and highlight');
 
-    const title = document.createElement('div');
-    title.className = 'nb-color-title';
-    const label = document.createElement('span');
-    label.textContent = kind === 'highlight' ? 'Highlight' : 'Text color';
-    this.#current = document.createElement('span');
-    this.#current.className = 'nb-color-current';
-    title.append(label, this.#current);
-    this.element.append(title);
+    for (const section of COLOR_SECTIONS) {
+      const heading = document.createElement('div');
+      heading.className = 'nb-color-heading';
+      heading.textContent = section.title;
+      this.element.append(heading);
 
-    for (const color of PALETTE_COLORS) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'nb-color-swatch';
-      button.dataset.color = color;
-      button.setAttribute('role', 'menuitemradio');
-      button.setAttribute(
-        'aria-label',
-        `${color} ${kind === 'highlight' ? 'highlight' : 'text color'}`
-      );
-      button.title = capitalize(color);
-      button.style.background =
-        kind === 'highlight'
-          ? `var(--nb-hl-${color})`
-          : `var(--nb-fg-${color})`;
-      const check = document.createElement('span');
-      check.className = 'nb-color-check';
-      check.innerHTML = icon.check;
-      button.append(check);
-      button.addEventListener('pointerdown', event => event.preventDefault());
-      button.addEventListener('click', event => {
-        event.preventDefault();
-        this.#pick(color === this.#active ? null : color);
-      });
-      this.#buttons.push({ color, element: button });
-      this.element.append(button);
+      for (const color of [null, ...PALETTE_COLORS] as (PaletteColor | null)[]) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'nb-color-row';
+        button.dataset.kind = section.kind;
+        button.dataset.color = color ?? 'default';
+        button.setAttribute('role', 'menuitem');
+        button.setAttribute(
+          'aria-label',
+          color
+            ? `${capitalize(color)} ${section.kind === 'color' ? 'text color' : 'background'}`
+            : section.defaultLabel
+        );
+
+        const sample = document.createElement('span');
+        sample.className = 'nb-color-a';
+        sample.textContent = 'A';
+        sample.dataset.kind = section.kind;
+        if (color) {
+          if (section.kind === 'color') {
+            sample.style.color = `var(--nb-fg-${color})`;
+          } else {
+            sample.style.background = `var(--nb-hl-${color})`;
+          }
+        }
+
+        const label = document.createElement('span');
+        label.className = 'nb-color-label';
+        label.textContent = color ? capitalize(color) : section.defaultLabel;
+
+        button.append(sample, label);
+        button.addEventListener('pointerdown', event => event.preventDefault());
+        button.addEventListener('click', event => {
+          event.preventDefault();
+          this.#pick(section.kind, color);
+        });
+        this.#buttons.push({ kind: section.kind, color, element: button });
+        this.element.append(button);
+      }
     }
-
-    const none = document.createElement('button');
-    none.type = 'button';
-    none.className = 'nb-color-none';
-    none.dataset.color = 'none';
-    none.setAttribute('role', 'menuitemradio');
-    const noneLabel = kind === 'highlight' ? 'No highlight' : 'Default color';
-    none.setAttribute('aria-label', noneLabel);
-    none.innerHTML = `${icon.x}<span>${noneLabel}</span>`;
-    none.addEventListener('pointerdown', event => event.preventDefault());
-    none.addEventListener('click', event => {
-      event.preventDefault();
-      this.#pick(null);
-    });
-    this.#buttons.push({ color: null, element: none });
-    this.element.append(none);
   }
 
   get isVisible(): boolean {
@@ -106,14 +160,14 @@ class ColorPalettePopover {
 
   show(
     anchor: DOMRect,
-    active: PaletteColor | undefined,
     trigger: HTMLElement,
-    onPick: (color: PaletteColor | null) => void
+    onPick: (kind: ColorKind, color: PaletteColor | null) => void
   ): void {
     this.hide();
     this.#trigger = trigger;
     this.#onPick = onPick;
-    this.setActive(active);
+    this.#focusIndex = -1;
+    this.#render();
     this.#overlay.append(this.element);
     this.#visible = true;
     this.element.style.visibility = 'hidden';
@@ -133,15 +187,6 @@ class ColorPalettePopover {
     window.addEventListener('keydown', this.#onKeyDown, true);
   }
 
-  setActive(active: PaletteColor | undefined): void {
-    this.#active = active;
-    const selected = this.#buttons.findIndex(
-      entry => entry.color === (active ?? null)
-    );
-    this.#focusIndex = selected >= 0 ? selected : 0;
-    this.#render();
-  }
-
   hide(): void {
     if (!this.#visible) return;
     this.#visible = false;
@@ -154,49 +199,41 @@ class ColorPalettePopover {
   }
 
   #render(): void {
-    const selected = this.#buttons.findIndex(
-      entry => entry.color === (this.#active ?? null)
-    );
     this.#buttons.forEach((entry, index) => {
       entry.element.dataset.active = String(index === this.#focusIndex);
-      entry.element.setAttribute(
-        'aria-checked',
-        String(index === selected)
-      );
     });
-    this.#current.textContent = this.#active
-      ? capitalize(this.#active)
-      : this.#kind === 'highlight'
-        ? 'None'
-        : 'Default';
   }
 
   #moveFocus(delta: number): void {
     const count = this.#buttons.length;
     if (count === 0) return;
-    this.#focusIndex = (this.#focusIndex + delta + count) % count;
+    if (this.#focusIndex < 0) {
+      this.#focusIndex = delta > 0 ? 0 : count - 1;
+    } else {
+      this.#focusIndex = (this.#focusIndex + delta + count) % count;
+    }
     this.#render();
     this.#buttons[this.#focusIndex]?.element.scrollIntoView({
       block: 'nearest',
     });
   }
 
-  #pick(color: PaletteColor | null): void {
+  #pick(kind: ColorKind, color: PaletteColor | null): void {
     const onPick = this.#onPick;
     this.hide();
-    onPick?.(color);
+    onPick?.(kind, color);
   }
 
   #onKeyDown = (event: KeyboardEvent): void => {
     if (!this.#visible) return;
     let handled = true;
     switch (event.key) {
-      case 'ArrowRight':
       case 'ArrowDown':
+      case 'ArrowRight':
         this.#moveFocus(1);
         break;
-      case 'ArrowLeft':
       case 'ArrowUp':
+      case 'ArrowLeft':
         this.#moveFocus(-1);
         break;
       case 'Home':
@@ -209,8 +246,8 @@ class ColorPalettePopover {
         break;
       case 'Enter':
       case ' ': {
-        const color = this.#buttons[this.#focusIndex]?.color ?? null;
-        this.#pick(color === this.#active ? null : color);
+        const entry = this.#buttons[this.#focusIndex];
+        if (entry) this.#pick(entry.kind, entry.color);
         break;
       }
       case 'Escape':
@@ -235,6 +272,11 @@ class ColorPalettePopover {
   };
 }
 
+interface AlignEntry {
+  align: TextAlign;
+  element: HTMLButtonElement;
+}
+
 class AlignPopover {
   readonly element: HTMLElement;
   onHide: (() => void) | null = null;
@@ -242,7 +284,7 @@ class AlignPopover {
   #active: TextAlign = 'left';
   #trigger: HTMLElement | null = null;
   #onPick: ((align: TextAlign) => void) | null = null;
-  #buttons: { align: TextAlign; element: HTMLButtonElement }[] = [];
+  #buttons: AlignEntry[] = [];
   #focusIndex = 0;
   #visible = false;
 
@@ -397,6 +439,193 @@ class AlignPopover {
   };
 }
 
+interface TurnIntoEntry {
+  type: BlockType;
+  level: HeadingLevel | undefined;
+  element: HTMLButtonElement;
+}
+
+class TurnIntoPopover {
+  readonly element: HTMLElement;
+  onHide: (() => void) | null = null;
+  #overlay: HTMLElement;
+  #activeType: BlockType = 'paragraph';
+  #activeLevel: HeadingLevel | undefined;
+  #trigger: HTMLElement | null = null;
+  #onPick: ((type: BlockType, level?: HeadingLevel) => void) | null = null;
+  #buttons: TurnIntoEntry[] = [];
+  #focusIndex = 0;
+  #visible = false;
+
+  constructor(overlay: HTMLElement) {
+    this.#overlay = overlay;
+    this.element = document.createElement('div');
+    this.element.className = 'nb-align-popover nb-turninto-popover';
+    this.element.setAttribute('role', 'menu');
+    this.element.setAttribute('aria-label', 'Turn into');
+
+    for (const entry of TURN_INTO_TYPES) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'nb-align-item';
+      button.dataset.type = entry.type;
+      button.dataset.level = entry.level ? String(entry.level) : '';
+      button.setAttribute('role', 'menuitemradio');
+      button.setAttribute('aria-label', entry.label);
+      button.innerHTML = `<span class="nb-align-icon">${turnIntoIcon(entry.type, entry.level)}</span><span class="nb-align-label">${entry.label}</span>`;
+      const check = document.createElement('span');
+      check.className = 'nb-align-check';
+      check.innerHTML = icon.check;
+      button.append(check);
+      button.addEventListener('pointerdown', event => event.preventDefault());
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        this.#pick(entry.type, entry.level);
+      });
+      this.#buttons.push({
+        type: entry.type,
+        level: entry.level,
+        element: button,
+      });
+      this.element.append(button);
+    }
+  }
+
+  get isVisible(): boolean {
+    return this.#visible;
+  }
+
+  show(
+    anchor: DOMRect,
+    activeType: BlockType,
+    activeLevel: HeadingLevel | undefined,
+    trigger: HTMLElement,
+    onPick: (type: BlockType, level?: HeadingLevel) => void
+  ): void {
+    this.hide();
+    this.#trigger = trigger;
+    this.#onPick = onPick;
+    this.setActive(activeType, activeLevel);
+    this.#overlay.append(this.element);
+    this.#visible = true;
+    this.element.style.visibility = 'hidden';
+    const width = this.element.offsetWidth;
+    const height = this.element.offsetHeight;
+    let left = anchor.left + anchor.width / 2 - width / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    let top = anchor.bottom + 6;
+    if (top + height > window.innerHeight - 8) {
+      top = anchor.top - height - 6;
+    }
+    top = Math.max(8, top);
+    this.element.style.left = `${Math.round(left)}px`;
+    this.element.style.top = `${Math.round(top)}px`;
+    this.element.style.visibility = '';
+    window.addEventListener('pointerdown', this.#onDocPointerDown, true);
+    window.addEventListener('keydown', this.#onKeyDown, true);
+  }
+
+  setActive(type: BlockType, level?: HeadingLevel): void {
+    this.#activeType = type;
+    this.#activeLevel = level;
+    const selected = this.#buttons.findIndex(
+      entry =>
+        entry.type === type &&
+        (type !== 'heading' || (entry.level ?? 1) === (level ?? 1))
+    );
+    this.#focusIndex = selected >= 0 ? selected : 0;
+    this.#render();
+  }
+
+  hide(): void {
+    if (!this.#visible) return;
+    this.#visible = false;
+    this.element.remove();
+    this.#onPick = null;
+    this.#trigger = null;
+    window.removeEventListener('pointerdown', this.#onDocPointerDown, true);
+    window.removeEventListener('keydown', this.#onKeyDown, true);
+    this.onHide?.();
+  }
+
+  #render(): void {
+    this.#buttons.forEach((entry, index) => {
+      entry.element.dataset.active = String(index === this.#focusIndex);
+      entry.element.setAttribute(
+        'aria-checked',
+        String(
+          entry.type === this.#activeType &&
+            (entry.type !== 'heading' ||
+              (entry.level ?? 1) === (this.#activeLevel ?? 1))
+        )
+      );
+    });
+  }
+
+  #moveFocus(delta: number): void {
+    const count = this.#buttons.length;
+    if (count === 0) return;
+    this.#focusIndex = (this.#focusIndex + delta + count) % count;
+    this.#render();
+    this.#buttons[this.#focusIndex]?.element.scrollIntoView({
+      block: 'nearest',
+    });
+  }
+
+  #pick(type: BlockType, level: HeadingLevel | undefined): void {
+    const onPick = this.#onPick;
+    this.hide();
+    onPick?.(type, level);
+  }
+
+  #onKeyDown = (event: KeyboardEvent): void => {
+    if (!this.#visible) return;
+    let handled = true;
+    switch (event.key) {
+      case 'ArrowDown':
+      case 'ArrowRight':
+        this.#moveFocus(1);
+        break;
+      case 'ArrowUp':
+      case 'ArrowLeft':
+        this.#moveFocus(-1);
+        break;
+      case 'Home':
+        this.#focusIndex = 0;
+        this.#render();
+        break;
+      case 'End':
+        this.#focusIndex = this.#buttons.length - 1;
+        this.#render();
+        break;
+      case 'Enter':
+      case ' ': {
+        const entry = this.#buttons[this.#focusIndex];
+        if (entry) this.#pick(entry.type, entry.level);
+        break;
+      }
+      case 'Escape':
+        this.hide();
+        break;
+      default:
+        handled = false;
+    }
+    if (handled) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+
+  #onDocPointerDown = (event: PointerEvent): void => {
+    if (!this.#visible) return;
+    const path = event.composedPath();
+    if (path.includes(this.element) || (this.#trigger && path.includes(this.#trigger))) {
+      return;
+    }
+    this.hide();
+  };
+}
+
 export class Toolbar {
   readonly element: HTMLElement;
   #overlay: HTMLElement;
@@ -404,17 +633,18 @@ export class Toolbar {
   #onToggle: (key: ToolbarMark) => void;
   #onLink: () => void;
   #onAlign: (align: TextAlign) => void;
+  #onTurnInto: (type: BlockType, level?: HeadingLevel) => void;
   #onHighlight: (color: PaletteColor | null) => void;
   #onTextColor: (color: PaletteColor | null) => void;
-  #highlightButton: HTMLButtonElement;
-  #textColorButton: HTMLButtonElement;
+  #turnIntoButton: HTMLButtonElement;
   #alignButton: HTMLButtonElement;
-  #highlightPopover: ColorPalettePopover;
-  #textColorPopover: ColorPalettePopover;
+  #colorButton: HTMLButtonElement;
+  #turnIntoPopover: TurnIntoPopover;
   #alignPopover: AlignPopover;
-  #activeHighlight: PaletteColor | undefined;
-  #activeTextColor: PaletteColor | undefined;
+  #colorPopover: ColorPopover;
   #activeAlign: TextAlign = 'left';
+  #activeTurnIntoType: BlockType = 'paragraph';
+  #activeTurnIntoLevel: HeadingLevel | undefined;
   #visible = false;
 
   constructor(
@@ -422,6 +652,7 @@ export class Toolbar {
     onToggle: (key: ToolbarMark) => void,
     onLink: () => void,
     onAlign: (align: TextAlign) => void,
+    onTurnInto: (type: BlockType, level?: HeadingLevel) => void,
     onHighlight: (color: PaletteColor | null) => void,
     onTextColor: (color: PaletteColor | null) => void
   ) {
@@ -429,83 +660,41 @@ export class Toolbar {
     this.#onToggle = onToggle;
     this.#onLink = onLink;
     this.#onAlign = onAlign;
+    this.#onTurnInto = onTurnInto;
     this.#onHighlight = onHighlight;
     this.#onTextColor = onTextColor;
-    this.#highlightPopover = new ColorPalettePopover(overlay, 'highlight');
-    this.#textColorPopover = new ColorPalettePopover(overlay, 'text');
+    this.#turnIntoPopover = new TurnIntoPopover(overlay);
     this.#alignPopover = new AlignPopover(overlay);
+    this.#colorPopover = new ColorPopover(overlay);
     this.element = document.createElement('div');
     this.element.className = 'nb-toolbar';
     this.element.setAttribute('role', 'toolbar');
     this.element.setAttribute('aria-label', 'Text formatting');
     this.element.style.visibility = 'hidden';
 
-    for (const button of BUTTONS) {
-      const element = document.createElement('button');
-      element.type = 'button';
-      element.className = 'nb-tool';
-      element.dataset.key = button.key;
-      element.setAttribute('aria-label', `${button.label} (${button.shortcut})`);
-      element.title = `${button.label} · ${button.shortcut}`;
-      element.innerHTML = button.icon;
-      element.addEventListener('pointerdown', event => event.preventDefault());
-      element.addEventListener('click', event => {
-        event.preventDefault();
-        this.#onToggle(button.key);
-      });
-      this.#buttons.set(button.key, element);
-      this.element.append(element);
-    }
-
-    const highlight = document.createElement('button');
-    highlight.type = 'button';
-    highlight.className =
-      'nb-tool nb-tool-dropdown nb-tool-swatch nb-tool-highlight';
-    highlight.dataset.key = 'highlight';
-    highlight.setAttribute('aria-label', 'Highlight color');
-    highlight.setAttribute('aria-haspopup', 'menu');
-    highlight.setAttribute('aria-expanded', 'false');
-    highlight.title = 'Highlight color';
-    highlight.innerHTML = `${icon.highlight}<span class="nb-chev">${icon.chevron}</span>`;
-    highlight.addEventListener('pointerdown', event => event.preventDefault());
-    highlight.addEventListener('click', event => {
+    const turnInto = document.createElement('button');
+    turnInto.type = 'button';
+    turnInto.className = 'nb-tool nb-tool-dropdown';
+    turnInto.dataset.key = 'turn-into';
+    turnInto.setAttribute('aria-label', 'Turn into');
+    turnInto.setAttribute('aria-haspopup', 'menu');
+    turnInto.setAttribute('aria-expanded', 'false');
+    turnInto.title = 'Turn into';
+    turnInto.innerHTML = `${icon.turnInto}<span class="nb-chev">${icon.chevron}</span>`;
+    turnInto.addEventListener('pointerdown', event => event.preventDefault());
+    turnInto.addEventListener('click', event => {
       event.preventDefault();
-      this.#togglePalette('highlight');
+      this.#toggleTurnInto();
     });
-    this.#highlightButton = highlight;
-    this.#highlightPopover.onHide = () => {
-      this.#highlightButton.setAttribute('aria-expanded', 'false');
+    this.#turnIntoButton = turnInto;
+    this.#turnIntoPopover.onHide = () => {
+      this.#turnIntoButton.setAttribute('aria-expanded', 'false');
     };
-    this.element.append(highlight);
-
-    const textColor = document.createElement('button');
-    textColor.type = 'button';
-    textColor.className =
-      'nb-tool nb-tool-dropdown nb-tool-swatch nb-tool-text-color';
-    textColor.dataset.key = 'text-color';
-    textColor.setAttribute('aria-label', 'Text color');
-    textColor.setAttribute('aria-haspopup', 'menu');
-    textColor.setAttribute('aria-expanded', 'false');
-    textColor.title = 'Text color';
-    textColor.innerHTML = `${icon.textColor}<span class="nb-chev">${icon.chevron}</span>`;
-    textColor.addEventListener('pointerdown', event => event.preventDefault());
-    textColor.addEventListener('click', event => {
-      event.preventDefault();
-      this.#togglePalette('text');
-    });
-    this.#textColorButton = textColor;
-    this.#textColorPopover.onHide = () => {
-      this.#textColorButton.setAttribute('aria-expanded', 'false');
-    };
-    this.element.append(textColor);
-
-    const separator = document.createElement('div');
-    separator.className = 'nb-tool-sep';
-    this.element.append(separator);
+    this.element.append(turnInto);
 
     const align = document.createElement('button');
     align.type = 'button';
-    align.className = 'nb-tool nb-tool-dropdown';
+    align.className = 'nb-tool nb-tool-dropdown nb-tool-group-start';
     align.dataset.key = 'align';
     align.setAttribute('aria-label', 'Alignment');
     align.setAttribute('aria-haspopup', 'menu');
@@ -523,23 +712,61 @@ export class Toolbar {
     };
     this.element.append(align);
 
-    const alignSeparator = document.createElement('div');
-    alignSeparator.className = 'nb-tool-sep';
-    this.element.append(alignSeparator);
+    for (const key of INLINE_ORDER) {
+      if (key === 'link') {
+        const link = document.createElement('button');
+        link.type = 'button';
+        link.className = 'nb-tool';
+        link.dataset.key = 'link';
+        link.setAttribute('aria-label', 'Add link');
+        link.title = 'Link · K';
+        link.innerHTML = icon.link;
+        link.addEventListener('pointerdown', event => event.preventDefault());
+        link.addEventListener('click', event => {
+          event.preventDefault();
+          this.#onLink();
+        });
+        this.element.append(link);
+        continue;
+      }
+      const button = BUTTONS.find(item => item.key === key);
+      if (!button) continue;
+      const element = document.createElement('button');
+      element.type = 'button';
+      element.className =
+        key === 'bold' ? 'nb-tool nb-tool-group-start' : 'nb-tool';
+      element.dataset.key = button.key;
+      element.setAttribute('aria-label', `${button.label} (${button.shortcut})`);
+      element.title = `${button.label} · ${button.shortcut}`;
+      element.innerHTML = button.icon;
+      element.addEventListener('pointerdown', event => event.preventDefault());
+      element.addEventListener('click', event => {
+        event.preventDefault();
+        this.#onToggle(button.key);
+      });
+      this.#buttons.set(button.key, element);
+      this.element.append(element);
+    }
 
-    const link = document.createElement('button');
-    link.type = 'button';
-    link.className = 'nb-tool';
-    link.dataset.key = 'link';
-    link.setAttribute('aria-label', 'Add link');
-    link.title = 'Link · K';
-    link.innerHTML = icon.link;
-    link.addEventListener('pointerdown', event => event.preventDefault());
-    link.addEventListener('click', event => {
+    const color = document.createElement('button');
+    color.type = 'button';
+    color.className = 'nb-tool nb-tool-dropdown nb-tool-group-start';
+    color.dataset.key = 'color';
+    color.setAttribute('aria-label', 'Highlight');
+    color.setAttribute('aria-haspopup', 'menu');
+    color.setAttribute('aria-expanded', 'false');
+    color.title = 'Highlight';
+    color.innerHTML = `${icon.highlight}<span class="nb-chev">${icon.chevron}</span>`;
+    color.addEventListener('pointerdown', event => event.preventDefault());
+    color.addEventListener('click', event => {
       event.preventDefault();
-      this.#onLink();
+      this.#toggleColor();
     });
-    this.element.append(link);
+    this.#colorButton = color;
+    this.#colorPopover.onHide = () => {
+      this.#colorButton.setAttribute('aria-expanded', 'false');
+    };
+    this.element.append(color);
   }
 
   get isVisible(): boolean {
@@ -547,28 +774,25 @@ export class Toolbar {
   }
 
   #closePopovers(): void {
-    this.#highlightPopover.hide();
-    this.#textColorPopover.hide();
+    this.#turnIntoPopover.hide();
     this.#alignPopover.hide();
+    this.#colorPopover.hide();
   }
 
-  #togglePalette(kind: 'highlight' | 'text'): void {
-    const button =
-      kind === 'highlight' ? this.#highlightButton : this.#textColorButton;
-    const popover =
-      kind === 'highlight' ? this.#highlightPopover : this.#textColorPopover;
-    if (popover.isVisible) {
-      popover.hide();
+  #toggleTurnInto(): void {
+    if (this.#turnIntoPopover.isVisible) {
+      this.#turnIntoPopover.hide();
       return;
     }
     this.#closePopovers();
-    const active =
-      kind === 'highlight' ? this.#activeHighlight : this.#activeTextColor;
-    popover.show(button.getBoundingClientRect(), active, button, color => {
-      if (kind === 'highlight') this.#onHighlight(color);
-      else this.#onTextColor(color);
-    });
-    button.setAttribute('aria-expanded', 'true');
+    this.#turnIntoPopover.show(
+      this.#turnIntoButton.getBoundingClientRect(),
+      this.#activeTurnIntoType,
+      this.#activeTurnIntoLevel,
+      this.#turnIntoButton,
+      (type, level) => this.#onTurnInto(type, level)
+    );
+    this.#turnIntoButton.setAttribute('aria-expanded', 'true');
   }
 
   #toggleAlign(): void {
@@ -586,6 +810,23 @@ export class Toolbar {
     this.#alignButton.setAttribute('aria-expanded', 'true');
   }
 
+  #toggleColor(): void {
+    if (this.#colorPopover.isVisible) {
+      this.#colorPopover.hide();
+      return;
+    }
+    this.#closePopovers();
+    this.#colorPopover.show(
+      this.#colorButton.getBoundingClientRect(),
+      this.#colorButton,
+      (kind, color) => {
+        if (kind === 'color') this.#onTextColor(color);
+        else this.#onHighlight(color);
+      }
+    );
+    this.#colorButton.setAttribute('aria-expanded', 'true');
+  }
+
   #setAlignIcon(align: TextAlign): void {
     const markup =
       align === 'center'
@@ -600,26 +841,18 @@ export class Toolbar {
     );
   }
 
-  #updateSwatch(
-    button: HTMLButtonElement,
-    color: PaletteColor | undefined,
-    prefix: 'hl' | 'fg'
+  show(
+    rect: DOMRect,
+    state: InlineMark,
+    align: TextAlign = 'left',
+    blockType: BlockType = 'paragraph',
+    level?: HeadingLevel
   ): void {
-    button.dataset.active = String(Boolean(color));
-    button.setAttribute('aria-pressed', String(Boolean(color)));
-    button.dataset.color = color ?? 'none';
-    button.style.setProperty(
-      '--nb-tool-active',
-      color ? `var(--nb-${prefix}-${color})` : 'transparent'
-    );
-  }
-
-  show(rect: DOMRect, state: InlineMark, align: TextAlign = 'left'): void {
     if (!this.#visible) {
       this.#overlay.append(this.element);
       this.#visible = true;
     }
-    this.update(state, align);
+    this.update(state, align, blockType, level);
     this.element.style.visibility = 'hidden';
     const width = this.element.offsetWidth;
     const height = this.element.offsetHeight;
@@ -632,22 +865,24 @@ export class Toolbar {
     this.element.style.visibility = '';
   }
 
-  update(state: InlineMark, align: TextAlign = 'left'): void {
+  update(
+    state: InlineMark,
+    align: TextAlign = 'left',
+    blockType: BlockType = 'paragraph',
+    level?: HeadingLevel
+  ): void {
     for (const [key, button] of this.#buttons) {
       button.dataset.active = String(state[key] === true);
       button.setAttribute('aria-pressed', String(state[key] === true));
     }
     const link = this.element.querySelector<HTMLElement>('[data-key="link"]');
     if (link) link.dataset.active = String(Boolean(state.link));
-    this.#activeHighlight = state.highlight;
-    this.#activeTextColor = state.color;
-    this.#updateSwatch(this.#highlightButton, state.highlight, 'hl');
-    this.#updateSwatch(this.#textColorButton, state.color, 'fg');
-    this.#highlightPopover.setActive(state.highlight);
-    this.#textColorPopover.setActive(state.color);
     this.#activeAlign = align;
     this.#setAlignIcon(align);
     this.#alignPopover.setActive(align);
+    this.#activeTurnIntoType = blockType;
+    this.#activeTurnIntoLevel = level;
+    this.#turnIntoPopover.setActive(blockType, level);
   }
 
   hide(): void {

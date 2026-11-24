@@ -102,7 +102,8 @@ export class BlockView {
     this.block = block;
     this.#context = context;
 
-    if (force || previous.type !== block.type) {
+    const rebuild = force || previous.type !== block.type;
+    if (rebuild) {
       this.#buildContent(block);
     }
 
@@ -127,7 +128,7 @@ export class BlockView {
     }
 
     if (this.#text) {
-      if (force || previous.text !== block.text) {
+      if (rebuild || previous.text !== block.text) {
         this.#renderRuns();
       }
     }
