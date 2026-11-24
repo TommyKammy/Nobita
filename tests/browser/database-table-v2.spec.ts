@@ -461,6 +461,123 @@ test('reads the current numeric value when refocusing a cell', async ({ page }) 
   await expect(detailScore).toHaveValue('30');
 });
 
+test('preserves implicit currency precision on column actions', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'currency-precision',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'price',
+                name: 'Price',
+                type: 'number',
+                data: { format: 'currency' },
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { name: { text: 'One' }, price: { text: '12.34' } },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'price', width: 160 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  const price = page.locator('.nb-db-cell[data-column-id="price"] input');
+  await expect(price).toHaveValue('$12.34');
+  await page.locator('.nb-db-th[data-column-id="price"] .nb-db-col-head').click();
+  await page
+    .locator('.nb-db-column-popover')
+    .getByRole('button', { name: 'Done', exact: true })
+    .click();
+  await expect(price).toHaveValue('$12.34');
+  const doc = await getDoc(page);
+  const column = (
+    doc.blocks[0]?.props.database as {
+      columns: Array<{ id: string; data?: { decimal?: number } }>;
+    }
+  ).columns.find(item => item.id === 'price');
+  expect(column?.data?.decimal).toBeUndefined();
+});
+
+test('keeps column width changes local to the active view', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const database = doc.blocks[0]?.props.database as {
+    views: Array<Record<string, unknown>>;
+  };
+  database.views.push({
+    id: 'v2',
+    name: 'Table 2',
+    type: 'table',
+    filters: [],
+    columns: [
+      { id: 'name', width: 200 },
+      { id: 'status', width: 180 },
+      { id: 'done', width: 120 },
+    ],
+  });
+  await setDoc(page, doc);
+  await page.locator('.nb-db-add-column').click();
+  await page.keyboard.press('Escape');
+  let saved = await getDoc(page);
+  let data = saved.blocks[0]?.props.database as {
+    columns: Array<{ id: string }>;
+    views: Array<{ columns?: Array<{ id: string; width: number }> }>;
+  };
+  const added = data.columns[data.columns.length - 1]!;
+  expect(
+    data.views[0]?.columns?.find(item => item.id === added.id)?.width
+  ).toBe(180);
+  expect(
+    data.views[1]?.columns?.find(item => item.id === added.id)?.width
+  ).toBe(180);
+  const resizer = page.locator(
+    `.nb-db-th[data-column-id="${added.id}"] .nb-db-resizer`
+  );
+  const box = await resizer.boundingBox();
+  if (!box) throw new Error('Missing resizer');
+  await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 82, box.y + box.height / 2);
+  await page.mouse.up();
+  saved = await getDoc(page);
+  data = saved.blocks[0]?.props.database as typeof data;
+  expect(
+    data.views[0]?.columns?.find(item => item.id === added.id)?.width
+  ).toBeGreaterThan(180);
+  expect(
+    data.views[1]?.columns?.find(item => item.id === added.id)?.width
+  ).toBe(180);
+});
+
 test('synchronizes the detail panel after an external undo', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
@@ -681,6 +798,84 @@ test('keeps row actions when the title column is hidden', async ({ page }) => {
   await page.locator('.nb-db-row-expand').first().click();
   await expect(page.locator('.nb-db-detail')).toBeVisible();
   await expect(page.locator('.nb-db-detail-title')).toHaveValue('One');
+});
+
+test('synchronizes a focused detail text field after undo', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'detail-text-undo',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              { id: 'note', name: 'Note', type: 'text' },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { name: { text: 'One' }, note: { text: 'Hello' } },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'note', width: 200 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  const note = page.locator(
+    '.nb-db-detail-field[data-column-id="note"] .nb-db-detail-text'
+  );
+  await note.click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const element = root?.querySelector<HTMLElement>(
+      '.nb-db-detail-field[data-column-id="note"] .nb-db-detail-text'
+    );
+    if (!element) return;
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  });
+  await page.keyboard.type('World');
+  await expect(note).toHaveText('World');
+  await page.keyboard.press('Control+z');
+  await expect(note).toHaveText('Hello');
+  await page.keyboard.type('!');
+  await expect(note).toHaveText('Hello!');
+  const doc = await getDoc(page);
+  expect(
+    (
+      doc.blocks[0]?.props.database as {
+        rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+      }
+    ).rows[0]?.cells.note?.text
+  ).toBe('Hello!');
 });
 
 test('undoes detail edits from the detail panel', async ({ page }) => {

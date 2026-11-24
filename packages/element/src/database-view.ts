@@ -264,8 +264,72 @@ function placeCaret(element: HTMLElement, at: 'start' | 'end'): void {
   selection.addRange(range);
 }
 
-function caretAtBoundary(element: HTMLElement, side: 'start' | 'end'): boolean {
-  const root = element.getRootNode() as ShadowRoot;
+function selectionOffsets(
+  element: HTMLElement
+): { start: number; end: number } | null {
+  const selection = nativeSelection(element.getRootNode() as ShadowRoot);
+  if (!selection || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  if (
+    !element.contains(range.startContainer) ||
+    !element.contains(range.endContainer)
+  ) {
+    return null;
+  }
+  const startRange = document.createRange();
+  startRange.selectNodeContents(element);
+  startRange.setEnd(range.startContainer, range.startOffset);
+  const endRange = document.createRange();
+  endRange.selectNodeContents(element);
+  endRange.setEnd(range.endContainer, range.endOffset);
+  return {
+    start: startRange.toString().length,
+    end: endRange.toString().length,
+  };
+}
+
+function setSelectionOffsets(
+  element: HTMLElement,
+  start: number,
+  end: number
+): void {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let offset = 0;
+  let startNode: Node | null = null;
+  let startOffset = 0;
+  let endNode: Node | null = null;
+  let endOffset = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const length = node.textContent?.length ?? 0;
+    if (!startNode && start <= offset + length) {
+      startNode = node;
+      startOffset = start - offset;
+    }
+    if (!endNode && end <= offset + length) {
+      endNode = node;
+      endOffset = end - offset;
+    }
+    if (startNode && endNode) break;
+    offset += length;
+  }
+  if (!startNode) {
+    startNode = element;
+    startOffset = element.childNodes.length;
+  }
+  if (!endNode) {
+    endNode = element;
+    endOffset = element.childNodes.length;
+  }
+  const range = document.createRange();
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endOffset);
+  const selection = nativeSelection(element.getRootNode() as ShadowRoot);
+  if (!selection) return;
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function caretAtBoundary(element: HTMLElement, side: 'start' | 'end'): boolean {  const root = element.getRootNode() as ShadowRoot;
   const selection = nativeSelection(root);
   if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return false;
   const range = selection.getRangeAt(0);
@@ -3087,12 +3151,14 @@ export class DatabaseView {
       Math.min(MAX_DATABASE_COLUMN_WIDTH, Math.round(width))
     );
     const view = this.#activeView();
-    const viewColumns = this.#viewColumns(view).map(item =>
-      item.id === columnId ? { ...item, width: value } : item
-    );
-    const views = this.#views().map(item =>
-      item.id === view.id ? { ...item, columns: viewColumns } : item
-    );
+    const views = this.#views().map(item => {
+      const columns = this.#viewColumns(item).map(column =>
+        item.id === view.id && column.id === columnId
+          ? { ...column, width: value }
+          : column
+      );
+      return { ...item, columns };
+    });
     this.#host.commit({
       ...this.#data,
       columns: this.#data.columns.map(item =>
@@ -3135,17 +3201,16 @@ export class DatabaseView {
       };
     });
     const view = this.#activeView();
-    const viewColumns = this.#viewColumns(view);
-    const viewIndex = viewColumns.findIndex(item => item.id === columnId);
-    if (viewIndex >= 0) {
-      viewColumns.splice(viewIndex + 1, 0, {
-        ...(viewColumns[viewIndex] ?? { id: column.id, width: 180 }),
+    const views = this.#views().map(item => {
+      const columns = this.#viewColumns(item);
+      const index = columns.findIndex(entry => entry.id === columnId);
+      if (index < 0) return item;
+      columns.splice(index + 1, 0, {
+        ...(columns[index] ?? { id: column.id, width: 180 }),
         id: column.id,
       });
-    }
-    const views = this.#views().map(item =>
-      item.id === view.id ? { ...item, columns: viewColumns } : item
-    );
+      return { ...item, columns };
+    });
     this.#host.commit({
       ...this.#data,
       columns,
@@ -3373,8 +3438,21 @@ export class DatabaseView {
         continue;
       }
       const text = field.querySelector<HTMLElement>('.nb-db-detail-text');
-      if (text && !text.matches(':focus') && text.textContent !== (cell?.text ?? '')) {
-        text.textContent = cell?.text ?? '';
+      const textValue = cell?.text ?? '';
+      if (text && text.textContent !== textValue) {
+        if (text.matches(':focus')) {
+          const offsets = selectionOffsets(text);
+          text.textContent = textValue;
+          if (offsets) {
+            setSelectionOffsets(
+              text,
+              Math.min(offsets.start, textValue.length),
+              Math.min(offsets.end, textValue.length)
+            );
+          }
+        } else {
+          text.textContent = textValue;
+        }
       }
     }
   }
@@ -3805,13 +3883,12 @@ export class DatabaseView {
       type
     );
     const view = this.#activeView();
-    const viewColumns = [
-      ...this.#viewColumns(view),
-      { id: column.id, width: 180 },
-    ];
-    const views = this.#views().map(item =>
-      item.id === view.id ? { ...item, columns: viewColumns } : item
-    );
+    const views = this.#views().map(item => {
+      const columns = this.#viewColumns(item);
+      return columns.some(entry => entry.id === column.id)
+        ? item
+        : { ...item, columns: [...columns, { id: column.id, width: 180 }] };
+    });
     this.#host.commit({
       ...this.#data,
       columns: [...this.#data.columns, column],
@@ -5078,8 +5155,27 @@ export class DatabaseView {
     decimals.min = '0';
     decimals.max = '6';
     decimals.step = '1';
-    decimals.value = String(column.data?.decimal ?? 0);
+    const defaultDecimals =
+      typeof column.data?.decimal === 'number'
+        ? column.data.decimal
+        : column.data?.format === 'currency'
+          ? 2
+          : 0;
+    decimals.value = String(defaultDecimals);
+    let decimalTouched = false;
+    decimals.addEventListener('input', () => {
+      decimalTouched = true;
+    });
     decimals.setAttribute('aria-label', 'Decimal places');
+    const decimalPatch = (): { decimal?: number } =>
+      decimalTouched || typeof column.data?.decimal === 'number'
+        ? {
+            decimal: Math.max(
+              0,
+              Math.min(6, Math.round(Number(decimals.value) || 0))
+            ),
+          }
+        : {};
     numberField.append(numberLabel, formatSelect, decimals);
     numberField.style.display = column.type === 'number' ? '' : 'none';
 
@@ -5113,10 +5209,7 @@ export class DatabaseView {
                   data: {
                     ...(item.data ?? {}),
                     format: formatSelect.value,
-                    decimal: Math.max(
-                      0,
-                      Math.min(6, Math.round(Number(decimals.value) || 0))
-                    ),
+                    ...decimalPatch(),
                   },
                 }
               : item
@@ -5191,7 +5284,7 @@ export class DatabaseView {
         const data = {
           ...(column.data ?? {}),
           format: formatSelect.value,
-          decimal: Math.max(0, Math.min(6, Math.round(Number(decimals.value) || 0))),
+          ...decimalPatch(),
         };
         this.#host.commit({
           ...this.#data,
