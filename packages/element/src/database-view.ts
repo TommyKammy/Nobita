@@ -4138,7 +4138,7 @@ export class DatabaseView {
   /** ---- navigation ---- */
 
   #rows(): DatabaseRow[] {
-    return this.#renderedRows(this.#activeView());
+    return this.#navigationRows(this.#activeView());
   }
 
   #renderedRows(view: DatabaseViewConfig = this.#activeView()): DatabaseRow[] {
