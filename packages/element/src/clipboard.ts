@@ -10,6 +10,7 @@ import {
   markdownToBlocks,
   normalizeRuns,
   parseDoc,
+  TEXT_COLOR_RGB_REFERENCES,
 } from '@nobita/core';
 import type {
   Block,
@@ -69,25 +70,6 @@ const TEXT_COLOR_BY_NAME: Record<string, TextColor> = {
   gray: 'grey',
 };
 
-const TEXT_COLOR_REFS: { color: TextColor; rgb: [number, number, number] }[] = [
-  { color: 'red', rgb: [185, 28, 28] },
-  { color: 'red', rgb: [248, 113, 113] },
-  { color: 'orange', rgb: [194, 65, 12] },
-  { color: 'orange', rgb: [251, 146, 60] },
-  { color: 'yellow', rgb: [161, 98, 7] },
-  { color: 'yellow', rgb: [250, 204, 21] },
-  { color: 'green', rgb: [21, 128, 61] },
-  { color: 'green', rgb: [74, 222, 128] },
-  { color: 'teal', rgb: [15, 118, 110] },
-  { color: 'teal', rgb: [45, 212, 191] },
-  { color: 'blue', rgb: [29, 78, 216] },
-  { color: 'blue', rgb: [96, 165, 250] },
-  { color: 'purple', rgb: [126, 34, 206] },
-  { color: 'purple', rgb: [192, 132, 252] },
-  { color: 'grey', rgb: [107, 114, 128] },
-  { color: 'grey', rgb: [156, 163, 175] },
-];
-
 function parseCssColor(value: string): [number, number, number] | null {
   const input = value.trim().toLowerCase();
   if (input.startsWith('#')) {
@@ -126,7 +108,7 @@ function nearestTextColor(
   rgb: [number, number, number]
 ): TextColor | undefined {
   let best: { color: TextColor; distance: number } | undefined;
-  for (const reference of TEXT_COLOR_REFS) {
+  for (const reference of TEXT_COLOR_RGB_REFERENCES) {
     const distance = Math.hypot(
       rgb[0] - reference.rgb[0],
       rgb[1] - reference.rgb[1],

@@ -1,7 +1,6 @@
 import { createBlock, createDoc } from './doc.js';
 import { cloneDatabaseData, databaseCellDisplay, normalizeDatabaseData, sortedDatabaseRows } from './database.js';
-import { normalizeRuns, runsToHtml } from './text.js';
-import { isHighlightColor, isTextColor } from './types.js';
+import { normalizeMark, normalizeRuns, runsToHtml } from './text.js';
 import type {
   Block,
   BlockProps,
@@ -35,21 +34,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const asString = (value: unknown, fallback = ''): string =>
   typeof value === 'string' ? value : fallback;
 
-const asBoolean = (value: unknown, fallback = false): boolean =>
-  typeof value === 'boolean' ? value : fallback;
-
 function parseMark(value: unknown): InlineMark | undefined {
   if (!isRecord(value)) return undefined;
-  const mark: InlineMark = {};
-  if (value.bold === true) mark.bold = true;
-  if (value.italic === true) mark.italic = true;
-  if (value.underline === true) mark.underline = true;
-  if (value.strike === true) mark.strike = true;
-  if (value.code === true) mark.code = true;
-  if (isTextColor(value.color)) mark.color = value.color;
-  if (isHighlightColor(value.highlight)) mark.highlight = value.highlight;
-  if (typeof value.link === 'string' && value.link.length > 0) mark.link = value.link;
-  return Object.keys(mark).length === 0 ? undefined : mark;
+  return normalizeMark(value as unknown as InlineMark);
 }
 
 function parseRuns(value: unknown): InlineRun[] {

@@ -85,7 +85,6 @@ export class DatabaseView {
   #cells = new Map<string, CellNodes>();
   #active: { rowId: string; columnId: string } | null = null;
   #pendingFocus: { rowId: string; columnId: string; at: 'start' | 'end' } | null = null;
-  #popover: HTMLElement | null = null;
   #popoverCleanup: (() => void) | null = null;
   #countElement: HTMLElement | null = null;
 
@@ -835,7 +834,6 @@ export class DatabaseView {
     document.addEventListener('pointerdown', onPointer, true);
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('scroll', onScroll, true);
-    this.#popover = popover;
     this.#popoverCleanup = () => {
       document.removeEventListener('pointerdown', onPointer, true);
       window.removeEventListener('keydown', onKey, true);
@@ -847,7 +845,6 @@ export class DatabaseView {
   #closePopover(): void {
     const cleanup = this.#popoverCleanup;
     this.#popoverCleanup = null;
-    this.#popover = null;
     cleanup?.();
   }
 

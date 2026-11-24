@@ -72,10 +72,6 @@ export type PaletteColor = (typeof PALETTE_COLORS)[number];
 export type HighlightColor = PaletteColor;
 export type TextColor = PaletteColor;
 
-/** The highlight and text-color palettes share the same eight names. */
-export const HIGHLIGHT_COLORS = PALETTE_COLORS;
-export const TEXT_COLORS = PALETTE_COLORS;
-
 export function isHighlightColor(value: unknown): value is PaletteColor {
   return (
     typeof value === 'string' &&
@@ -99,7 +95,15 @@ export interface InlineMark {
 export type MarkKey = keyof InlineMark;
 
 /** Marks that are simple on/off toggles. */
-export type BooleanMarkKey = 'bold' | 'italic' | 'underline' | 'strike' | 'code';
+export const BOOLEAN_MARK_KEYS = [
+  'bold',
+  'italic',
+  'underline',
+  'strike',
+  'code',
+] as const;
+
+export type BooleanMarkKey = (typeof BOOLEAN_MARK_KEYS)[number];
 
 /** A run of text sharing one set of marks. */
 export interface InlineRun {

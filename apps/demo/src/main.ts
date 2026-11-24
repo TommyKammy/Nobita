@@ -4,6 +4,7 @@ import {
   icon,
   type NobitaTheme,
 } from '@nobita/element';
+import { demoIcon } from './icons';
 import {
   blocksToMarkdown,
   cloneDoc,
@@ -38,14 +39,14 @@ app.innerHTML = `
         <span class="brand-tag">beta</span>
       </div>
       <button class="search-trigger" id="search-trigger" aria-label="Search pages">
-        ${icon.search}<span>Search</span><kbd>⌘K</kbd>
+        ${demoIcon.search}<span>Search</span><kbd>⌘K</kbd>
       </button>
       <nav class="nav-list" aria-label="Views">
         <button class="nav-item" data-view="all" data-active="true">
-          ${icon.file}<span>All docs</span><span class="count" id="doc-count">0</span>
+          ${demoIcon.file}<span>All docs</span><span class="count" id="doc-count">0</span>
         </button>
         <button class="nav-item" data-view="favorites">
-          ${icon.star}<span>Favorites</span>
+          ${demoIcon.star}<span>Favorites</span>
         </button>
       </nav>
       <div class="sidebar-scroll">
@@ -56,7 +57,7 @@ app.innerHTML = `
         <div id="page-tree"></div>
       </div>
       <div class="sidebar-foot">
-        <button class="foot-btn" id="theme-toggle">${icon.moon}<span>Dark mode</span></button>
+        <button class="foot-btn" id="theme-toggle">${demoIcon.moon}<span>Dark mode</span></button>
         <span class="version">v0.1</span>
       </div>
     </aside>
@@ -68,14 +69,14 @@ app.innerHTML = `
         <span class="save-status" id="save-status" data-state="saved">
           <span class="save-dot"></span><span id="save-text">Saved</span>
         </span>
-        <button class="icon-btn" id="favorite" aria-label="Toggle favorite" title="Favorite">${icon.star}</button>
+        <button class="icon-btn" id="favorite" aria-label="Toggle favorite" title="Favorite">${demoIcon.star}</button>
         <button class="icon-btn" id="page-menu" aria-label="Page actions" title="Page actions">${icon.more}</button>
-        <button class="share-btn" id="embed-btn" title="Embed this editor">${icon.external}<span>Embed</span></button>
+        <button class="share-btn" id="embed-btn" title="Embed this editor">${demoIcon.external}<span>Embed</span></button>
       </header>
       <div class="editor-scroll" id="editor-scroll">
         <div id="editor-host"></div>
         <div class="empty-state" id="empty-state" hidden>
-          <div class="empty-icon">${icon.file}</div>
+          <div class="empty-icon">${demoIcon.file}</div>
           <h2>No page open</h2>
           <p>Choose a page from the sidebar, or start something new. Nobita keeps every document as plain JSON.</p>
           <button class="primary-btn" id="empty-new">New page</button>
@@ -167,7 +168,7 @@ function iconFor(record: PageRecord): string {
     span.textContent = record.doc.icon;
     return span.outerHTML;
   }
-  return icon.file;
+  return demoIcon.file;
 }
 
 /* ---------------- editor ---------------- */
@@ -543,7 +544,7 @@ function openPageMenu(id: string, anchor: HTMLElement): void {
   showPopup(anchor, [
     { label: 'Duplicate', icon: icon.duplicate, action: () => duplicatePage(id) },
     { label: 'Export Markdown', icon: icon.copy, action: () => exportMarkdown(id) },
-    { label: 'Export JSON', icon: icon.file, action: () => exportJSON(id) },
+    { label: 'Export JSON', icon: demoIcon.file, action: () => exportJSON(id) },
     { separator: true },
     { label: 'Delete', icon: icon.trash, danger: true, action: () => deletePage(id) },
   ]);
@@ -561,7 +562,7 @@ function topbarMenu(): void {
     } },
     { label: 'Duplicate', icon: icon.duplicate, action: () => duplicatePage(id) },
     { label: 'Export Markdown', icon: icon.copy, action: () => exportMarkdown(id) },
-    { label: 'Export JSON', icon: icon.file, action: () => exportJSON(id) },
+    { label: 'Export JSON', icon: demoIcon.file, action: () => exportJSON(id) },
     { separator: true },
     { label: 'Delete page', icon: icon.trash, danger: true, action: () => deletePage(id) },
   ]);
@@ -641,7 +642,7 @@ function openSearch(): void {
   backdrop.innerHTML = `
     <div class="palette" role="dialog" aria-modal="true" aria-label="Search pages">
       <div class="palette-input-row">
-        ${icon.search}
+        ${demoIcon.search}
         <input class="palette-input" placeholder="Search pages…" aria-label="Search pages" />
         <button class="icon-btn" data-close aria-label="Close">${icon.x}</button>
       </div>
@@ -859,8 +860,8 @@ function applyTheme(): void {
   if (button) {
     button.innerHTML =
       state.theme === 'dark'
-        ? `${icon.sun}<span>Light mode</span>`
-        : `${icon.moon}<span>Dark mode</span>`;
+        ? `${demoIcon.sun}<span>Light mode</span>`
+        : `${demoIcon.moon}<span>Dark mode</span>`;
   }
 }
 

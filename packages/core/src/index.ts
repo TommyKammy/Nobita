@@ -28,10 +28,9 @@ export type {
   TextAlign,
 } from './types.js';
 export {
+  BOOLEAN_MARK_KEYS,
   DOC_VERSION,
-  HIGHLIGHT_COLORS,
   PALETTE_COLORS,
-  TEXT_COLORS,
   isHighlightColor,
   isListBlock,
   isTextColor,
@@ -109,7 +108,6 @@ export {
   markStateInRange,
   marksAt,
   marksEqual,
-  mergeMarks,
   normalizeMark,
   normalizeRuns,
   plainText,
@@ -157,6 +155,12 @@ export {
 } from './markdown.js';export type { MarkdownParseResult } from './markdown.js';
 
 export { matchBlockMarkdown, matchInlineMarkdown } from './markdown-rules.js';
+
+export {
+  HIGHLIGHT_HEX,
+  TEXT_COLOR_HEX,
+  TEXT_COLOR_RGB_REFERENCES,
+} from './palette.js';
 export type { BlockMarkdownMatch, InlineMarkdownMatch } from './markdown-rules.js';
 
 export {

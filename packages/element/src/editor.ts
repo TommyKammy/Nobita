@@ -36,6 +36,7 @@ import {
   setImageProps,
   setTextColorInRange,
   sliceRuns,
+  TURN_INTO_TYPES,
   splitBlock,
   toggleChecked,
   toggleMarkInRange,
@@ -69,7 +70,7 @@ import {
   offsetToDomPoint,
   selectionRect,
 } from './dom.js';
-import { icon } from './icons.js';
+import { blockIcon, icon } from './icons.js';
 import { readRunsFromDom } from './inline-dom.js';
 import { Menu, type MenuItem } from './menu.js';
 import { styles } from './styles.js';
@@ -107,8 +108,6 @@ interface DragState {
   line: HTMLElement;
   targetElement: HTMLElement | null;
 }
-
-const SANS = 'Inter, ui-sans-serif, system-ui, sans-serif';
 
 type ClipboardPayload = ReturnType<typeof serializeBlocksForClipboard>;
 
@@ -168,7 +167,6 @@ export class NobitaEditor implements BlockHost {
   #lastSelection: EditorSelection | null = null;
   #lastSelectionKey = '';
   #slash: SlashState | null = null;
-  #menuSelection: EditorSelection | null = null;
   #drag: DragState | null = null;
   #savedSelection: EditorSelection | null = null;
   #destroyed = false;
@@ -343,7 +341,6 @@ export class NobitaEditor implements BlockHost {
     }
     const first = this.store.doc.blocks[0];
     if (first) {
-      const view = this.#views.get(first.id);
       const length = runsLength(first.text);
       this.#focusBlock(first.id, offset ?? length);
     } else {
@@ -726,7 +723,7 @@ export class NobitaEditor implements BlockHost {
     this.#insertBlocks(payload.blocks);
   }
 
-  copy(blockId: string, event: ClipboardEvent, cut: boolean): void {
+  copy(event: ClipboardEvent, cut: boolean): void {
     const selection = this.#currentSelection();
     if (!selection) return;
     if (this.#isCollapsed(selection)) return;
@@ -791,15 +788,11 @@ export class NobitaEditor implements BlockHost {
 
   openBlockMenu(blockId: string, anchor: HTMLElement): void {
     const rect = anchor.getBoundingClientRect();
-    this.#menuSelection = this.#currentSelection() ?? this.#lastSelection;
     const items = this.#blockMenuItems(blockId);
     this.#menu.open({
       items,
       anchor: rectAnchor(rect),
       width: 300,
-      onClose: () => {
-        this.#menuSelection = null;
-      },
     });
   }
 
@@ -951,7 +944,7 @@ export class NobitaEditor implements BlockHost {
         if (this.#isNestedField(event.target)) return;
         const selection = this.#currentSelection();
         const blockId = selection ? this.#ordered(selection).start.blockId : null;
-        if (blockId) this.copy(blockId, event, false);
+        if (blockId) this.copy(event, false);
       },
       { signal }
     );
@@ -962,7 +955,7 @@ export class NobitaEditor implements BlockHost {
         if (this.#isNestedField(event.target)) return;
         const selection = this.#currentSelection();
         const blockId = selection ? this.#ordered(selection).start.blockId : null;
-        if (blockId) this.copy(blockId, event, true);
+        if (blockId) this.copy(event, true);
       },
       { signal }
     );
@@ -1213,7 +1206,6 @@ export class NobitaEditor implements BlockHost {
     const view = this.#findView(blockId);
     const textElement = view?.textElement;
     if (!view || !textElement) return null;
-    const target = textElement.contains(node) ? node : textElement;
     const localOffset = textElement.contains(node)
       ? domPointToOffset(textElement, node, offset)
       : 0;
@@ -1381,15 +1373,6 @@ export class NobitaEditor implements BlockHost {
     if (offset === 0) return true;
     const previous = before[offset - 1];
     return previous === ' ' || previous === '\n' || previous === '\t';
-  }
-
-  #replaceSelectionText(text: string): boolean {
-    const selection = this.#currentSelection();
-    if (!selection || this.#isCollapsed(selection)) return false;
-    const { doc, caret } = this.#applyDeletion(this.store.doc, selection);
-    if (!caret) return false;
-    this.#commit(doc, { anchor: caret, focus: caret });
-    return true;
   }
 
   #applyDeletion(doc: Doc, selection: EditorSelection): { doc: Doc; caret: Point | null } {
@@ -1914,22 +1897,29 @@ export class NobitaEditor implements BlockHost {
     );
   }
 
+  #selectedBlockIds(
+    selection: EditorSelection | null,
+    fallbackToFocused = false
+  ): string[] {
+    if (!selection) {
+      return fallbackToFocused && this.#focusedBlockId
+        ? [this.#focusedBlockId]
+        : [];
+    }
+    if (this.#isCollapsed(selection)) return [selection.focus.blockId];
+    const { start, end } = this.#ordered(selection);
+    const flat = flattenBlocks(this.store.doc.blocks);
+    const startIndex = flat.findIndex(block => block.id === start.blockId);
+    const endIndex = flat.findIndex(block => block.id === end.blockId);
+    if (startIndex < 0 || endIndex < 0) return [];
+    return flat.slice(startIndex, endIndex + 1).map(block => block.id);
+  }
+
   #applyTurnInto(type: BlockType, level?: HeadingLevel): void {
     if (this.#readonly) return;
     const selection = this.#currentSelection() ?? this.#lastSelection;
     if (!selection) return;
-    let ids: string[] = [];
-    if (!this.#isCollapsed(selection)) {
-      const { start, end } = this.#ordered(selection);
-      const flat = flattenBlocks(this.store.doc.blocks);
-      const startIndex = flat.findIndex(item => item.id === start.blockId);
-      const endIndex = flat.findIndex(item => item.id === end.blockId);
-      if (startIndex >= 0 && endIndex >= 0) {
-        ids = flat.slice(startIndex, endIndex + 1).map(item => item.id);
-      }
-    } else {
-      ids = [selection.focus.blockId];
-    }
+    const ids = this.#selectedBlockIds(selection);
     if (ids.length === 0) return;
     let doc = this.store.doc;
     for (const id of ids) {
@@ -1942,26 +1932,16 @@ export class NobitaEditor implements BlockHost {
   #applyAlignment(align: TextAlign): void {
     if (this.#readonly) return;
     const selection = this.#currentSelection() ?? this.#lastSelection;
-    let ids: string[] = [];
-    let caret: EditorSelection | null = selection;
-    if (selection && !this.#isCollapsed(selection)) {
-      const { start, end } = this.#ordered(selection);
-      const flat = flattenBlocks(this.store.doc.blocks);
-      const startIndex = flat.findIndex(block => block.id === start.blockId);
-      const endIndex = flat.findIndex(block => block.id === end.blockId);
-      if (startIndex >= 0 && endIndex >= 0) {
-        ids = flat.slice(startIndex, endIndex + 1).map(block => block.id);
-      }
-    } else if (selection) {
-      ids = [selection.focus.blockId];
-    } else if (this.#focusedBlockId) {
-      ids = [this.#focusedBlockId];
-      caret = {
-        anchor: { blockId: this.#focusedBlockId, offset: 0 },
-        focus: { blockId: this.#focusedBlockId, offset: 0 },
-      };
-    }
+    const ids = this.#selectedBlockIds(selection, true);
     if (ids.length === 0) return;
+    const caret: EditorSelection | null =
+      selection ??
+      (this.#focusedBlockId
+        ? {
+            anchor: { blockId: this.#focusedBlockId, offset: 0 },
+            focus: { blockId: this.#focusedBlockId, offset: 0 },
+          }
+        : null);
     let doc = this.store.doc;
     for (const id of ids) doc = setBlockAlign(doc, id, align);
     this.#commit(doc, caret);
@@ -1975,20 +1955,23 @@ export class NobitaEditor implements BlockHost {
     this.#focusBlock(blockId, offset);
   }
 
-  #applyHighlight(highlight: HighlightColor | null): void {
+  #applyValueMark(
+    transform: (runs: Block['text'], from: number, to: number) => Block['text']
+  ): void {
     if (this.#readonly) return;
-    const changed = this.#transformSelection((runs, from, to) =>
+    if (this.#transformSelection(transform)) this.#updateToolbar();
+  }
+
+  #applyHighlight(highlight: HighlightColor | null): void {
+    this.#applyValueMark((runs, from, to) =>
       setHighlightInRange(runs, from, to, highlight)
     );
-    if (changed) this.#updateToolbar();
   }
 
   #applyTextColor(color: TextColor | null): void {
-    if (this.#readonly) return;
-    const changed = this.#transformSelection((runs, from, to) =>
+    this.#applyValueMark((runs, from, to) =>
       setTextColorInRange(runs, from, to, color)
     );
-    if (changed) this.#updateToolbar();
   }
 
   #transformSelection(
@@ -2110,7 +2093,6 @@ export class NobitaEditor implements BlockHost {
 
   #openSlashMenu(blockId: string, slashOffset: number): void {
     this.#slash = { blockId, start: slashOffset, end: slashOffset + 1 };
-    this.#menuSelection = this.#currentSelection();
     const rect = this.#caretRect(blockId);
     const items = this.#slashMenuItems(blockId);
     this.#menu.open({
@@ -2198,12 +2180,11 @@ export class NobitaEditor implements BlockHost {
       type: BlockType,
       props: { level?: HeadingLevel } = {},
       keywords: string[] = [],
-      iconMarkup: string,
       shortcut?: string
     ): MenuItem => ({
       id: `${type}-${props.level ?? ''}`,
       label,
-      icon: iconMarkup,
+      icon: blockIcon(type, props.level),
       group: 'Basic blocks',
       keywords,
       ...(shortcut ? { shortcut } : {}),
@@ -2214,37 +2195,37 @@ export class NobitaEditor implements BlockHost {
     });
 
     items.push(
-      conversion('Text', 'paragraph', {}, ['plain', 'p'], icon.text, shortcutLabel(mod, '⌥0')),
-      conversion('Heading 1', 'heading', { level: 1 }, ['h1', 'title'], icon.h1, shortcutLabel(mod, '⌥1')),
-      conversion('Heading 2', 'heading', { level: 2 }, ['h2', 'subtitle'], icon.h2, shortcutLabel(mod, '⌥2')),
-      conversion('Heading 3', 'heading', { level: 3 }, ['h3'], icon.h3, shortcutLabel(mod, '⌥3')),
-      conversion('Heading 4', 'heading', { level: 4 }, ['h4'], icon.h4, shortcutLabel(mod, '⌥4')),
-      conversion('Heading 5', 'heading', { level: 5 }, ['h5'], icon.h5, shortcutLabel(mod, '⌥5')),
-      conversion('Heading 6', 'heading', { level: 6 }, ['h6'], icon.h6, shortcutLabel(mod, '⌥6'))
+      conversion('Text', 'paragraph', {}, ['plain', 'p'], shortcutLabel(mod, '⌥0')),
+      conversion('Heading 1', 'heading', { level: 1 }, ['h1', 'title'], shortcutLabel(mod, '⌥1')),
+      conversion('Heading 2', 'heading', { level: 2 }, ['h2', 'subtitle'], shortcutLabel(mod, '⌥2')),
+      conversion('Heading 3', 'heading', { level: 3 }, ['h3'], shortcutLabel(mod, '⌥3')),
+      conversion('Heading 4', 'heading', { level: 4 }, ['h4'], shortcutLabel(mod, '⌥4')),
+      conversion('Heading 5', 'heading', { level: 5 }, ['h5'], shortcutLabel(mod, '⌥5')),
+      conversion('Heading 6', 'heading', { level: 6 }, ['h6'], shortcutLabel(mod, '⌥6'))
     );
 
     items.push(
       {
-        ...conversion('Bulleted list', 'bulleted', {}, ['bullet', 'ul', 'unordered'], icon.bulleted),
+        ...conversion('Bulleted list', 'bulleted', {}, ['bullet', 'ul', 'unordered']),
         group: 'Lists',
       },
       {
-        ...conversion('Numbered list', 'numbered', {}, ['number', 'ol', 'ordered'], icon.numbered),
+        ...conversion('Numbered list', 'numbered', {}, ['number', 'ol', 'ordered']),
         group: 'Lists',
       },
       {
-        ...conversion('To-do list', 'todo', {}, ['task', 'checkbox', 'check'], icon.todo),
+        ...conversion('To-do list', 'todo', {}, ['task', 'checkbox', 'check']),
         group: 'Lists',
       }
     );
 
     items.push(
       {
-        ...conversion('Quote', 'quote', {}, ['blockquote', 'citation'], icon.quote),
+        ...conversion('Quote', 'quote', {}, ['blockquote', 'citation']),
         group: 'Blocks',
       },
       {
-        ...conversion('Code block', 'code', {}, ['code', 'pre', 'snippet'], icon.code),
+        ...conversion('Code block', 'code', {}, ['code', 'pre', 'snippet']),
         group: 'Blocks',
       },
       {
@@ -2260,7 +2241,7 @@ export class NobitaEditor implements BlockHost {
         },
       },
       {
-        ...conversion('Callout', 'callout', {}, ['note', 'info', 'warning'], icon.callout),
+        ...conversion('Callout', 'callout', {}, ['note', 'info', 'warning']),
         group: 'Blocks',
       },
       {
@@ -2414,34 +2395,25 @@ export class NobitaEditor implements BlockHost {
     const block = findBlock(this.store.doc.blocks, blockId);
     if (!block) return [];
     const items: MenuItem[] = [];
-    const turn: { label: string; type: BlockType; level?: HeadingLevel; icon: string; active?: boolean }[] = [
-      { label: 'Text', type: 'paragraph', icon: icon.text },
-      { label: 'Heading 1', type: 'heading', level: 1, icon: icon.h1 },
-      { label: 'Heading 2', type: 'heading', level: 2, icon: icon.h2 },
-      { label: 'Heading 3', type: 'heading', level: 3, icon: icon.h3 },
-      { label: 'Heading 4', type: 'heading', level: 4, icon: icon.h4 },
-      { label: 'Heading 5', type: 'heading', level: 5, icon: icon.h5 },
-      { label: 'Heading 6', type: 'heading', level: 6, icon: icon.h6 },
-      { label: 'Bulleted list', type: 'bulleted', icon: icon.bulleted },
-      { label: 'Numbered list', type: 'numbered', icon: icon.numbered },
-      { label: 'To-do list', type: 'todo', icon: icon.todo },
-      { label: 'Quote', type: 'quote', icon: icon.quote },
-      { label: 'Code block', type: 'code', icon: icon.code },
-      { label: 'Callout', type: 'callout', icon: icon.callout },
-    ];
-    for (const entry of turn) {
+    for (const entry of TURN_INTO_TYPES) {
       const active =
         block.type === entry.type &&
-        (entry.type !== 'heading' || (block.props.level ?? 1) === (entry.level ?? 1));
+        (entry.type !== 'heading' ||
+          (block.props.level ?? 1) === (entry.level ?? 1));
       items.push({
         id: `turn-${entry.type}-${entry.level ?? ''}`,
         label: entry.label,
-        icon: entry.icon,
+        icon: blockIcon(entry.type, entry.level),
         group: 'Turn into',
         ...(active ? { description: 'Current type' } : {}),
         action: () => {
           const point = this.#pointFromCaret(blockId);
-          const next = setBlockType(this.store.doc, blockId, entry.type, entry.level ? { level: entry.level } : {});
+          const next = setBlockType(
+            this.store.doc,
+            blockId,
+            entry.type,
+            entry.level ? { level: entry.level } : {}
+          );
           this.#commit(next, { anchor: point, focus: point });
         },
       });

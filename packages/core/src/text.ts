@@ -1,4 +1,5 @@
-import { isHighlightColor, isTextColor } from './types.js';
+import { HIGHLIGHT_HEX, TEXT_COLOR_HEX } from './palette.js';
+import { BOOLEAN_MARK_KEYS, isHighlightColor, isTextColor } from './types.js';
 import type {
   BooleanMarkKey,
   HighlightColor,
@@ -10,48 +11,11 @@ import type {
 import { safeHref } from './url.js';
 
 export const MARK_KEYS: readonly MarkKey[] = [
-  'bold',
-  'italic',
-  'underline',
-  'strike',
-  'code',
+  ...BOOLEAN_MARK_KEYS,
   'color',
   'highlight',
   'link',
 ];
-
-const KEY_ORDER: readonly MarkKey[] = [
-  'bold',
-  'italic',
-  'underline',
-  'strike',
-  'code',
-  'color',
-  'highlight',
-  'link',
-];
-
-const HIGHLIGHT_HTML: Record<HighlightColor, string> = {
-  red: '#fee2e2',
-  orange: '#ffedd5',
-  yellow: '#fef3c7',
-  green: '#dcfce7',
-  teal: '#ccfbf1',
-  blue: '#dbeafe',
-  purple: '#ede9fe',
-  grey: '#eeeeec',
-};
-
-const TEXT_COLOR_HTML: Record<TextColor, string> = {
-  red: '#b91c1c',
-  orange: '#c2410c',
-  yellow: '#a16207',
-  green: '#15803d',
-  teal: '#0f766e',
-  blue: '#1d4ed8',
-  purple: '#7e22ce',
-  grey: '#6b7280',
-};
 
 /** Drop falsy marks and unknown keys, returning `undefined` for "plain". */
 export function normalizeMark(mark: InlineMark | undefined): InlineMark | undefined {
@@ -71,17 +35,13 @@ export function normalizeMark(mark: InlineMark | undefined): InlineMark | undefi
 export function markKey(mark: InlineMark | undefined): string {
   const normalized = normalizeMark(mark);
   if (!normalized) return '';
-  return KEY_ORDER.filter(key => normalized[key] !== undefined)
+  return MARK_KEYS.filter(key => normalized[key] !== undefined)
     .map(key => `${key}:${String(normalized[key])}`)
     .join('|');
 }
 
 export function marksEqual(a: InlineMark | undefined, b: InlineMark | undefined): boolean {
   return markKey(a) === markKey(b);
-}
-
-export function mergeMarks(a: InlineMark | undefined, b: InlineMark | undefined): InlineMark | undefined {
-  return normalizeMark({ ...a, ...b });
 }
 
 /** Merge adjacent runs with equal marks and drop empty runs. */
@@ -348,10 +308,10 @@ export function runsToHtml(runs: readonly InlineRun[], escape: (text: string) =>
     if (marks.underline) inner = `<u>${inner}</u>`;
     if (marks.strike) inner = `<s>${inner}</s>`;
     if (marks.color) {
-      inner = `<span data-nb-color="${marks.color}" style="color:var(--nb-fg-${marks.color}, ${TEXT_COLOR_HTML[marks.color]})">${inner}</span>`;
+      inner = `<span data-nb-color="${marks.color}" style="color:var(--nb-fg-${marks.color}, ${TEXT_COLOR_HEX[marks.color]})">${inner}</span>`;
     }
     if (marks.highlight) {
-      inner = `<mark data-nb-highlight="${marks.highlight}" style="background-color:var(--nb-hl-${marks.highlight}, ${HIGHLIGHT_HTML[marks.highlight]})">${inner}</mark>`;
+      inner = `<mark data-nb-highlight="${marks.highlight}" style="background-color:var(--nb-hl-${marks.highlight}, ${HIGHLIGHT_HEX[marks.highlight]})">${inner}</mark>`;
     }
     if (marks.link) {
       const href = safeHref(marks.link);

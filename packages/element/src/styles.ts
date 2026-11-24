@@ -945,7 +945,6 @@ input, select, textarea { font: inherit; color: inherit; }
 
 .nb-menu-empty { padding: 22px 12px; text-align: center; font-size: 13px; color: var(--nb-text-tertiary); }
 
-.nb-menu-sep { height: 1px; margin: 5px 8px; background: var(--nb-border); }
 
 /* ---------- toolbar ---------- */
 
@@ -987,8 +986,6 @@ input, select, textarea { font: inherit; color: inherit; }
 .nb-tool > svg,
 .nb-tool > .nb-chev { flex: 0 0 auto; pointer-events: none; }
 .nb-tool > svg { width: 20px; height: 20px; }
-.nb-color-row > *,
-.nb-align-item > * { pointer-events: none; }
 .nb-tool:hover,
 .nb-tool[aria-expanded="true"] { background: var(--nb-hover); color: var(--nb-text); }
 .nb-tool[data-active="true"] { background: var(--nb-accent-soft); color: var(--nb-accent); }
@@ -1008,39 +1005,59 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .nb-chev svg { width: 9px; height: 9px; stroke-width: 1.8; }
 
-.nb-color-popover {
+.nb-popover {
   position: fixed;
-  width: 224px;
-  max-height: min(70vh, 520px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 6px;
   background: var(--nb-surface);
   border: 1px solid var(--nb-border);
   border-radius: 12px;
   box-shadow: var(--nb-shadow-lg);
   animation: nb-pop 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.nb-color-heading {
+.nb-color-popover {
+  width: 224px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+}
+.nb-align-popover {
+  width: 168px;
+  padding: 6px;
+}
+.nb-turninto-popover {
+  width: 220px;
+  max-height: min(70vh, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.nb-popover-heading {
   padding: 8px 8px 4px;
   font-size: 13px;
   font-weight: 500;
   color: var(--nb-text);
 }
-.nb-color-row {
+.nb-popover-row {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
   height: 32px;
   padding: 0 8px;
-  border-radius: 6px;
+  border-radius: 7px;
   color: var(--nb-text);
   font-size: 13px;
   text-align: left;
 }
-.nb-color-row:hover,
-.nb-color-row[data-active="true"] { background: var(--nb-hover); }
+.nb-popover-row:hover,
+.nb-popover-row[data-focus="true"] { background: var(--nb-hover); }
+.nb-popover-row[data-selected="true"] { color: var(--nb-accent); }
+.nb-popover-row > * { pointer-events: none; }
+.nb-color-popover .nb-popover-row { border-radius: 6px; }
+.nb-align-popover .nb-popover-row {
+  gap: 8px;
+  border-radius: 7px;
+  font-size: 12.5px;
+}
 .nb-color-a {
   display: grid;
   place-items: center;
@@ -1055,38 +1072,6 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .nb-color-a[data-kind="background"] { border: 1px solid var(--nb-border); }
 .nb-color-label { flex: 1; white-space: nowrap; }
-
-.nb-align-popover {
-  position: fixed;
-  width: 168px;
-  padding: 6px;
-  background: var(--nb-surface);
-  border: 1px solid var(--nb-border);
-  border-radius: 12px;
-  box-shadow: var(--nb-shadow-lg);
-  animation: nb-pop 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.nb-turninto-popover {
-  width: 220px;
-  max-height: min(70vh, 480px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.nb-align-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  height: 32px;
-  padding: 0 8px;
-  border-radius: 7px;
-  color: var(--nb-text);
-  font-size: 12.5px;
-  text-align: left;
-}
-.nb-align-item:hover,
-.nb-align-item[data-active="true"] { background: var(--nb-hover); }
-.nb-align-item[aria-checked="true"] { color: var(--nb-accent); }
 .nb-align-icon {
   display: grid;
   place-items: center;
@@ -1096,7 +1081,7 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .nb-align-icon svg { width: 20px; height: 20px; }
 .nb-align-label { flex: 1; white-space: nowrap; }
-.nb-align-check {
+.nb-popover-check {
   display: grid;
   place-items: center;
   flex: 0 0 14px;
@@ -1104,8 +1089,8 @@ input, select, textarea { font: inherit; color: inherit; }
   height: 14px;
   opacity: 0;
 }
-.nb-align-check svg { width: 14px; height: 14px; }
-.nb-align-item[aria-checked="true"] .nb-align-check { opacity: 1; }
+.nb-popover-check svg { width: 14px; height: 14px; }
+.nb-popover-row[data-selected="true"] .nb-popover-check { opacity: 1; }
 
 .nb-link-popover {
   position: fixed;

@@ -6,7 +6,7 @@ import {
   sortedDatabaseRows,
 } from './database.js';
 import { normalizeRuns, plainText, runsLength, sliceRuns } from './text.js';
-import type { Block, BlockProps, Doc, InlineMark, InlineRun } from './types.js';
+import type { Block, Doc, InlineMark, InlineRun } from './types.js';
 import { safeHref, safeImageSrc } from './url.js';
 
 const ESCAPABLE = new Set(['\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!', '|', '>', '~']);

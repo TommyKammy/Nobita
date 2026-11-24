@@ -1,14 +1,16 @@
 import { PALETTE_COLORS, TURN_INTO_TYPES } from '@nobita/core';
 import type {
   BlockType,
+  BooleanMarkKey,
   HeadingLevel,
   InlineMark,
   PaletteColor,
   TextAlign,
 } from '@nobita/core';
-import { icon } from './icons.js';
+import { blockIcon, icon } from './icons.js';
+import { PopoverList, type PopoverRow } from './popover.js';
 
-export type ToolbarMark = 'bold' | 'italic' | 'underline' | 'strike' | 'code';
+export type ToolbarMark = BooleanMarkKey;
 
 const BUTTONS: readonly { key: ToolbarMark; label: string; icon: string; shortcut: string }[] = [
   { key: 'bold', label: 'Bold', icon: icon.bold, shortcut: 'B' },
@@ -36,43 +38,17 @@ const ALIGN_BUTTONS: readonly { align: TextAlign; label: string; icon: string; s
 const capitalize = (value: string): string =>
   value.charAt(0).toUpperCase() + value.slice(1);
 
-function turnIntoIcon(type: BlockType, level?: HeadingLevel): string {
-  switch (type) {
-    case 'heading':
-      switch (level) {
-        case 2:
-          return icon.h2;
-        case 3:
-          return icon.h3;
-        case 4:
-          return icon.h4;
-        case 5:
-          return icon.h5;
-        case 6:
-          return icon.h6;
-        default:
-          return icon.h1;
-      }
-    case 'bulleted':
-      return icon.bulleted;
-    case 'numbered':
-      return icon.numbered;
-    case 'todo':
-      return icon.todo;
-    case 'quote':
-      return icon.quote;
-    case 'callout':
-      return icon.callout;
-    case 'code':
-      return icon.code;
-    case 'divider':
-      return icon.divider;
-    default:
-      return icon.text;
-  }
+type ColorKind = 'color' | 'background';
+
+interface ColorPick {
+  kind: ColorKind;
+  color: PaletteColor | null;
 }
 
-type ColorKind = 'color' | 'background';
+interface TurnIntoValue {
+  type: BlockType;
+  level: HeadingLevel | undefined;
+}
 
 const COLOR_SECTIONS: readonly {
   kind: ColorKind;
@@ -83,553 +59,118 @@ const COLOR_SECTIONS: readonly {
   { kind: 'background', title: 'Background', defaultLabel: 'Default Background' },
 ];
 
-interface ColorEntry {
-  kind: ColorKind;
-  color: PaletteColor | null;
-  element: HTMLButtonElement;
+function labeledRow<T>(
+  value: T,
+  key: string,
+  label: string,
+  iconMarkup: string
+): PopoverRow<T> {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'nb-popover-row';
+  button.setAttribute('role', 'menuitemradio');
+  button.setAttribute('aria-label', label);
+  button.innerHTML = `<span class="nb-align-icon">${iconMarkup}</span><span class="nb-align-label">${label}</span><span class="nb-popover-check">${icon.check}</span>`;
+  return { key, value, element: button };
 }
 
-class ColorPopover {
-  readonly element: HTMLElement;
-  onHide: (() => void) | null = null;
-  #overlay: HTMLElement;
-  #trigger: HTMLElement | null = null;
-  #onPick: ((kind: ColorKind, color: PaletteColor | null) => void) | null = null;
-  #buttons: ColorEntry[] = [];
-  #focusIndex = -1;
-  #visible = false;
+function colorRow(
+  kind: ColorKind,
+  color: PaletteColor | null,
+  fallbackLabel: string,
+  section: string
+): PopoverRow<ColorPick> {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'nb-popover-row';
+  button.setAttribute('role', 'menuitem');
+  button.setAttribute(
+    'aria-label',
+    color
+      ? `${capitalize(color)} ${kind === 'color' ? 'text color' : 'background'}`
+      : fallbackLabel
+  );
 
-  constructor(overlay: HTMLElement) {
-    this.#overlay = overlay;
-    this.element = document.createElement('div');
-    this.element.className = 'nb-color-popover';
-    this.element.setAttribute('role', 'menu');
-    this.element.setAttribute('aria-label', 'Color and highlight');
-
-    for (const section of COLOR_SECTIONS) {
-      const heading = document.createElement('div');
-      heading.className = 'nb-color-heading';
-      heading.textContent = section.title;
-      this.element.append(heading);
-
-      for (const color of [null, ...PALETTE_COLORS] as (PaletteColor | null)[]) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'nb-color-row';
-        button.dataset.kind = section.kind;
-        button.dataset.color = color ?? 'default';
-        button.setAttribute('role', 'menuitem');
-        button.setAttribute(
-          'aria-label',
-          color
-            ? `${capitalize(color)} ${section.kind === 'color' ? 'text color' : 'background'}`
-            : section.defaultLabel
-        );
-
-        const sample = document.createElement('span');
-        sample.className = 'nb-color-a';
-        sample.textContent = 'A';
-        sample.dataset.kind = section.kind;
-        if (color) {
-          if (section.kind === 'color') {
-            sample.style.color = `var(--nb-fg-${color})`;
-          } else {
-            sample.style.background = `var(--nb-hl-${color})`;
-          }
-        }
-
-        const label = document.createElement('span');
-        label.className = 'nb-color-label';
-        label.textContent = color ? capitalize(color) : section.defaultLabel;
-
-        button.append(sample, label);
-        button.addEventListener('pointerdown', event => event.preventDefault());
-        button.addEventListener('click', event => {
-          event.preventDefault();
-          this.#pick(section.kind, color);
-        });
-        this.#buttons.push({ kind: section.kind, color, element: button });
-        this.element.append(button);
-      }
-    }
+  const sample = document.createElement('span');
+  sample.className = 'nb-color-a';
+  sample.textContent = 'A';
+  sample.dataset.kind = kind;
+  if (color) {
+    if (kind === 'color') sample.style.color = `var(--nb-fg-${color})`;
+    else sample.style.background = `var(--nb-hl-${color})`;
   }
 
-  get isVisible(): boolean {
-    return this.#visible;
-  }
-
-  show(
-    anchor: DOMRect,
-    trigger: HTMLElement,
-    onPick: (kind: ColorKind, color: PaletteColor | null) => void
-  ): void {
-    this.hide();
-    this.#trigger = trigger;
-    this.#onPick = onPick;
-    this.#focusIndex = -1;
-    this.#render();
-    this.#overlay.append(this.element);
-    this.#visible = true;
-    this.element.style.visibility = 'hidden';
-    const width = this.element.offsetWidth;
-    const height = this.element.offsetHeight;
-    let left = anchor.left + anchor.width / 2 - width / 2;
-    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
-    let top = anchor.bottom + 6;
-    if (top + height > window.innerHeight - 8) {
-      top = anchor.top - height - 6;
-    }
-    top = Math.max(8, top);
-    this.element.style.left = `${Math.round(left)}px`;
-    this.element.style.top = `${Math.round(top)}px`;
-    this.element.style.visibility = '';
-    window.addEventListener('pointerdown', this.#onDocPointerDown, true);
-    window.addEventListener('keydown', this.#onKeyDown, true);
-  }
-
-  hide(): void {
-    if (!this.#visible) return;
-    this.#visible = false;
-    this.element.remove();
-    this.#onPick = null;
-    this.#trigger = null;
-    window.removeEventListener('pointerdown', this.#onDocPointerDown, true);
-    window.removeEventListener('keydown', this.#onKeyDown, true);
-    this.onHide?.();
-  }
-
-  #render(): void {
-    this.#buttons.forEach((entry, index) => {
-      entry.element.dataset.active = String(index === this.#focusIndex);
-    });
-  }
-
-  #moveFocus(delta: number): void {
-    const count = this.#buttons.length;
-    if (count === 0) return;
-    if (this.#focusIndex < 0) {
-      this.#focusIndex = delta > 0 ? 0 : count - 1;
-    } else {
-      this.#focusIndex = (this.#focusIndex + delta + count) % count;
-    }
-    this.#render();
-    this.#buttons[this.#focusIndex]?.element.scrollIntoView({
-      block: 'nearest',
-    });
-  }
-
-  #pick(kind: ColorKind, color: PaletteColor | null): void {
-    const onPick = this.#onPick;
-    this.hide();
-    onPick?.(kind, color);
-  }
-
-  #onKeyDown = (event: KeyboardEvent): void => {
-    if (!this.#visible) return;
-    let handled = true;
-    switch (event.key) {
-      case 'ArrowDown':
-      case 'ArrowRight':
-        this.#moveFocus(1);
-        break;
-      case 'ArrowUp':
-      case 'ArrowLeft':
-        this.#moveFocus(-1);
-        break;
-      case 'Home':
-        this.#focusIndex = 0;
-        this.#render();
-        break;
-      case 'End':
-        this.#focusIndex = this.#buttons.length - 1;
-        this.#render();
-        break;
-      case 'Enter':
-      case ' ': {
-        const entry = this.#buttons[this.#focusIndex];
-        if (entry) this.#pick(entry.kind, entry.color);
-        break;
-      }
-      case 'Escape':
-        this.hide();
-        break;
-      default:
-        handled = false;
-    }
-    if (handled) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  };
-
-  #onDocPointerDown = (event: PointerEvent): void => {
-    if (!this.#visible) return;
-    const path = event.composedPath();
-    if (path.includes(this.element) || (this.#trigger && path.includes(this.#trigger))) {
-      return;
-    }
-    this.hide();
+  const text = document.createElement('span');
+  text.className = 'nb-color-label';
+  text.textContent = color ? capitalize(color) : fallbackLabel;
+  button.append(sample, text);
+  return {
+    key: `${kind}:${color ?? 'default'}`,
+    value: { kind, color },
+    element: button,
+    section,
   };
 }
 
-interface AlignEntry {
-  align: TextAlign;
-  element: HTMLButtonElement;
+function createColorPopover(overlay: HTMLElement): PopoverList<ColorPick> {
+  const rows: PopoverRow<ColorPick>[] = [];
+  for (const section of COLOR_SECTIONS) {
+    for (const color of [null, ...PALETTE_COLORS] as (PaletteColor | null)[]) {
+      const label = color
+        ? capitalize(color)
+        : section.defaultLabel;
+      rows.push(colorRow(section.kind, color, label, section.title));
+    }
+  }
+  return new PopoverList(overlay, {
+    ariaLabel: 'Color and highlight',
+    className: 'nb-color-popover',
+    rows,
+  });
 }
 
-class AlignPopover {
-  readonly element: HTMLElement;
-  onHide: (() => void) | null = null;
-  #overlay: HTMLElement;
-  #active: TextAlign = 'left';
-  #trigger: HTMLElement | null = null;
-  #onPick: ((align: TextAlign) => void) | null = null;
-  #buttons: AlignEntry[] = [];
-  #focusIndex = 0;
-  #visible = false;
-
-  constructor(overlay: HTMLElement) {
-    this.#overlay = overlay;
-    this.element = document.createElement('div');
-    this.element.className = 'nb-align-popover';
-    this.element.setAttribute('role', 'menu');
-    this.element.setAttribute('aria-label', 'Alignment');
-
-    for (const item of ALIGN_BUTTONS) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'nb-align-item';
-      button.dataset.align = item.align;
-      button.setAttribute('role', 'menuitemradio');
-      button.setAttribute('aria-label', item.label);
-      const check = document.createElement('span');
-      check.className = 'nb-align-check';
-      check.innerHTML = icon.check;
-      button.innerHTML = `<span class="nb-align-icon">${item.icon}</span><span class="nb-align-label">${item.label}</span>`;
-      button.append(check);
-      button.addEventListener('pointerdown', event => event.preventDefault());
-      button.addEventListener('click', event => {
-        event.preventDefault();
-        this.#pick(item.align);
-      });
-      this.#buttons.push({ align: item.align, element: button });
-      this.element.append(button);
-    }
-  }
-
-  get isVisible(): boolean {
-    return this.#visible;
-  }
-
-  show(
-    anchor: DOMRect,
-    active: TextAlign,
-    trigger: HTMLElement,
-    onPick: (align: TextAlign) => void
-  ): void {
-    this.hide();
-    this.#trigger = trigger;
-    this.#onPick = onPick;
-    this.setActive(active);
-    this.#overlay.append(this.element);
-    this.#visible = true;
-    this.element.style.visibility = 'hidden';
-    const width = this.element.offsetWidth;
-    const height = this.element.offsetHeight;
-    let left = anchor.left + anchor.width / 2 - width / 2;
-    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
-    let top = anchor.bottom + 6;
-    if (top + height > window.innerHeight - 8) {
-      top = anchor.top - height - 6;
-    }
-    top = Math.max(8, top);
-    this.element.style.left = `${Math.round(left)}px`;
-    this.element.style.top = `${Math.round(top)}px`;
-    this.element.style.visibility = '';
-    window.addEventListener('pointerdown', this.#onDocPointerDown, true);
-    window.addEventListener('keydown', this.#onKeyDown, true);
-  }
-
-  setActive(active: TextAlign): void {
-    this.#active = active;
-    const selected = this.#buttons.findIndex(entry => entry.align === active);
-    this.#focusIndex = selected >= 0 ? selected : 0;
-    this.#render();
-  }
-
-  hide(): void {
-    if (!this.#visible) return;
-    this.#visible = false;
-    this.element.remove();
-    this.#onPick = null;
-    this.#trigger = null;
-    window.removeEventListener('pointerdown', this.#onDocPointerDown, true);
-    window.removeEventListener('keydown', this.#onKeyDown, true);
-    this.onHide?.();
-  }
-
-  #render(): void {
-    this.#buttons.forEach((entry, index) => {
-      entry.element.dataset.active = String(index === this.#focusIndex);
-      entry.element.setAttribute(
-        'aria-checked',
-        String(entry.align === this.#active)
-      );
-    });
-  }
-
-  #moveFocus(delta: number): void {
-    const count = this.#buttons.length;
-    if (count === 0) return;
-    this.#focusIndex = (this.#focusIndex + delta + count) % count;
-    this.#render();
-  }
-
-  #pick(align: TextAlign): void {
-    const onPick = this.#onPick;
-    this.hide();
-    onPick?.(align);
-  }
-
-  #onKeyDown = (event: KeyboardEvent): void => {
-    if (!this.#visible) return;
-    let handled = true;
-    switch (event.key) {
-      case 'ArrowDown':
-      case 'ArrowRight':
-        this.#moveFocus(1);
-        break;
-      case 'ArrowUp':
-      case 'ArrowLeft':
-        this.#moveFocus(-1);
-        break;
-      case 'Home':
-        this.#focusIndex = 0;
-        this.#render();
-        break;
-      case 'End':
-        this.#focusIndex = this.#buttons.length - 1;
-        this.#render();
-        break;
-      case 'Enter':
-      case ' ': {
-        const align = this.#buttons[this.#focusIndex]?.align;
-        if (align) this.#pick(align);
-        break;
-      }
-      case 'Escape':
-        this.hide();
-        break;
-      default:
-        handled = false;
-    }
-    if (handled) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  };
-
-  #onDocPointerDown = (event: PointerEvent): void => {
-    if (!this.#visible) return;
-    const path = event.composedPath();
-    if (path.includes(this.element) || (this.#trigger && path.includes(this.#trigger))) {
-      return;
-    }
-    this.hide();
-  };
+function alignKey(align: TextAlign): string {
+  return `align:${align}`;
 }
 
-interface TurnIntoEntry {
-  type: BlockType;
-  level: HeadingLevel | undefined;
-  element: HTMLButtonElement;
+function createAlignPopover(overlay: HTMLElement): PopoverList<TextAlign> {
+  return new PopoverList(overlay, {
+    ariaLabel: 'Alignment',
+    className: 'nb-align-popover',
+    selectable: true,
+    rows: ALIGN_BUTTONS.map(item =>
+      labeledRow(item.align, alignKey(item.align), item.label, item.icon)
+    ),
+  });
 }
 
-class TurnIntoPopover {
-  readonly element: HTMLElement;
-  onHide: (() => void) | null = null;
-  #overlay: HTMLElement;
-  #activeType: BlockType = 'paragraph';
-  #activeLevel: HeadingLevel | undefined;
-  #trigger: HTMLElement | null = null;
-  #onPick: ((type: BlockType, level?: HeadingLevel) => void) | null = null;
-  #buttons: TurnIntoEntry[] = [];
-  #focusIndex = 0;
-  #visible = false;
+function turnIntoKey(type: BlockType, level: HeadingLevel | undefined): string {
+  return `turn:${type}:${level ?? ''}`;
+}
 
-  constructor(overlay: HTMLElement) {
-    this.#overlay = overlay;
-    this.element = document.createElement('div');
-    this.element.className = 'nb-align-popover nb-turninto-popover';
-    this.element.setAttribute('role', 'menu');
-    this.element.setAttribute('aria-label', 'Turn into');
-
-    for (const entry of TURN_INTO_TYPES) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'nb-align-item';
-      button.dataset.type = entry.type;
-      button.dataset.level = entry.level ? String(entry.level) : '';
-      button.setAttribute('role', 'menuitemradio');
-      button.setAttribute('aria-label', entry.label);
-      button.innerHTML = `<span class="nb-align-icon">${turnIntoIcon(entry.type, entry.level)}</span><span class="nb-align-label">${entry.label}</span>`;
-      const check = document.createElement('span');
-      check.className = 'nb-align-check';
-      check.innerHTML = icon.check;
-      button.append(check);
-      button.addEventListener('pointerdown', event => event.preventDefault());
-      button.addEventListener('click', event => {
-        event.preventDefault();
-        this.#pick(entry.type, entry.level);
-      });
-      this.#buttons.push({
-        type: entry.type,
-        level: entry.level,
-        element: button,
-      });
-      this.element.append(button);
-    }
-  }
-
-  get isVisible(): boolean {
-    return this.#visible;
-  }
-
-  show(
-    anchor: DOMRect,
-    activeType: BlockType,
-    activeLevel: HeadingLevel | undefined,
-    trigger: HTMLElement,
-    onPick: (type: BlockType, level?: HeadingLevel) => void
-  ): void {
-    this.hide();
-    this.#trigger = trigger;
-    this.#onPick = onPick;
-    this.setActive(activeType, activeLevel);
-    this.#overlay.append(this.element);
-    this.#visible = true;
-    this.element.style.visibility = 'hidden';
-    const width = this.element.offsetWidth;
-    const height = this.element.offsetHeight;
-    let left = anchor.left + anchor.width / 2 - width / 2;
-    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
-    let top = anchor.bottom + 6;
-    if (top + height > window.innerHeight - 8) {
-      top = anchor.top - height - 6;
-    }
-    top = Math.max(8, top);
-    this.element.style.left = `${Math.round(left)}px`;
-    this.element.style.top = `${Math.round(top)}px`;
-    this.element.style.visibility = '';
-    window.addEventListener('pointerdown', this.#onDocPointerDown, true);
-    window.addEventListener('keydown', this.#onKeyDown, true);
-  }
-
-  setActive(type: BlockType, level?: HeadingLevel): void {
-    this.#activeType = type;
-    this.#activeLevel = level;
-    const selected = this.#buttons.findIndex(
-      entry =>
-        entry.type === type &&
-        (type !== 'heading' || (entry.level ?? 1) === (level ?? 1))
-    );
-    this.#focusIndex = selected >= 0 ? selected : 0;
-    this.#render();
-  }
-
-  hide(): void {
-    if (!this.#visible) return;
-    this.#visible = false;
-    this.element.remove();
-    this.#onPick = null;
-    this.#trigger = null;
-    window.removeEventListener('pointerdown', this.#onDocPointerDown, true);
-    window.removeEventListener('keydown', this.#onKeyDown, true);
-    this.onHide?.();
-  }
-
-  #render(): void {
-    this.#buttons.forEach((entry, index) => {
-      entry.element.dataset.active = String(index === this.#focusIndex);
-      entry.element.setAttribute(
-        'aria-checked',
-        String(
-          entry.type === this.#activeType &&
-            (entry.type !== 'heading' ||
-              (entry.level ?? 1) === (this.#activeLevel ?? 1))
-        )
-      );
-    });
-  }
-
-  #moveFocus(delta: number): void {
-    const count = this.#buttons.length;
-    if (count === 0) return;
-    this.#focusIndex = (this.#focusIndex + delta + count) % count;
-    this.#render();
-    this.#buttons[this.#focusIndex]?.element.scrollIntoView({
-      block: 'nearest',
-    });
-  }
-
-  #pick(type: BlockType, level: HeadingLevel | undefined): void {
-    const onPick = this.#onPick;
-    this.hide();
-    onPick?.(type, level);
-  }
-
-  #onKeyDown = (event: KeyboardEvent): void => {
-    if (!this.#visible) return;
-    let handled = true;
-    switch (event.key) {
-      case 'ArrowDown':
-      case 'ArrowRight':
-        this.#moveFocus(1);
-        break;
-      case 'ArrowUp':
-      case 'ArrowLeft':
-        this.#moveFocus(-1);
-        break;
-      case 'Home':
-        this.#focusIndex = 0;
-        this.#render();
-        break;
-      case 'End':
-        this.#focusIndex = this.#buttons.length - 1;
-        this.#render();
-        break;
-      case 'Enter':
-      case ' ': {
-        const entry = this.#buttons[this.#focusIndex];
-        if (entry) this.#pick(entry.type, entry.level);
-        break;
-      }
-      case 'Escape':
-        this.hide();
-        break;
-      default:
-        handled = false;
-    }
-    if (handled) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  };
-
-  #onDocPointerDown = (event: PointerEvent): void => {
-    if (!this.#visible) return;
-    const path = event.composedPath();
-    if (path.includes(this.element) || (this.#trigger && path.includes(this.#trigger))) {
-      return;
-    }
-    this.hide();
-  };
+function createTurnIntoPopover(
+  overlay: HTMLElement
+): PopoverList<TurnIntoValue> {
+  return new PopoverList(overlay, {
+    ariaLabel: 'Turn into',
+    className: 'nb-align-popover nb-turninto-popover',
+    selectable: true,
+    rows: TURN_INTO_TYPES.map(entry =>
+      labeledRow(
+        { type: entry.type, level: entry.level },
+        turnIntoKey(entry.type, entry.level),
+        entry.label,
+        blockIcon(entry.type, entry.level)
+      )
+    ),
+  });
 }
 
 export class Toolbar {
   readonly element: HTMLElement;
   #overlay: HTMLElement;
   #buttons = new Map<ToolbarMark, HTMLButtonElement>();
+  #linkButton: HTMLButtonElement | null = null;
   #onToggle: (key: ToolbarMark) => void;
   #onLink: () => void;
   #onAlign: (align: TextAlign) => void;
@@ -639,9 +180,9 @@ export class Toolbar {
   #turnIntoButton: HTMLButtonElement;
   #alignButton: HTMLButtonElement;
   #colorButton: HTMLButtonElement;
-  #turnIntoPopover: TurnIntoPopover;
-  #alignPopover: AlignPopover;
-  #colorPopover: ColorPopover;
+  #turnIntoPopover: PopoverList<TurnIntoValue> | null = null;
+  #alignPopover: PopoverList<TextAlign> | null = null;
+  #colorPopover: PopoverList<ColorPick> | null = null;
   #activeAlign: TextAlign = 'left';
   #activeTurnIntoType: BlockType = 'paragraph';
   #activeTurnIntoLevel: HeadingLevel | undefined;
@@ -663,9 +204,6 @@ export class Toolbar {
     this.#onTurnInto = onTurnInto;
     this.#onHighlight = onHighlight;
     this.#onTextColor = onTextColor;
-    this.#turnIntoPopover = new TurnIntoPopover(overlay);
-    this.#alignPopover = new AlignPopover(overlay);
-    this.#colorPopover = new ColorPopover(overlay);
     this.element = document.createElement('div');
     this.element.className = 'nb-toolbar';
     this.element.setAttribute('role', 'toolbar');
@@ -687,9 +225,6 @@ export class Toolbar {
       this.#toggleTurnInto();
     });
     this.#turnIntoButton = turnInto;
-    this.#turnIntoPopover.onHide = () => {
-      this.#turnIntoButton.setAttribute('aria-expanded', 'false');
-    };
     this.element.append(turnInto);
 
     const align = document.createElement('button');
@@ -707,9 +242,6 @@ export class Toolbar {
       this.#toggleAlign();
     });
     this.#alignButton = align;
-    this.#alignPopover.onHide = () => {
-      this.#alignButton.setAttribute('aria-expanded', 'false');
-    };
     this.element.append(align);
 
     for (const key of INLINE_ORDER) {
@@ -726,6 +258,7 @@ export class Toolbar {
           event.preventDefault();
           this.#onLink();
         });
+        this.#linkButton = link;
         this.element.append(link);
         continue;
       }
@@ -763,9 +296,6 @@ export class Toolbar {
       this.#toggleColor();
     });
     this.#colorButton = color;
-    this.#colorPopover.onHide = () => {
-      this.#colorButton.setAttribute('aria-expanded', 'false');
-    };
     this.element.append(color);
   }
 
@@ -773,37 +303,73 @@ export class Toolbar {
     return this.#visible;
   }
 
+  #ensureTurnInto(): PopoverList<TurnIntoValue> {
+    if (!this.#turnIntoPopover) {
+      const popover = createTurnIntoPopover(this.#overlay);
+      popover.onHide = () => {
+        this.#turnIntoButton.setAttribute('aria-expanded', 'false');
+      };
+      this.#turnIntoPopover = popover;
+    }
+    return this.#turnIntoPopover;
+  }
+
+  #ensureAlign(): PopoverList<TextAlign> {
+    if (!this.#alignPopover) {
+      const popover = createAlignPopover(this.#overlay);
+      popover.onHide = () => {
+        this.#alignButton.setAttribute('aria-expanded', 'false');
+      };
+      this.#alignPopover = popover;
+    }
+    return this.#alignPopover;
+  }
+
+  #ensureColor(): PopoverList<ColorPick> {
+    if (!this.#colorPopover) {
+      const popover = createColorPopover(this.#overlay);
+      popover.onHide = () => {
+        this.#colorButton.setAttribute('aria-expanded', 'false');
+      };
+      this.#colorPopover = popover;
+    }
+    return this.#colorPopover;
+  }
+
   #closePopovers(): void {
-    this.#turnIntoPopover.hide();
-    this.#alignPopover.hide();
-    this.#colorPopover.hide();
+    this.#turnIntoPopover?.hide();
+    this.#alignPopover?.hide();
+    this.#colorPopover?.hide();
   }
 
   #toggleTurnInto(): void {
-    if (this.#turnIntoPopover.isVisible) {
-      this.#turnIntoPopover.hide();
+    const popover = this.#ensureTurnInto();
+    if (popover.isVisible) {
+      popover.hide();
       return;
     }
     this.#closePopovers();
-    this.#turnIntoPopover.show(
+    popover.setSelected([
+      turnIntoKey(this.#activeTurnIntoType, this.#activeTurnIntoLevel),
+    ]);
+    popover.show(
       this.#turnIntoButton.getBoundingClientRect(),
-      this.#activeTurnIntoType,
-      this.#activeTurnIntoLevel,
       this.#turnIntoButton,
-      (type, level) => this.#onTurnInto(type, level)
+      value => this.#onTurnInto(value.type, value.level)
     );
     this.#turnIntoButton.setAttribute('aria-expanded', 'true');
   }
 
   #toggleAlign(): void {
-    if (this.#alignPopover.isVisible) {
-      this.#alignPopover.hide();
+    const popover = this.#ensureAlign();
+    if (popover.isVisible) {
+      popover.hide();
       return;
     }
     this.#closePopovers();
-    this.#alignPopover.show(
+    popover.setSelected([alignKey(this.#activeAlign)]);
+    popover.show(
       this.#alignButton.getBoundingClientRect(),
-      this.#activeAlign,
       this.#alignButton,
       align => this.#onAlign(align)
     );
@@ -811,18 +377,19 @@ export class Toolbar {
   }
 
   #toggleColor(): void {
-    if (this.#colorPopover.isVisible) {
-      this.#colorPopover.hide();
+    const popover = this.#ensureColor();
+    if (popover.isVisible) {
+      popover.hide();
       return;
     }
     this.#closePopovers();
-    this.#colorPopover.show(
+    popover.show(
       this.#colorButton.getBoundingClientRect(),
       this.#colorButton,
-      (kind, color) => {
-        if (kind === 'color') this.#onTextColor(color);
-        else this.#onHighlight(color);
-      }
+      value =>
+        value.kind === 'color'
+          ? this.#onTextColor(value.color)
+          : this.#onHighlight(value.color)
     );
     this.#colorButton.setAttribute('aria-expanded', 'true');
   }
@@ -875,14 +442,19 @@ export class Toolbar {
       button.dataset.active = String(state[key] === true);
       button.setAttribute('aria-pressed', String(state[key] === true));
     }
-    const link = this.element.querySelector<HTMLElement>('[data-key="link"]');
-    if (link) link.dataset.active = String(Boolean(state.link));
-    this.#activeAlign = align;
-    this.#setAlignIcon(align);
-    this.#alignPopover.setActive(align);
+    if (this.#linkButton) {
+      this.#linkButton.dataset.active = String(Boolean(state.link));
+    }
+    if (align !== this.#activeAlign) {
+      this.#activeAlign = align;
+      this.#setAlignIcon(align);
+    }
+    this.#alignPopover?.setSelected([alignKey(align)]);
     this.#activeTurnIntoType = blockType;
     this.#activeTurnIntoLevel = level;
-    this.#turnIntoPopover.setActive(blockType, level);
+    this.#turnIntoPopover?.setSelected([
+      turnIntoKey(blockType, level),
+    ]);
   }
 
   hide(): void {
@@ -890,10 +462,6 @@ export class Toolbar {
     if (!this.#visible) return;
     this.#visible = false;
     this.element.remove();
-  }
-
-  contains(target: EventTarget | null): boolean {
-    return target instanceof Node && this.element.contains(target);
   }
 }
 
@@ -964,10 +532,6 @@ export class LinkPopover {
       window.removeEventListener('pointerdown', this.#onDocPointerDown, true);
     }
     this.#onApply = null;
-  }
-
-  contains(target: EventTarget | null): boolean {
-    return target instanceof Node && this.element.contains(target);
   }
 
   #finish(value: string | null): void {
