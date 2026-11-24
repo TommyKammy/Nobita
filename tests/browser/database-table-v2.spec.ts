@@ -1405,6 +1405,170 @@ test('preserves empty rows when pasting typed rows', async ({ page }) => {
   ).toEqual({});
 });
 
+test('keeps drag selections within the source group', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'drag-group-context',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'tags',
+                name: 'Tags',
+                type: 'multi-select',
+                options: ['A', 'B'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { name: { text: 'One' }, tags: { values: ['A', 'B'] } },
+              },
+              {
+                id: 'rX',
+                cells: { name: { text: 'X' }, tags: { values: ['A'] } },
+              },
+              {
+                id: 'r2',
+                cells: { name: { text: 'Two' }, tags: { values: ['A', 'B'] } },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                groupBy: 'tags',
+                groupProperties: [
+                  { key: 'A', manuallyCardSort: ['r1', 'rX'] },
+                  { key: 'B', manuallyCardSort: ['r1', 'r2'] },
+                ],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'tags', width: 200 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  const startCell = page.locator(
+    '.nb-db-group[data-group="B"] .nb-db-cell[data-row-id="r1"][data-column-id="name"]'
+  );
+  const endCell = page.locator(
+    '.nb-db-group[data-group="B"] .nb-db-cell[data-row-id="r2"][data-column-id="name"]'
+  );
+  const start = await startCell.boundingBox();
+  const end = await endCell.boundingBox();
+  if (!start || !end) throw new Error('Missing drag targets');
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  await expect(page.locator('.nb-db-cell.is-selected')).toHaveCount(4);
+  await page.keyboard.press('Delete');
+  const doc = await getDoc(page);
+  const rows = (
+    doc.blocks[0]?.props.database as {
+      rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+    }
+  ).rows;
+  expect(rows.find(row => row.id === 'rX')?.cells.name?.text).toBe('X');
+  expect(rows.find(row => row.id === 'r1')?.cells.name?.text).toBeUndefined();
+  expect(rows.find(row => row.id === 'r2')?.cells.name?.text).toBeUndefined();
+});
+
+test('navigates unique records in grouped multi-select tables', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'detail-nav-groups',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'tags',
+                name: 'Tags',
+                type: 'multi-select',
+                options: ['A', 'B'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { name: { text: 'One' }, tags: { values: ['A', 'B'] } },
+              },
+              {
+                id: 'r2',
+                cells: { name: { text: 'Two' }, tags: { values: ['A'] } },
+              },
+              {
+                id: 'r3',
+                cells: { name: { text: 'Three' }, tags: { values: ['B'] } },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                groupBy: 'tags',
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'tags', width: 200 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page
+    .locator(
+      '.nb-db-group[data-group="A"] .nb-db-cell[data-row-id="r1"][data-column-id="name"]'
+    )
+    .hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  const title = page.locator('.nb-db-detail-title');
+  const next = page.locator('.nb-db-detail-navbtn[data-nav="next"]');
+  await expect(title).toHaveValue('One');
+  await next.click();
+  await expect(title).toHaveValue('Two');
+  await next.click();
+  await expect(title).toHaveValue('Three');
+  await expect(next).toBeDisabled();
+});
+
 test('synchronizes the detail panel after an external undo', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);

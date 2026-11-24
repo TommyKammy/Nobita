@@ -2663,7 +2663,7 @@ export class DatabaseView {
     const nav = document.createElement('div');
     nav.className = 'nb-db-detail-nav';
     const navigate = (direction: -1 | 1): void => {
-      const rows = this.#renderedRows(this.#activeView());
+      const rows = this.#navigationRows(this.#activeView());
       const index = rows.findIndex(item => item.id === this.#detailRowId);
       const nextRow = rows[index + direction];
       if (nextRow) this.#openDetailPanel(nextRow.id);
@@ -3486,7 +3486,7 @@ export class DatabaseView {
     next: HTMLButtonElement,
     rowId: string
   ): void {
-    const rows = this.#renderedRows(this.#activeView());
+    const rows = this.#navigationRows(this.#activeView());
     const index = rows.findIndex(item => item.id === rowId);
     prev.disabled = index <= 0;
     next.disabled = index < 0 || index >= rows.length - 1;
@@ -4150,6 +4150,17 @@ export class DatabaseView {
     return this.#rowsFor(view);
   }
 
+  #navigationRows(view: DatabaseViewConfig = this.#activeView()): DatabaseRow[] {
+    const seen = new Set<string>();
+    const rows: DatabaseRow[] = [];
+    for (const row of this.#renderedRows(view)) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      rows.push(row);
+    }
+    return rows;
+  }
+
   #moveTab(rowId: string, columnId: string, backwards: boolean): void {
     const rows = this.#rows();
     const columns = this.#visibleColumns(this.#activeView());
@@ -4350,11 +4361,13 @@ export class DatabaseView {
     } else {
       const startRowId = previous?.rowId ?? rowId;
       const startColumnId = previous?.columnId ?? columnId;
+      const rangeGroupKey = previous?.groupKey ?? groupKey;
       this.#range = {
         startRowId,
         startColumnId,
         endRowId: rowId,
         endColumnId: columnId,
+        ...(rangeGroupKey !== undefined ? { groupKey: rangeGroupKey } : {}),
       };
       this.#suppressClick = true;
       this.#renderRange();
@@ -4388,6 +4401,7 @@ export class DatabaseView {
         startColumnId: drag.anchorColumnId,
         endRowId: targetRowId,
         endColumnId: targetColumnId,
+        ...(groupKey !== undefined ? { groupKey } : {}),
       };
       nativeSelection(root)?.removeAllRanges();
       moveEvent.preventDefault();
@@ -4837,7 +4851,8 @@ export class DatabaseView {
         Array.from({ length: bounds.endRow - bounds.startRow + 1 }, () =>
           Array.from({ length: bounds.endColumn - bounds.startColumn + 1 }, () => '')
         ),
-        true
+        true,
+        this.#range?.groupKey
       );
     }
   };
@@ -4926,7 +4941,8 @@ export class DatabaseView {
       Array.from({ length: bounds.endRow - bounds.startRow + 1 }, () =>
         Array.from({ length: bounds.endColumn - bounds.startColumn + 1 }, () => '')
       ),
-      true
+      true,
+      this.#range?.groupKey
     );
   };
 
