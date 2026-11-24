@@ -665,3 +665,106 @@ test('does not apply a pending upload to a replaced document', async ({ page }) 
   expect(doc.blocks.some(block => block.type === 'image')).toBe(false);
   expect(blockById(doc, 'b1')?.text).toBe('Replaced');
 });
+
+test('inserts a dropped image after the drop target block', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, textDoc('Drop target'));
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        setUploadImage(handler: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    editor?.setUploadImage(async (file: File) => ({
+      src: `https://example.com/${file.name}`,
+      alt: file.name,
+    }));
+    editor?.focus('b1', 0);
+    const target = document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('[data-block-id="b2"] .nb-text');
+    const data = new DataTransfer();
+    data.items.add(
+      new File([new Uint8Array([137, 80, 78, 71])], 'target.png', { type: 'image/png' })
+    );
+    target?.dispatchEvent(
+      new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: data,
+      })
+    );
+  });
+  await expect
+    .poll(async () => (await getDoc(page)).blocks.some(block => block.type === 'image'))
+    .toBe(true);
+  const blocks = (await getDoc(page)).blocks;
+  expect(blocks[1]?.id).toBe('b2');
+  expect(blocks[2]?.type).toBe('image');
+});
+
+test('keeps adjacent mention elements separate after DOM input', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'mention-dom-input',
+    title: '',
+    blocks: [
+      {
+        id: 'b1',
+        type: 'paragraph',
+        text: [
+          { text: '@Ada', marks: { mention: { id: 'u1', label: 'Ada' } } },
+          { text: '@Ada', marks: { mention: { id: 'u1', label: 'Ada' } } },
+        ],
+        props: {},
+        children: [],
+      },
+    ],
+  });
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { domInput(blockId: string): void };
+    }).__editor;
+    const text = document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('[data-block-id="b1"] .nb-text');
+    text?.append(document.createTextNode('X'));
+    editor?.domInput('b1');
+  });
+  const block = blockById(await getDoc(page), 'b1');
+  expect(block?.text).toBe('@Ada@AdaX');
+  expect((block?.runs ?? []).filter(run => run.marks?.mention)).toHaveLength(2);
+});
+
+test('falls back to legacy copy for block links', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, textDoc('Copy link'));
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: () => Promise.reject(new Error('blocked')),
+      },
+    });
+    (window as unknown as { __copiedLink: string }).__copiedLink = '';
+    document.execCommand = () => {
+      const field = document.activeElement;
+      (window as unknown as { __copiedLink: string }).__copiedLink =
+        field instanceof HTMLTextAreaElement ? field.value : '';
+      return true;
+    };
+  });
+  await page
+    .locator('.nb-block')
+    .first()
+    .locator('[aria-label="Drag to move, click for actions"]')
+    .click();
+  await page.locator('.nb-menu-item', { hasText: 'Copy link' }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { __copiedLink: string }).__copiedLink)
+    )
+    .toBe('#block-b1');
+});

@@ -111,6 +111,14 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
     const nextMarks = marksFromElement(element, marks);
     if (isBlockElement(element) && buffer && !buffer.endsWith('\n')) append('\n', undefined);
     for (const child of Array.from(element.childNodes)) walk(child, nextMarks);
+    const mentionId =
+      element.getAttribute('data-nb-mention-id') ??
+      element.getAttribute('data-mention-id');
+    const mentionLabel =
+      element.getAttribute('data-nb-mention-label') ??
+      element.getAttribute('data-mention-label');
+    // Distinct mention elements stay separate even when their metadata matches.
+    if (mentionId && mentionLabel) flush();
   };
 
   for (const child of Array.from(root.childNodes)) {

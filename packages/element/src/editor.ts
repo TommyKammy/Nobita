@@ -978,6 +978,11 @@ export class NobitaEditor implements BlockHost {
     return element?.dataset.blockId ?? this.#focusedBlockId;
   }
 
+  #blockIdFromTarget(target: EventTarget | null): string | null {
+    const element = target instanceof Node ? closestElement(target, '.nb-block') : null;
+    return element?.dataset.blockId ?? null;
+  }
+
   #nearestBlock(clientY: number): string | null {
     let bestId: string | null = null;
     let bestDistance = Number.POSITIVE_INFINITY;
@@ -1175,7 +1180,9 @@ export class NobitaEditor implements BlockHost {
           event.preventDefault();
           if (this.#readonly || !this.#options.uploadImage) return;
           const blockId =
-            this.#activeBlockId(event.target) ?? this.#nearestBlock(event.clientY);
+            this.#blockIdFromTarget(event.target) ??
+            this.#nearestBlock(event.clientY) ??
+            this.#activeBlockId(null);
           if (blockId) void this.#uploadImage(blockId, file);
           return;
         }
@@ -2492,7 +2499,37 @@ export class NobitaEditor implements BlockHost {
   #copyBlockLink(blockId: string): void {
     const link = this.getBlockLink(blockId);
     if (!link) return;
-    void navigator.clipboard?.writeText(link).catch(() => undefined);
+    void this.#writePlainTextToClipboard(link);
+  }
+
+  async #writePlainTextToClipboard(text: string): Promise<void> {
+    if (typeof navigator.clipboard?.writeText === 'function') {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch {
+        // Fall through to the legacy path.
+      }
+    }
+    if (typeof document.execCommand !== 'function' || !document.body) return;
+    const field = document.createElement('textarea');
+    field.value = text;
+    field.setAttribute('readonly', '');
+    field.style.position = 'fixed';
+    field.style.left = '-9999px';
+    field.style.top = '0';
+    field.style.opacity = '0';
+    field.style.pointerEvents = 'none';
+    document.body.append(field);
+    try {
+      field.focus();
+      field.select();
+      document.execCommand('copy');
+    } catch {
+      // Clipboard access can be denied; leave the document untouched.
+    } finally {
+      field.remove();
+    }
   }
 
   #deleteBlock(blockId: string): void {
