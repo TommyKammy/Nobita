@@ -118,6 +118,13 @@ export class Menu {
     });
   }
 
+  /** Replace the candidate list while the menu is open. */
+  setItems(items: readonly MenuItem[]): void {
+    this.#items = [...items];
+    this.#filter();
+    if (this.#open) this.#repositionToAnchor();
+  }
+
   setQuery(query: string): void {
     if (!this.#filterable) return;
     if (query === this.#query) return;

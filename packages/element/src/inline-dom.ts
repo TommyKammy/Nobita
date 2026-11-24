@@ -18,6 +18,25 @@ function marksFromElement(element: Element, inherited: InlineMark | undefined): 
   }
   const href = element.getAttribute('data-link');
   if (href) next = { ...(next ?? {}), link: href };
+  const mentionId =
+    element.getAttribute('data-nb-mention-id') ??
+    element.getAttribute('data-mention-id');
+  const mentionLabel =
+    element.getAttribute('data-nb-mention-label') ??
+    element.getAttribute('data-mention-label');
+  const mentionKind =
+    element.getAttribute('data-nb-mention-kind') ??
+    element.getAttribute('data-mention-kind');
+  if (mentionId && mentionLabel) {
+    next = {
+      ...(next ?? {}),
+      mention: {
+        id: mentionId,
+        label: mentionLabel,
+        ...(mentionKind ? { kind: mentionKind } : {}),
+      },
+    };
+  }
   const highlight =
     element.getAttribute('data-highlight') ??
     element.getAttribute('data-nb-highlight');
@@ -67,7 +86,10 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
         BOOLEAN_MARK_KEYS.every(key => Boolean(bufferMarks?.[key]) === Boolean(marks[key])) &&
         bufferMarks.link === marks.link &&
         bufferMarks.highlight === marks.highlight &&
-        bufferMarks.color === marks.color);
+        bufferMarks.color === marks.color &&
+        bufferMarks.mention?.id === marks.mention?.id &&
+        bufferMarks.mention?.label === marks.mention?.label &&
+        bufferMarks.mention?.kind === marks.mention?.kind);
     if (!same) {
       flush();
       bufferMarks = marks;
@@ -89,6 +111,14 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
     const nextMarks = marksFromElement(element, marks);
     if (isBlockElement(element) && buffer && !buffer.endsWith('\n')) append('\n', undefined);
     for (const child of Array.from(element.childNodes)) walk(child, nextMarks);
+    const mentionId =
+      element.getAttribute('data-nb-mention-id') ??
+      element.getAttribute('data-mention-id');
+    const mentionLabel =
+      element.getAttribute('data-nb-mention-label') ??
+      element.getAttribute('data-mention-label');
+    // Distinct mention elements stay separate even when their metadata matches.
+    if (mentionId && mentionLabel) flush();
   };
 
   for (const child of Array.from(root.childNodes)) {

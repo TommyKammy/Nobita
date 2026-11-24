@@ -401,6 +401,14 @@ input, select, textarea { font: inherit; color: inherit; }
   text-underline-offset: 2px;
   cursor: pointer;
 }
+.nb-m-mention {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--nb-accent-soft);
+  color: var(--nb-accent);
+  font-weight: 500;
+  user-select: none;
+}
 .nb-tail { min-height: 140px; cursor: text; }
 
 
@@ -456,6 +464,21 @@ input, select, textarea { font: inherit; color: inherit; }
 .nb-block[data-type="callout"][data-tone="danger"] { background: var(--nb-callout-danger); border-color: var(--nb-callout-danger-border); }
 .nb-block[data-type="callout"] > .nb-row > .nb-marker { display: flex; color: var(--nb-text-secondary); padding-top: 7px; }
 .nb-block[data-type="callout"] > .nb-row { padding-right: 4px; }
+.nb-callout-tone {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  padding: 3px 5px;
+  border: 1px solid var(--nb-border);
+  border-radius: 5px;
+  background: var(--nb-bg);
+  color: var(--nb-text-tertiary);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.nb-block[data-type="callout"]:hover .nb-callout-tone,
+.nb-callout-tone:focus { opacity: 1; }
 
 .nb-block[data-type="code"] {
   margin: 8px 0;
@@ -492,7 +515,13 @@ input, select, textarea { font: inherit; color: inherit; }
   transition: opacity 120ms ease;
 }
 
-.nb-block[data-type="code"]:hover .nb-code-lang { opacity: 1; }
+.nb-block[data-type="code"]:hover .nb-code-lang,
+.nb-code-lang:focus { opacity: 1; }
+.nb-code-lang { cursor: pointer; font: inherit; font-size: 11px; }
+@media (hover: none) {
+  .nb-code-lang,
+  .nb-callout-tone { opacity: 1; }
+}
 
 .nb-block[data-type="divider"] { padding: 9px 0; }
 .nb-divider { height: 1px; background: var(--nb-border); }

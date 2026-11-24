@@ -37,6 +37,10 @@ Covered today:
 - multi-select, files and people pickers
 - column resize
 - cell-range selection, TSV paste and copy
+- mention insertion, async filtering, atomic typing/deleting and HTML round-trip
+- image paste/drop through the upload adapter, including readonly and document-replacement guards
+- code language / callout tone pickers
+- block-link navigation, including the legacy clipboard fallback
 
 Add a test when changing toolbar, menus, selection, clipboard, drag, data views
 or mobile layout. Prefer `data-*` selectors over UI copy.

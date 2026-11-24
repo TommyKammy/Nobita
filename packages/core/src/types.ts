@@ -137,6 +137,12 @@ export function isHighlightColor(value: unknown): value is PaletteColor {
 
 export const isTextColor = isHighlightColor;
 
+export interface MentionRef {
+  id: string;
+  label: string;
+  kind?: string;
+}
+
 export interface InlineMark {
   bold?: true;
   italic?: true;
@@ -146,6 +152,7 @@ export interface InlineMark {
   link?: string;
   highlight?: HighlightColor;
   color?: TextColor;
+  mention?: MentionRef;
 }
 
 export type MarkKey = keyof InlineMark;

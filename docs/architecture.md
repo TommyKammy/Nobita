@@ -351,9 +351,9 @@ changing the document format.
 - Data views use one saved view per block; multiple named views, calendar view
   and column hide/move are not implemented yet. Date cells store ISO strings
   and are edited as text.
-- No synced blocks, comments, mentions, math or embeds.
-- Images are URL-based; uploads and drag-in files are future work.
-- Code language is stored but not editable through the UI.
+- No synced blocks, comments, math or embeds. Mentions are represented as inline marks with a host-provided provider.
+- Images support URL insertion plus a host-provided `uploadImage` adapter for pasted/dropped files; Nobita does not host storage.
+- Code language and callout tone are editable from the block UI.
 - Very large documents need virtualized rendering.
 - The title is a separate editing host, so text selection cannot span from the
   title into the body (same browser constraint described above).
