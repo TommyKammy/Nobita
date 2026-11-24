@@ -256,6 +256,52 @@ test('selects table cells by dragging and supports copy and clear', async ({ pag
   await expect(page.locator('.nb-table-selection')).toHaveAttribute('data-visible', 'false');
 });
 
+test('copies trailing empty cells with explicit TSV fields', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, tableDoc());
+  const first = page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c1"]');
+  const last = page.locator('.nb-table-cell[data-row-id="r2"][data-column-id="c1"]');
+  const firstBox = await first.boundingBox();
+  const lastBox = await last.boundingBox();
+  if (!firstBox || !lastBox) throw new Error('Missing table cells');
+  await page.mouse.move(firstBox.x + 8, firstBox.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(lastBox.x + lastBox.width - 8, lastBox.y + lastBox.height - 8, {
+    steps: 5,
+  });
+  await page.mouse.up();
+  const copied = await page.evaluate(() => {
+    const cell = document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-table-cell[data-row-id="r2"][data-column-id="c1"]');
+    if (!cell) return null;
+    const data = new DataTransfer();
+    cell.dispatchEvent(
+      new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data })
+    );
+    return data.getData('text/plain');
+  });
+  expect(copied).toBe('A\n""');
+});
+
+test('restores editor focus when undo removes an inserted table', async ({ page }) => {
+  await openFixture(page);
+  await page.evaluate(() => {
+    const editor = (window as unknown as { __editor?: { focus(blockId: string): void } })
+      .__editor;
+    editor?.focus('b1');
+  });
+  await page.keyboard.type('/');
+  await page.locator('.nb-menu-item', { hasText: 'Table' }).click();
+  await expect(page.locator('.nb-table-grid')).toBeVisible();
+  await expect(page.locator('.nb-table-cell').first()).toBeFocused();
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('.nb-table-grid')).toHaveCount(0);
+  await page.keyboard.press('Control+Shift+z');
+  await expect(page.locator('.nb-table-grid')).toBeVisible();
+  await expect(page.locator('.nb-table-cell').first()).toBeFocused();
+});
+
 test('keeps the full width selected for ragged TSV paste', async ({ page }) => {
   await openFixture(page);
   await setDoc(page, {

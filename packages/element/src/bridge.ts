@@ -23,5 +23,6 @@ export interface BlockHost {
   redoDatabase(): void;
   undoTable(): void;
   redoTable(): void;
+  focusAfterTableHistory(blockId: string): void;
   focusAfterBlock(blockId: string): void;
 }

@@ -27,6 +27,7 @@ export interface TableHost {
   commit(data: TableData, options?: { mergeKey?: string }): void;
   undo(): void;
   redo(): void;
+  focusAfterHistory(): void;
 }
 
 const DEFAULT_COLUMN_WIDTH = 120;
@@ -43,6 +44,7 @@ function cellKey(rowId: string, columnId: string): string {
 }
 
 function tsvCell(value: string): string {
+  if (value === '') return '""';
   return /[\t\n\r"]/u.test(value) ? `"${value.replace(/"/gu, '""')}"` : value;
 }
 
@@ -686,6 +688,10 @@ export class SimpleTableView {
       : -1;
     if (redo) this.#host.redo();
     else this.#host.undo();
+    if (!this.element.isConnected) {
+      this.#host.focusAfterHistory();
+      return;
+    }
     const focus = (): void =>
       this.#focusHistoryCell(active, rowIndex, columnIndex);
     focus();

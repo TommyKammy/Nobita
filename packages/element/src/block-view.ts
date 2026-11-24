@@ -250,6 +250,7 @@ export class BlockView {
           commit: (data, options) => host.updateTable(blockId, data, options),
           undo: () => host.undoTable(),
           redo: () => host.redoTable(),
+          focusAfterHistory: () => host.focusAfterTableHistory(blockId),
         },
         block.props.table ?? createTableData()
       );
