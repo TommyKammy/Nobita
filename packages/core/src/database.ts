@@ -662,7 +662,8 @@ function remapFilterNode(
 function remapView(
   view: DatabaseView,
   columnMap: ReadonlyMap<string, string>,
-  id?: string
+  id?: string,
+  rowMap?: ReadonlyMap<string, string>
 ): DatabaseView {
   const filters = view.filters.flatMap(filter => {
     const columnId = columnMap.get(filter.columnId);
@@ -692,7 +693,12 @@ function remapView(
   const groupProperties = view.groupProperties?.map(group => ({
     ...group,
     ...(group.manuallyCardSort
-      ? { manuallyCardSort: [...group.manuallyCardSort] }
+      ? {
+          manuallyCardSort: group.manuallyCardSort.flatMap(rowId => {
+            const nextRowId = rowMap?.get(rowId);
+            return nextRowId ? [nextRowId] : [];
+          }),
+        }
       : {}),
   }));
   const titleHeaderId = view.header?.titleColumnId
@@ -763,20 +769,23 @@ export function duplicateDatabaseData(data: DatabaseData): DatabaseData {
       ...(column.data ? { data: { ...column.data } } : {}),
     };
   });
+  const rowMap = new Map<string, string>();
   const rows = data.rows.map(row => {
     const cells: Record<string, DatabaseCell> = {};
     for (const [oldId, cell] of Object.entries(row.cells)) {
       const nextId = columnMap.get(oldId);
       if (nextId) cells[nextId] = cloneCell(cell);
     }
-    return { id: createId('r'), cells };
+    const id = createId('r');
+    rowMap.set(row.id, id);
+    return { id, cells };
   });
-  const view = data.view ? remapView(data.view, columnMap) : undefined;
+  const view = data.view ? remapView(data.view, columnMap, undefined, rowMap) : undefined;
   const viewIdMap = new Map<string, string>();
   const views = data.views?.map(item => {
     const id = createId('v');
     if (item.id) viewIdMap.set(item.id, id);
-    return remapView(item, columnMap, id);
+    return remapView(item, columnMap, id, rowMap);
   });
   const activeViewId = data.activeViewId
     ? viewIdMap.get(data.activeViewId)

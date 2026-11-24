@@ -146,6 +146,68 @@ test('fills a column by dragging the selection handle', async ({ page }) => {
   expect(rows.find(row => row.id === 'r3')?.cells.name?.text).toBe('One');
 });
 
+test('deletes every selected record', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  for (const check of await page.locator('.nb-db-row-check').all()) {
+    await check.click();
+  }
+  await expect(page.locator('.nb-db-table tbody tr.is-row-selected')).toHaveCount(3);
+  await page.keyboard.press('Delete');
+  await expect(page.locator('.nb-db-table tbody tr:not(.nb-db-empty-row)')).toHaveCount(0);
+  const doc = await getDoc(page);
+  expect(
+    (doc.blocks[0]?.props.database as { rows: unknown[] }).rows
+  ).toHaveLength(0);
+});
+
+test('fills using the rendered row order', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const view = (doc.blocks[0]?.props.database as { views: Array<Record<string, unknown>> })
+    .views[0]!;
+  view.filters = [{ columnId: 'name', operator: 'doesNotContain', value: 'Two' }];
+  await setDoc(page, doc);
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').click();
+  const handle = page.locator('.nb-db-fill-handle');
+  const handleBox = await handle.boundingBox();
+  const target = await page
+    .locator('.nb-db-cell[data-row-id="r3"][data-column-id="name"]')
+    .boundingBox();
+  if (!handleBox || !target) throw new Error('Missing fill target');
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  const rows = (await getDoc(page)).blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  };
+  expect(rows.rows.find(row => row.id === 'r2')?.cells.name?.text).toBe('Two');
+  expect(rows.rows.find(row => row.id === 'r3')?.cells.name?.text).toBe('One');
+});
+
+test('keeps the row detail open when an edit changes sort order', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const view = (doc.blocks[0]?.props.database as { views: Array<Record<string, unknown>> })
+    .views[0]!;
+  view.sorts = [{ columnId: 'name', direction: 'asc' }];
+  await setDoc(page, doc);
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  await page.locator('.nb-db-detail-title').fill('Zebra');
+  await expect(page.locator('.nb-db-detail')).toBeVisible();
+  await expect(page.locator('.nb-db-detail-title')).toHaveValue('Zebra');
+  const docState = await getDoc(page);
+  expect(
+    (docState.blocks[0]?.props.database as {
+      rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+    }).rows.find(row => row.id === 'r1')?.cells.name?.text
+  ).toBe('Zebra');
+});
+
 test('does not route header input copy through the cell grid', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
@@ -165,6 +227,8 @@ test('does not route header input copy through the cell grid', async ({ page }) 
     return { prevented: event.defaultPrevented, text: data.getData('text/plain') };
   });
   expect(result).toEqual({ prevented: false, text: '' });
+  await page.keyboard.press('Backspace');
+  await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(3);
 });
 
 test('opens the row detail panel and edits the title', async ({ page }) => {
@@ -230,6 +294,54 @@ test('uses the column menu to hide, sort and duplicate columns', async ({ page }
   await page.locator('.nb-db-th[data-column-id="status"] .nb-db-col-head').click();
   await page.locator('.nb-db-pop-actions button', { hasText: 'Hide In View' }).click();
   await expect(page.locator('.nb-db-th[data-column-id="status"]')).toHaveCount(0);
+});
+
+test('formats number cells from column settings', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'number-format',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              { id: 'score', name: 'Score', type: 'number' },
+            ],
+            rows: [
+              { id: 'r1', cells: { name: { text: 'One' }, score: { text: '10' } } },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'score', width: 160 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db-th[data-column-id="score"] .nb-db-col-head').click();
+  await page.locator('.nb-db-number-format select').selectOption('percent');
+  await expect(
+    page.locator('.nb-db-cell[data-column-id="score"] input')
+  ).toHaveValue('10%');
 });
 
 test('applies nested filter groups', async ({ page }) => {

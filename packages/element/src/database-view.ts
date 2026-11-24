@@ -137,6 +137,36 @@ function defaultFilterOperator(type: DatabaseColumnType): DatabaseFilterOperator
   return filterOperators(type)[0] ?? 'is';
 }
 
+function formatDatabaseNumber(value: string, column: DatabaseColumn): string {
+  if (!value) return '';
+  const number = Number.parseFloat(value);
+  if (!Number.isFinite(number)) return value;
+  const decimalValue =
+    typeof column.data?.decimal === 'number' ? column.data.decimal : 0;
+  const decimals = Math.max(0, Math.min(6, Math.round(decimalValue)));
+  const format = typeof column.data?.format === 'string' ? column.data.format : 'number';
+  if (format === 'percent') return `${number.toFixed(decimals)}%`;
+  if (format === 'decimal') return number.toFixed(decimals);
+  if (format === 'currency') {
+    const currency =
+      typeof column.data?.currency === 'string' ? column.data.currency : 'USD';
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: 'currency',
+        currency,
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      }).format(number);
+    } catch {
+      return number.toFixed(decimals);
+    }
+  }
+  return new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(number);
+}
+
 const cellKey = (rowId: string, columnId: string): string => `${rowId}\u0000${columnId}`;
 
 /** Parse spreadsheet-friendly TSV, including quoted tabs/newlines and quotes. */
@@ -249,6 +279,7 @@ export class DatabaseView {
   } | null = null;
   #fillHandle: HTMLElement | null = null;
   #detail: HTMLElement | null = null;
+  #detailEvents = new AbortController();
   #visibleKey = '';
   #boardTitleEditing: { rowId: string; columnId: string } | null = null;
   #suppressClick = false;
@@ -265,6 +296,7 @@ export class DatabaseView {
     this.element = document.createElement('div');
     this.element.className = 'nb-db';
     this.element.contentEditable = 'false';
+    this.element.tabIndex = -1;
     this.element.dataset.readonly = String(this.#readonly);
     this.element.addEventListener('copy', this.#onCopy, true);
     this.element.addEventListener('cut', this.#onCut, true);
@@ -483,6 +515,7 @@ export class DatabaseView {
         column.name,
         column.type,
         column.options?.join('\u0001') ?? '',
+        column.data ?? null,
       ]),
       rows: data.rows.map(row => row.id),
       activeViewId: data.activeViewId ?? null,
@@ -523,7 +556,6 @@ export class DatabaseView {
   }
 
   render(): void {
-    this.#closeDetailPanel();
     this.#boardTitleEditing = null;
     if (this.#boardBlurTimer !== null) {
       window.clearTimeout(this.#boardBlurTimer);
@@ -1550,6 +1582,7 @@ export class DatabaseView {
     }
     if (rows.length === 0) {
       const empty = document.createElement('tr');
+      empty.className = 'nb-db-empty-row';
       const td = document.createElement('td');
       td.className = 'nb-db-empty';
       td.colSpan = Math.max(1, columns.length + 2);
@@ -1764,7 +1797,11 @@ export class DatabaseView {
     const title = document.createElement('div');
     title.className = 'nb-db-card-title';
     const cell = titleColumn ? row.cells[titleColumn.id] : undefined;
-    const value = titleColumn ? databaseCellDisplay(cell, titleColumn.type) : '';
+    const value = titleColumn
+      ? titleColumn.type === 'number'
+        ? formatDatabaseNumber(cell?.text ?? '', titleColumn)
+        : databaseCellDisplay(cell, titleColumn.type)
+      : '';
     const editable =
       titleColumn !== undefined &&
       !this.#readonly &&
@@ -1858,7 +1895,10 @@ export class DatabaseView {
     fields.className = 'nb-db-card-fields';
     for (const column of columns) {
       if (column.id === titleColumn?.id || column.id === view.groupBy) continue;
-      const display = databaseCellDisplay(row.cells[column.id], column.type);
+      const display =
+        column.type === 'number'
+          ? formatDatabaseNumber(row.cells[column.id]?.text ?? '', column)
+          : databaseCellDisplay(row.cells[column.id], column.type);
       if (!display) continue;
       const field = document.createElement('span');
       field.className = 'nb-db-card-field';
@@ -1880,14 +1920,19 @@ export class DatabaseView {
     const root = this.element.getRootNode() as ShadowRoot;
     const activeElement = root.activeElement;
     const columns = this.#visibleColumns(view);
-    const titleColumn = columns[0];
+    const titleColumn = this.#titleColumn(view) ?? columns[0];
     for (const card of this.element.querySelectorAll<HTMLElement>('.nb-db-card[data-row-id]')) {
       const row = this.#data.rows.find(item => item.id === card.dataset.rowId);
       if (!row) continue;
       const title = card.querySelector<HTMLElement>('.nb-db-card-title');
       if (title && (force || activeElement !== title)) {
         const value = titleColumn
-          ? databaseCellDisplay(row.cells[titleColumn.id], titleColumn.type)
+          ? titleColumn.type === 'number'
+            ? formatDatabaseNumber(
+                row.cells[titleColumn.id]?.text ?? '',
+                titleColumn
+              )
+            : databaseCellDisplay(row.cells[titleColumn.id], titleColumn.type)
           : '';
         const nextText =
           value || (title.contentEditable === 'true' ? '' : 'Untitled');
@@ -2374,6 +2419,7 @@ export class DatabaseView {
     if (this.#selectedRows.has(rowId)) this.#selectedRows.delete(rowId);
     else this.#selectedRows.add(rowId);
     this.#syncRowSelection();
+    this.element.focus({ preventScroll: true });
   }
 
   #syncRowSelection(): void {
@@ -2391,7 +2437,6 @@ export class DatabaseView {
   #deleteSelectedRows(): void {
     if (this.#selectedRows.size === 0) return;
     const rows = this.#data.rows.filter(row => !this.#selectedRows.has(row.id));
-    if (rows.length === 0) return;
     this.#selectedRows.clear();
     this.#host.commit({ ...this.#data, rows });
   }
@@ -2399,6 +2444,8 @@ export class DatabaseView {
   #closeDetailPanel(): void {
     this.#detail?.remove();
     this.#detail = null;
+    this.#detailEvents.abort();
+    this.#detailEvents = new AbortController();
   }
 
   #openDetailPanel(rowId: string): void {
@@ -2453,19 +2500,35 @@ export class DatabaseView {
 
     const title = document.createElement('input');
     title.className = 'nb-db-detail-title';
-    title.value = titleColumn ? databaseCellText(row.cells[titleColumn.id], titleColumn.type) : '';
+    title.value = titleColumn
+      ? titleColumn.type === 'number'
+        ? formatDatabaseNumber(row.cells[titleColumn.id]?.text ?? '', titleColumn)
+        : databaseCellText(row.cells[titleColumn.id], titleColumn.type)
+      : '';
     title.placeholder = 'Untitled';
     title.setAttribute('aria-label', 'Record title');
     title.disabled = this.#readonly;
     title.addEventListener('input', () => {
       if (!titleColumn) return;
+      const value =
+        titleColumn.type === 'number'
+          ? title.value.replace(/[^0-9eE+.-]/gu, '')
+          : title.value;
       this.#commitCell(
         row.id,
         titleColumn.id,
-        { ...(row.cells[titleColumn.id] ?? {}), text: title.value },
+        { ...(row.cells[titleColumn.id] ?? {}), text: value },
         `db:${row.id}:${titleColumn.id}`
       );
-    }, { signal: this.#events.signal });
+    }, { signal: this.#detailEvents.signal });
+    if (titleColumn?.type === 'number') {
+      title.addEventListener('focus', () => title.select(), {
+        signal: this.#detailEvents.signal,
+      });
+      title.addEventListener('blur', () => {
+        if (titleColumn) title.value = formatDatabaseNumber(title.value, titleColumn);
+      }, { signal: this.#detailEvents.signal });
+    }
     panel.append(title);
 
     const fields = document.createElement('div');
@@ -2538,7 +2601,7 @@ export class DatabaseView {
           { ...(cell ?? {}), checked },
           `db:${row.id}:${column.id}`
         );
-      }, { signal: this.#events.signal });
+      }, { signal: this.#detailEvents.signal });
       field.append(button);
       return field;
     }
@@ -2569,7 +2632,7 @@ export class DatabaseView {
             ? { ...(values.length > 0 ? { values } : {}) }
             : { ...(values[0] ? { text: values[0] } : {}) };
         this.#commitCell(row.id, column.id, next, `db:${row.id}:${column.id}`);
-      }, { signal: this.#events.signal });
+      }, { signal: this.#detailEvents.signal });
       field.append(select);
       return field;
     }
@@ -2577,18 +2640,42 @@ export class DatabaseView {
     if (column.type === 'number' || column.type === 'date' || column.type === 'url') {
       const input = document.createElement('input');
       input.className = 'nb-db-detail-input';
-      input.value = cell?.text ?? '';
-      input.type = column.type === 'number' ? 'number' : 'text';
+      input.value =
+        column.type === 'number'
+          ? formatDatabaseNumber(cell?.text ?? '', column)
+          : cell?.text ?? '';
+      input.type = 'text';
+      input.inputMode = column.type === 'number' ? 'decimal' : 'text';
       input.disabled = this.#readonly;
-      input.step = 'any';
       input.addEventListener('input', () => {
+        const value =
+          column.type === 'number'
+            ? input.value.replace(/[^0-9eE+.-]/gu, '')
+            : input.value;
         this.#commitCell(
           row.id,
           column.id,
-          { ...(cell ?? {}), text: input.value },
+          { ...(cell ?? {}), text: value },
           `db:${row.id}:${column.id}`
         );
-      }, { signal: this.#events.signal });
+      }, { signal: this.#detailEvents.signal });
+      if (column.type === 'number') {
+        input.addEventListener(
+          'focus',
+          () => {
+            input.value = cell?.text ?? '';
+            input.select();
+          },
+          { signal: this.#detailEvents.signal }
+        );
+        input.addEventListener(
+          'blur',
+          () => {
+            input.value = formatDatabaseNumber(input.value, column);
+          },
+          { signal: this.#detailEvents.signal }
+        );
+      }
       field.append(input);
       return field;
     }
@@ -2605,7 +2692,7 @@ export class DatabaseView {
         { ...(cell ?? {}), text: text.textContent ?? '' },
         `db:${row.id}:${column.id}`
       );
-    }, { signal: this.#events.signal });
+    }, { signal: this.#detailEvents.signal });
     field.append(text);
     return field;
   }
@@ -2875,7 +2962,13 @@ export class DatabaseView {
         const value = column.type === 'checkbox' ? '' : cell?.text ?? '';
         for (const nodes of copies) {
           if (nodes.text && nodes.text.textContent !== value) nodes.text.textContent = value;
-          if (nodes.input && nodes.input.value !== value) nodes.input.value = value;
+          if (nodes.input) {
+            const inputValue =
+              column.type === 'number' && !nodes.input.matches(':focus')
+                ? formatDatabaseNumber(value, column)
+                : value;
+            if (nodes.input.value !== inputValue) nodes.input.value = inputValue;
+          }
           if (nodes.button && column.type === 'checkbox') {
             nodes.button.setAttribute('aria-checked', String(Boolean(cell?.checked)));
           }
@@ -3041,16 +3134,23 @@ export class DatabaseView {
     if (column.type === 'number' || column.type === 'date') {
       const input = document.createElement('input');
       input.className = 'nb-db-input';
-      input.type = column.type === 'number' ? 'number' : 'text';
-      if (column.type === 'number') input.step = 'any';
+      input.type = 'text';
+      input.inputMode = column.type === 'number' ? 'decimal' : 'text';
       if (column.type === 'date') input.placeholder = 'YYYY-MM-DD';
-      input.value = cell?.text ?? '';
+      input.value =
+        column.type === 'number'
+          ? formatDatabaseNumber(cell?.text ?? '', column)
+          : cell?.text ?? '';
       input.disabled = this.#readonly;
       input.setAttribute('aria-label', column.name);
       input.addEventListener(
         'input',
         () => {
-          this.#commitCell(row.id, column.id, this.#withText(cell, input.value), `db:${row.id}:${column.id}`);
+          const value =
+            column.type === 'number'
+              ? input.value.replace(/[^0-9eE+.-]/gu, '')
+              : input.value;
+          this.#commitCell(row.id, column.id, this.#withText(cell, value), `db:${row.id}:${column.id}`);
         },
         { signal: this.#events.signal }
       );
@@ -3058,9 +3158,22 @@ export class DatabaseView {
         'focus',
         () => {
           this.#active = { rowId: row.id, columnId: column.id };
+          if (column.type === 'number') {
+            input.value = cell?.text ?? '';
+            input.select();
+          }
         },
         { signal: this.#events.signal }
       );
+      if (column.type === 'number') {
+        input.addEventListener(
+          'blur',
+          () => {
+            input.value = formatDatabaseNumber(input.value, column);
+          },
+          { signal: this.#events.signal }
+        );
+      }
       input.addEventListener(
         'keydown',
         event => this.#onCellKeyDown(event, row.id, column.id, column.type as CellKind),
@@ -3895,21 +4008,23 @@ export class DatabaseView {
     if (this.#readonly) return;
     const active = this.#active;
     if (!active) return;
-    const sourceRowIndex = this.#data.rows.findIndex(row => row.id === active.rowId);
+    const view = this.#activeView();
+    const visibleRows = this.#renderedRows(view);
+    const sourceRowIndex = visibleRows.findIndex(row => row.id === active.rowId);
     const column = this.#data.columns.find(item => item.id === active.columnId);
     if (sourceRowIndex < 0 || !column) return;
-    const source = this.#data.rows[sourceRowIndex];
+    const source = visibleRows[sourceRowIndex];
     if (!source) return;
     const move = (moveEvent: PointerEvent): void => {
       const target = this.#cellFromEvent(moveEvent);
       if (!target || target.dataset.columnId !== active.columnId) return;
       const targetRowId = target.dataset.rowId;
-      const targetIndex = this.#data.rows.findIndex(row => row.id === targetRowId);
+      const targetIndex = visibleRows.findIndex(row => row.id === targetRowId);
       if (targetIndex < 0) return;
       const start = Math.min(sourceRowIndex, targetIndex);
       const end = Math.max(sourceRowIndex, targetIndex);
-      const firstRow = this.#data.rows[start];
-      const lastRow = this.#data.rows[end];
+      const firstRow = visibleRows[start];
+      const lastRow = visibleRows[end];
       if (!firstRow || !lastRow) return;
       this.#range = {
         startRowId: firstRow.id,
@@ -3928,7 +4043,7 @@ export class DatabaseView {
       const sourceCell = source.cells[column.id];
       let next = this.#data;
       for (let index = current.startRow; index <= current.endRow; index += 1) {
-        const row = this.#data.rows[index];
+        const row = current.rows[index];
         if (!row || row.id === active.rowId) continue;
         const cells = { ...row.cells };
         if (sourceCell) cells[column.id] = this.#cloneCell(sourceCell);

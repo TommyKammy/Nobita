@@ -75,6 +75,17 @@ describe('database model', () => {
     expect(copy.rows[0]?.cells[copy.columns[1]!.id]?.text).toBe('two');
     // The original is untouched.
     expect(data.rows[0]?.cells[first.id]?.text).toBe('one');
+
+    data.views![0]!.groupProperties = [
+      {
+        key: 'group',
+        manuallyCardSort: [data.rows[0]!.id],
+      },
+    ];
+    const orderedCopy = duplicateDatabaseData(data);
+    expect(orderedCopy.views?.[0]?.groupProperties?.[0]?.manuallyCardSort).toEqual([
+      orderedCopy.rows[0]?.id,
+    ]);
   });
 
   it('sorts by typed values with empty values last', () => {
