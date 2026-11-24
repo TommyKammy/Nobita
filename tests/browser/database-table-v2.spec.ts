@@ -146,6 +146,25 @@ test('fills a column by dragging the selection handle', async ({ page }) => {
   expect(rows.find(row => row.id === 'r3')?.cells.name?.text).toBe('One');
 });
 
+test('does not fill when the handle is clicked without dragging', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').click();
+  await page
+    .locator('.nb-db-cell[data-row-id="r2"][data-column-id="name"]')
+    .click({ modifiers: ['Shift'] });
+  await expect(page.locator('.nb-db-cell.is-selected')).toHaveCount(2);
+  await page.locator('.nb-db-fill-handle').click();
+  const doc = await getDoc(page);
+  const rows = (
+    doc.blocks[0]?.props.database as {
+      rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+    }
+  ).rows;
+  expect(rows[0]?.cells.name?.text).toBe('One');
+  expect(rows[1]?.cells.name?.text).toBe('Two');
+});
+
 test('deletes every selected record', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
@@ -913,6 +932,27 @@ test('rebuilds detail fields when a column type is undone', async ({ page }) => 
   await expect(field.locator('.nb-db-detail-text')).toBeVisible();
   await expect(field.locator('button[role="checkbox"]')).toHaveCount(0);
   await expect(field.locator('.nb-db-detail-text')).toHaveText('Hello');
+});
+
+test('rebinds the detail title when undo restores the title column', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-th[data-column-id="name"] .nb-db-col-head').click();
+  await page
+    .locator('.nb-db-column-popover')
+    .getByRole('button', { name: 'Delete', exact: true })
+    .click();
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="status"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  const title = page.locator('.nb-db-detail-title');
+  await expect(title).toHaveAttribute('data-column-id', 'status');
+  await expect(title).toHaveValue('Todo');
+  await page.keyboard.press('Control+z');
+  await expect(title).toHaveAttribute('data-column-id', 'name');
+  await expect(title).toHaveValue('One');
+  await expect(
+    page.locator('.nb-db-detail-field[data-column-id="status"]')
+  ).toHaveCount(1);
 });
 
 test('renders grouped column names as text', async ({ page }) => {

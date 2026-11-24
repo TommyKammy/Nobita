@@ -2588,43 +2588,7 @@ export class DatabaseView {
     bar.append(nav, close);
     panel.append(bar);
 
-    const title = document.createElement('input');
-    title.className = 'nb-db-detail-title';
-    title.value = titleColumn
-      ? titleColumn.type === 'number'
-        ? formatDatabaseNumber(row.cells[titleColumn.id]?.text ?? '', titleColumn)
-        : databaseCellText(row.cells[titleColumn.id], titleColumn.type)
-      : '';
-    title.placeholder = 'Untitled';
-    title.setAttribute('aria-label', 'Record title');
-    title.disabled = this.#readonly;
-    if (titleColumn) title.dataset.columnId = titleColumn.id;
-    title.addEventListener('input', () => {
-      if (!titleColumn) return;
-      const value =
-        titleColumn.type === 'number'
-          ? title.value.replace(/[^0-9eE+.-]/gu, '')
-          : title.value;
-      this.#commitCell(
-        row.id,
-        titleColumn.id,
-        { ...(row.cells[titleColumn.id] ?? {}), text: value },
-        `db:${row.id}:${titleColumn.id}`
-      );
-    }, { signal: this.#detailEvents.signal });
-    if (titleColumn?.type === 'number') {
-      title.addEventListener('focus', () => {
-        title.value =
-          this.#currentCell(row.id, titleColumn.id)?.text ?? '';
-        title.select();
-      }, { signal: this.#detailEvents.signal });
-      title.addEventListener('blur', () => {
-        title.value = formatDatabaseNumber(
-          this.#currentCell(row.id, titleColumn.id)?.text ?? '',
-          titleColumn
-        );
-      }, { signal: this.#detailEvents.signal });
-    }
+    const title = this.#renderDetailTitle(row, titleColumn);
     panel.append(title);
 
     const fields = document.createElement('div');
@@ -2676,6 +2640,49 @@ export class DatabaseView {
     this.#detail = backdrop;
     title.focus();
     title.select();
+  }
+
+  #renderDetailTitle(
+    row: DatabaseRow,
+    titleColumn: DatabaseColumn | undefined
+  ): HTMLInputElement {
+    const title = document.createElement('input');
+    title.className = 'nb-db-detail-title';
+    title.value = titleColumn
+      ? titleColumn.type === 'number'
+        ? formatDatabaseNumber(row.cells[titleColumn.id]?.text ?? '', titleColumn)
+        : databaseCellText(row.cells[titleColumn.id], titleColumn.type)
+      : '';
+    title.placeholder = 'Untitled';
+    title.setAttribute('aria-label', 'Record title');
+    title.disabled = this.#readonly;
+    if (titleColumn) title.dataset.columnId = titleColumn.id;
+    title.addEventListener('input', () => {
+      if (!titleColumn) return;
+      const value =
+        titleColumn.type === 'number'
+          ? title.value.replace(/[^0-9eE+.-]/gu, '')
+          : title.value;
+      this.#commitCell(
+        row.id,
+        titleColumn.id,
+        { ...(row.cells[titleColumn.id] ?? {}), text: value },
+        `db:${row.id}:${titleColumn.id}`
+      );
+    }, { signal: this.#detailEvents.signal });
+    if (titleColumn?.type === 'number') {
+      title.addEventListener('focus', () => {
+        title.value = this.#currentCell(row.id, titleColumn.id)?.text ?? '';
+        title.select();
+      }, { signal: this.#detailEvents.signal });
+      title.addEventListener('blur', () => {
+        title.value = formatDatabaseNumber(
+          this.#currentCell(row.id, titleColumn.id)?.text ?? '',
+          titleColumn
+        );
+      }, { signal: this.#detailEvents.signal });
+    }
+    return title;
   }
 
   #renderDetailField(row: DatabaseRow, column: DatabaseColumn): HTMLElement {
@@ -3226,10 +3233,22 @@ export class DatabaseView {
         }
       }
     }
-    const title = detail.querySelector<HTMLInputElement>('.nb-db-detail-title');
+    let title = detail.querySelector<HTMLInputElement>('.nb-db-detail-title');
     if (title) {
-      const column = title.dataset.columnId
-        ? this.#data.columns.find(item => item.id === title.dataset.columnId)
+      if (title.dataset.columnId !== (titleColumn?.id ?? '')) {
+        const focused = title.matches(':focus');
+        const replacement = this.#renderDetailTitle(row, titleColumn);
+        title.replaceWith(replacement);
+        if (focused) {
+          replacement.focus();
+          const end = replacement.value.length;
+          replacement.setSelectionRange(end, end);
+        }
+        title = replacement;
+      }
+      const input = title;
+      const column = input.dataset.columnId
+        ? this.#data.columns.find(item => item.id === input.dataset.columnId)
         : undefined;
       if (column) {
         const cell = row.cells[column.id];
@@ -3241,7 +3260,7 @@ export class DatabaseView {
           column.type === 'number'
             ? formatDatabaseNumber(value, column)
             : value;
-        this.#syncDetailInput(title, value, formatted);
+        this.#syncDetailInput(input, value, formatted);
       }
     }
     for (const field of detail.querySelectorAll<HTMLElement>(
@@ -4352,12 +4371,14 @@ export class DatabaseView {
     if (sourceRowIndex < 0 || !column) return;
     const source = visibleRows[sourceRowIndex];
     if (!source) return;
+    let moved = false;
     const move = (moveEvent: PointerEvent): void => {
       const target = this.#cellFromEvent(moveEvent);
       if (!target || target.dataset.columnId !== active.columnId) return;
       const targetRowId = target.dataset.rowId;
       const targetIndex = visibleRows.findIndex(row => row.id === targetRowId);
       if (targetIndex < 0) return;
+      moved = true;
       const start = Math.min(sourceRowIndex, targetIndex);
       const end = Math.max(sourceRowIndex, targetIndex);
       const firstRow = visibleRows[start];
@@ -4375,6 +4396,7 @@ export class DatabaseView {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', finish);
       window.removeEventListener('pointercancel', finish);
+      if (!moved) return;
       const current = this.#rangeBounds();
       if (!current) return;
       const sourceCell = source.cells[column.id];
