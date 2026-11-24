@@ -4,3 +4,7 @@ dist
 *.tsbuildinfo
 .rea*
 apps/demo/dist
+
+test-results/
+playwright-report/
+blob-report/

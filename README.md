@@ -208,6 +208,8 @@ Column types are `text`, `number`, `select`, `date`, `checkbox` and `url`. Empty
 
 ## API
 
+See [docs/public-api.md](docs/public-api.md) for the stable import surface, editor options, events and internal-module boundary.
+
 ### `NobitaEditor`
 
 | Member | Description |
@@ -267,6 +269,16 @@ nobita-editor {
 
 Dark mode is built in (`theme="dark"` or `auto`). The shadow root uses `color-scheme`, so native controls follow the theme.
 
+## Testing
+
+Unit, type and browser regression checks, plus size and performance baselines, are documented in [docs/testing.md](docs/testing.md).
+
+```bash
+pnpm test:browser
+pnpm size
+pnpm bench
+```
+
 ## Performance
 
 Measured in headless Chrome 158 on the development host, production build:
@@ -283,7 +295,7 @@ Bundle sizes:
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 169.8 KB | **48.0 KB** |
+| Editor ESM (`nobita.js`) | 169.6 KB | **48.0 KB** |
 | Demo app (editor + UI + seed data) | 199.3 KB | 57.9 KB |
 
 The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.

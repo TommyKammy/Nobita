@@ -1,34 +1,25 @@
+/**
+ * Public API for the embeddable editor.
+ *
+ * Core document types and commands live in `@nobita/core`. Internal editor
+ * modules (menus, toolbar, block views, popovers) are intentionally not
+ * re-exported here.
+ */
 export { NobitaEditor } from './editor.js';
 export type { NobitaOptions, NobitaTheme } from './editor.js';
-export { NobitaEditorElement, createEditor, defineNobitaEditor } from './element.js';
-export type { NobitaChangeDetail } from './element.js';
-export { styles } from './styles.js';
-export { icon } from './icons.js';
-export { Menu } from './menu.js';
-export type { MenuItem, MenuOptions } from './menu.js';
-export { Toolbar } from './toolbar.js';
-export type { ToolbarMark } from './toolbar.js';
-export { htmlToBlocks, plainTextToBlocks, readClipboardPayload } from './clipboard.js';
+
 export {
-  blocksToHtml,
-  blocksToMarkdown,
-  createBlock,
-  createDoc,
-  docToJSON,
-  markdownToBlocks,
-  parseDoc,
-} from '@nobita/core';
-export type {
-  Block,
-  BlockProps,
-  BlockType,
-  Doc,
-  DocChange,
-  EditorSelection,
-  InlineMark,
-  InlineRun,
-  Point,
-} from '@nobita/core';
+  NobitaEditorElement,
+  createEditor,
+  defineNobitaEditor,
+} from './element.js';
+export type { NobitaChangeDetail } from './element.js';
+
+/** Clipboard/HTML conversion helpers for hosts importing existing content. */
+export { htmlToBlocks, plainTextToBlocks, readClipboardPayload } from './clipboard.js';
+
+/** UI icon strings for host toolbars and shells. */
+export { icon } from './icons.js';
 
 import { defineNobitaEditor } from './element.js';
 

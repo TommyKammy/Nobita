@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@nobita/core": ["./packages/core/src/index.ts"],
+      "@nobita/element": ["./packages/element/src/index.ts"]
+    }
+  },
+  "include": [
+    "tests/public-api/**/*.ts",
+    "tests/browser/fixture/**/*.ts"
+  ]
+}

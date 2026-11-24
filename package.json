@@ -7,16 +7,25 @@
     "node": ">=22.13.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   },
   "scripts": {
     "dev": "pnpm --filter @nobita/demo dev",
     "build": "tsc -b tsconfig.json && pnpm --filter @nobita/element run bundle && pnpm --filter @nobita/demo build",
-    "typecheck": "tsc -b tsconfig.json && pnpm --filter @nobita/demo exec tsc -p tsconfig.json && pnpm --filter @nobita/example-cloudflare-d1 typecheck",
+    "typecheck": "tsc -b tsconfig.json && pnpm typecheck:public-api && pnpm --filter @nobita/demo exec tsc -p tsconfig.json && pnpm --filter @nobita/example-cloudflare-d1 typecheck",
     "test": "pnpm --filter @nobita/core --filter @nobita/storage test",
-    "preview": "pnpm --filter @nobita/demo preview"
+    "preview": "pnpm --filter @nobita/demo preview",
+    "typecheck:public-api": "tsc -p tsconfig.public-api.json",
+    "test:browser": "playwright test",
+    "size": "node scripts/size-report.mjs",
+    "bench": "node scripts/benchmark.mjs",
+    "test:ci": "bash scripts/ci.sh",
+    "bench:check": "node scripts/benchmark.mjs --strict"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "typescript": "7.0.2",
     "vite": "^7.1.7",
     "vitest": "^3.2.4"
