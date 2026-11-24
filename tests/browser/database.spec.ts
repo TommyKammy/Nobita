@@ -46,7 +46,11 @@ const databaseBlock = {
             },
             {
               id: 'r3',
-              cells: { name: { text: 'Three' }, status: { text: 'Todo' } },
+              cells: {
+                name: { text: 'Three' },
+                status: { text: 'Todo' },
+                tags: { values: ['Legacy'] },
+              },
             },
           ],
         },
@@ -120,7 +124,7 @@ test('renders table, board and new property types', async ({ page }) => {
   await setDatabase(page);
 
   await expect(page.locator('.nb-db-table')).toBeVisible();
-  await expect(page.locator('.nb-db-chip')).toHaveCount(2);
+  await expect(page.locator('.nb-db-chip')).toHaveCount(3);
   await expect(page.locator('.nb-db-select', { hasText: 'Spec' })).toBeVisible();
   await expect(page.locator('.nb-db-select', { hasText: 'Ada' })).toBeVisible();
 
@@ -161,6 +165,14 @@ test('edits multi-select, files and people through pickers', async ({ page }) =>
     'Ada',
     'Lin',
   ]);
+
+  await page.locator('.nb-db-cell[data-row-id="r3"][data-column-id="tags"] button').click();
+  await expect(page.locator('.nb-db-check-row')).toHaveCount(3);
+  await expect(page.locator('.nb-db-check-row', { hasText: 'Legacy' })).toBeVisible();
+  await page.locator('.nb-db-check-row', { hasText: 'Legacy' }).locator('input').uncheck();
+  await page.locator('.nb-db-popover').getByRole('button', { name: 'Done', exact: true }).click();
+  data = await databaseState(page);
+  expect(data.rows[2]?.cells.tags?.values).toBeUndefined();
 
   await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="files"] button').click();
   await page.getByRole('textbox', { name: 'File name' }).fill('Plan');
@@ -233,6 +245,26 @@ test('keeps board title focus when the title is the group key', async ({ page })
       return host?.shadowRoot?.activeElement?.textContent ?? '';
     })
   ).toBe('OneXYZ');
+
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await page.keyboard.press(`${mod}+z`);
+  const afterUndo = await databaseState(page);
+  expect(afterUndo.rows[0]?.cells.name?.text).not.toBe('OneXYZ');
+  await expect(title).toHaveText(afterUndo.rows[0]?.cells.name?.text ?? '');
+
+  await page.keyboard.press(`${mod}+Shift+z`);
+  const afterRedo = await databaseState(page);
+  expect(afterRedo.rows[0]?.cells.name?.text).toBe('OneXYZ');
+  await expect(title).toHaveText('OneXYZ');
+});
+
+test('defers board regrouping when blur precedes a toolbar click', async ({ page }) => {
+  await openFixture(page);
+  await setTextBoard(page);
+
+  await page.locator('.nb-db-card-title').first().click();
+  await page.locator('.nb-db-viewbtn[data-view="table"]').click();
+  await expect(page.locator('.nb-db-table')).toBeVisible();
 });
 
 test('does not use board title paste for table grid import', async ({ page }) => {
@@ -323,6 +355,32 @@ test('does not activate picker buttons during Shift range selection', async ({ p
     .locator('.nb-db-cell[data-row-id="r2"][data-column-id="status"] button')
     .click({ modifiers: ['Shift'] });
   await expect(page.locator('.nb-db-popover')).toHaveCount(0);
+});
+
+test('clears file and people references when cutting a range', async ({ page }) => {
+  await openFixture(page);
+  await setDatabase(page);
+
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').click();
+  await page
+    .locator('.nb-db-cell[data-row-id="r1"][data-column-id="people"]')
+    .click({ modifiers: ['Shift'] });
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    const event = new ClipboardEvent('cut', {
+      bubbles: true,
+      clipboardData: data,
+    });
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db-cell[data-row-id="r1"][data-column-id="name"]')
+      ?.dispatchEvent(event);
+  });
+
+  const data = await databaseState(page);
+  expect(data.rows[0]?.cells.name).toBeUndefined();
+  expect(data.rows[0]?.cells.files).toBeUndefined();
+  expect(data.rows[0]?.cells.people).toBeUndefined();
 });
 
 test('initializes checkbox filters to the displayed value', async ({ page }) => {

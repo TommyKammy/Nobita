@@ -172,6 +172,7 @@ export class DatabaseView {
   #visibleKey = '';
   #boardTitleEditing: { rowId: string; columnId: string } | null = null;
   #suppressClick = false;
+  #boardBlurTimer: number | null = null;
 
   constructor(host: DatabaseHost, data: DatabaseData) {
     this.#host = host;
@@ -239,6 +240,10 @@ export class DatabaseView {
   }
 
   destroy(): void {
+    if (this.#boardBlurTimer !== null) {
+      window.clearTimeout(this.#boardBlurTimer);
+      this.#boardBlurTimer = null;
+    }
     this.#events.abort();
     this.#closePopover();
     this.element.remove();
@@ -284,6 +289,10 @@ export class DatabaseView {
 
   render(): void {
     this.#boardTitleEditing = null;
+    if (this.#boardBlurTimer !== null) {
+      window.clearTimeout(this.#boardBlurTimer);
+      this.#boardBlurTimer = null;
+    }
     this.#events.abort();
     this.#events = new AbortController();
     this.#closePopover();
@@ -634,6 +643,10 @@ export class DatabaseView {
       title.addEventListener(
         'focus',
         () => {
+          if (this.#boardBlurTimer !== null) {
+            window.clearTimeout(this.#boardBlurTimer);
+            this.#boardBlurTimer = null;
+          }
           if (view.groupBy === titleColumn.id) {
             this.#boardTitleEditing = { rowId: row.id, columnId: titleColumn.id };
           }
@@ -643,12 +656,16 @@ export class DatabaseView {
       title.addEventListener(
         'blur',
         () => {
-          if (
-            this.#boardTitleEditing?.rowId === row.id &&
-            this.#boardTitleEditing.columnId === titleColumn.id
-          ) {
+          const editing = this.#boardTitleEditing;
+          if (editing?.rowId === row.id && editing.columnId === titleColumn.id) {
             this.#boardTitleEditing = null;
-            this.render();
+            if (this.#boardBlurTimer !== null) {
+              window.clearTimeout(this.#boardBlurTimer);
+            }
+            this.#boardBlurTimer = window.setTimeout(() => {
+              this.#boardBlurTimer = null;
+              this.render();
+            }, 0);
           }
         },
         { signal: this.#events.signal }
@@ -668,6 +685,17 @@ export class DatabaseView {
       title.addEventListener(
         'keydown',
         event => {
+          const mod = event.metaKey || event.ctrlKey;
+          if (mod && event.key.toLowerCase() === 'z') {
+            event.preventDefault();
+            this.#history(event.shiftKey);
+            return;
+          }
+          if (mod && event.key.toLowerCase() === 'y') {
+            event.preventDefault();
+            this.#history(true);
+            return;
+          }
           if (event.key === 'Enter') {
             event.preventDefault();
             title.blur();
@@ -701,7 +729,13 @@ export class DatabaseView {
     return fields.childElementCount > 0 ? fields : null;
   }
 
-  #syncBoardValues(): void {
+  #history(redo: boolean): void {
+    if (redo) this.#host.redo();
+    else this.#host.undo();
+    this.#syncBoardValues(true);
+  }
+
+  #syncBoardValues(force = false): void {
     const view = databaseView(this.#data);
     if (view.type !== 'board') return;
     const root = this.element.getRootNode() as ShadowRoot;
@@ -711,7 +745,7 @@ export class DatabaseView {
       const row = this.#data.rows.find(item => item.id === card.dataset.rowId);
       if (!row) continue;
       const title = card.querySelector<HTMLElement>('.nb-db-card-title');
-      if (title && activeElement !== title) {
+      if (title && (force || activeElement !== title)) {
         const value = titleColumn
           ? databaseCellDisplay(row.cells[titleColumn.id], titleColumn.type)
           : '';
@@ -1756,7 +1790,12 @@ export class DatabaseView {
     return lines.join('\n');
   }
 
-  #applyGrid(startRowId: string, startColumnId: string, grid: string[][]): void {
+  #applyGrid(
+    startRowId: string,
+    startColumnId: string,
+    grid: string[][],
+    clearReferences = false
+  ): void {
     const rows = filteredDatabaseRows(this.#data, databaseView(this.#data));
     const startRow = rows.findIndex(row => row.id === startRowId);
     const startColumn = this.#data.columns.findIndex(column => column.id === startColumnId);
@@ -1795,7 +1834,7 @@ export class DatabaseView {
           if (next.length > 0) cells[column.id] = { ...(cell ?? {}), values: next };
           else delete cells[column.id];
         } else if (column.type === 'files' || column.type === 'people') {
-          // File/person references carry ids and are edited through their picker.
+          if (clearReferences) delete cells[column.id];
         } else if (value) {
           cells[column.id] = { ...(cell ?? {}), text: value };
         } else {
@@ -1860,7 +1899,8 @@ export class DatabaseView {
       firstColumn.id,
       Array.from({ length: bounds.endRow - bounds.startRow + 1 }, () =>
         Array.from({ length: bounds.endColumn - bounds.startColumn + 1 }, () => '')
-      )
+      ),
+      true
     );
   };
 
@@ -1907,7 +1947,9 @@ export class DatabaseView {
     title.className = 'nb-db-pop-title';
     title.textContent = column.name;
     content.append(title);
-    const options = column.options ?? [];
+    const options = [
+      ...new Set([...(column.options ?? []), ...draft]),
+    ];
     if (options.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'nb-db-filter-empty';
