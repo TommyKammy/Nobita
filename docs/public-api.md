@@ -112,7 +112,9 @@ Stable exports include:
   `groupedDatabaseRows`, `databaseStatValue`
 - Simple tables: `createTableData`, `normalizeTableData`, `duplicateTableData`,
   `insertTableRow`, `insertTableColumn`, `deleteTableRow`, `deleteTableColumn`,
-  `setTableCellText`, `setTableColumnWidth`
+  `duplicateTableRow`, `duplicateTableColumn`, `moveTableRow`, `moveTableColumn`,
+  `clearTableRow`, `clearTableColumn`, `setTableCellText`, `setTableColumnWidth`,
+  `setTableRowColor`, `setTableColumnColor`
 - Store: `EditorStore`
 - Validation/URL helpers: `safeHref`, `safeImageSrc`
 

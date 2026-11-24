@@ -222,6 +222,119 @@ test('synchronizes duplicated cells in grouped tables', async ({ page }) => {
   ).toHaveValue('5');
 });
 
+test('keeps the search caret while refreshing results', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  const search = page.locator('.nb-db-search');
+  await search.fill('ac');
+  await page.waitForTimeout(30);
+  await search.evaluate(input => {
+    (input as HTMLInputElement).setSelectionRange(1, 1);
+  });
+  await search.press('b');
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue('abc');
+  await page.waitForTimeout(30);
+  await search.press('d');
+  await expect(search).toHaveValue('abdc');
+  await expect(search).toBeFocused();
+});
+
+test('leaves header input paste to the input', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-title-input').click();
+  const titlePaste = await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', 'X\tY');
+    const input = document.querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db-title-input');
+    if (!input) return null;
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    });
+    input.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(titlePaste).toBe(false);
+
+  await page.locator('.nb-db-search').click();
+  const searchPaste = await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', 'X\tY');
+    const input = document.querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db-search');
+    if (!input) return null;
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    });
+    input.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(searchPaste).toBe(false);
+
+  const doc = await getDoc(page);
+  const database = doc.blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  };
+  expect(database.rows[0]?.cells.name?.text).toBe('Alpha');
+  expect(database.rows).toHaveLength(3);
+});
+
+test('pastes into repeated rows inside the originating group', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'grouped-repeat',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              { id: 'tags', name: 'Tags', type: 'multi-select', options: ['A', 'B'] },
+            ],
+            rows: [
+              { id: 'r1', cells: { name: { text: 'One' }, tags: { values: ['A', 'B'] } } },
+              { id: 'r2', cells: { name: { text: 'Two' }, tags: { values: ['A'] } } },
+            ],
+            views: [
+              { id: 'v1', name: 'By tag', type: 'table', filters: [], groupBy: 'tags' },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', 'X\nY');
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot
+      ?.querySelector('.nb-db-group[data-group="A"] .nb-db-cell[data-row-id="r1"][data-column-id="name"]')
+      ?.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: data }));
+  });
+  const doc = await getDoc(page);
+  const database = doc.blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  };
+  expect(database.rows.find(row => row.id === 'r1')?.cells.name?.text).toBe('X');
+  expect(database.rows.find(row => row.id === 'r2')?.cells.name?.text).toBe('Y');
+});
+
 test('pastes rows in grouped table display order', async ({ page }) => {
   await openFixture(page);
   await setDoc(page, {

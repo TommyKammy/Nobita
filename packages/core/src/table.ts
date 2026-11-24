@@ -7,6 +7,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const asString = (value: unknown): string =>
   typeof value === 'string' ? value.replace(/\r\n?/gu, '\n').slice(0, 10000) : '';
 
+const MAX_TABLE_COLUMNS = 100;
+const MAX_TABLE_ROWS = 1000;
+
 export function createTableColumn(init?: { id?: string; width?: number; backgroundColor?: string }): TableColumn {
   return {
     id: init?.id ?? createId('tc'),
@@ -24,8 +27,8 @@ export function createTableRow(init?: { id?: string; backgroundColor?: string })
 }
 
 export function createTableData(options: { rows?: number; columns?: number } = {}): TableData {
-  const columnCount = Math.max(1, Math.min(100, Math.floor(options.columns ?? 3)));
-  const rowCount = Math.max(1, Math.min(1000, Math.floor(options.rows ?? 3)));
+  const columnCount = Math.max(1, Math.min(MAX_TABLE_COLUMNS, Math.floor(options.columns ?? 3)));
+  const rowCount = Math.max(1, Math.min(MAX_TABLE_ROWS, Math.floor(options.rows ?? 3)));
   return {
     columns: Array.from({ length: columnCount }, () => createTableColumn()),
     rows: Array.from({ length: rowCount }, () => createTableRow()),
@@ -44,14 +47,14 @@ export function normalizeTableData(value: unknown): TableData {
   const columnIds = new Set<string>();
   const columns: TableColumn[] = [];
   if (Array.isArray(value.columns)) {
-    for (const item of value.columns.slice(0, 100)) {
+    for (const item of value.columns.slice(0, MAX_TABLE_COLUMNS)) {
       if (!isRecord(item)) continue;
       const rawId = typeof item.id === 'string' && item.id.length > 0 ? item.id : '';
       const id = rawId && !columnIds.has(rawId) ? rawId : createId('tc');
       columnIds.add(id);
       const width =
         typeof item.width === 'number' && Number.isFinite(item.width)
-          ? Math.max(40, Math.min(2000, item.width))
+          ? Math.max(60, Math.min(240, item.width))
           : undefined;
       const backgroundColor =
         typeof item.backgroundColor === 'string' && item.backgroundColor
@@ -71,7 +74,7 @@ export function normalizeTableData(value: unknown): TableData {
   const rowIds = new Set<string>();
   const rows: TableRow[] = [];
   if (Array.isArray(value.rows)) {
-    for (const item of value.rows.slice(0, 1000)) {
+    for (const item of value.rows.slice(0, MAX_TABLE_ROWS)) {
       if (!isRecord(item)) continue;
       const rawId = typeof item.id === 'string' && item.id.length > 0 ? item.id : '';
       const id = rawId && !rowIds.has(rawId) ? rawId : createId('tr');
@@ -180,6 +183,7 @@ export function insertTableRow(
   afterRowId: string | null = null,
   position: 'before' | 'after' = 'after'
 ): { data: TableData; rowId: string } {
+  if (data.rows.length >= MAX_TABLE_ROWS) return { data, rowId: '' };
   const row = createTableRow();
   const index = afterRowId ? data.rows.findIndex(item => item.id === afterRowId) : data.rows.length - 1;
   const at = index < 0 ? data.rows.length : position === 'before' ? index : index + 1;
@@ -198,6 +202,7 @@ export function insertTableColumn(
   afterColumnId: string | null = null,
   position: 'before' | 'after' = 'after'
 ): { data: TableData; columnId: string } {
+  if (data.columns.length >= MAX_TABLE_COLUMNS) return { data, columnId: '' };
   const column = createTableColumn();
   const index = afterColumnId
     ? data.columns.findIndex(item => item.id === afterColumnId)
@@ -221,7 +226,7 @@ export function deleteTableColumn(data: TableData, columnId: string): TableData 
 }
 
 export function setTableColumnWidth(data: TableData, columnId: string, width: number): TableData {
-  const value = Math.max(40, Math.min(2000, Math.round(width)));
+  const value = Math.max(60, Math.min(240, Math.round(width)));
   return {
     ...data,
     columns: data.columns.map(column =>
@@ -238,4 +243,140 @@ export function tableToTsv(data: TableData): string {
       .join('\t')
   );
   return rows.join('\n');
+}
+
+export function duplicateTableRow(
+  data: TableData,
+  rowId: string
+): { data: TableData; rowId: string } {
+  if (data.rows.length >= MAX_TABLE_ROWS) return { data, rowId };
+  const index = data.rows.findIndex(row => row.id === rowId);
+  const source = data.rows[index];
+  if (!source) return { data, rowId };
+  const row: TableRow = {
+    id: createId('tr'),
+    ...(source.backgroundColor ? { backgroundColor: source.backgroundColor } : {}),
+    cells: Object.fromEntries(
+      Object.entries(source.cells).map(([columnId, cell]) => [columnId, { text: cell.text }])
+    ),
+  };
+  const rows = data.rows.slice();
+  rows.splice(index + 1, 0, row);
+  return { data: { ...data, rows }, rowId: row.id };
+}
+
+export function duplicateTableColumn(
+  data: TableData,
+  columnId: string
+): { data: TableData; columnId: string } {
+  if (data.columns.length >= MAX_TABLE_COLUMNS) return { data, columnId };
+  const index = data.columns.findIndex(column => column.id === columnId);
+  const source = data.columns[index];
+  if (!source) return { data, columnId };
+  const column: TableColumn = {
+    ...(source.width !== undefined ? { width: source.width } : {}),
+    ...(source.backgroundColor ? { backgroundColor: source.backgroundColor } : {}),
+    id: createId('tc'),
+  };
+  const columns = data.columns.slice();
+  columns.splice(index + 1, 0, column);
+  return {
+    data: {
+      columns,
+      rows: data.rows.map(row => {
+        const cell = row.cells[source.id];
+        if (!cell) return row;
+        return {
+          ...row,
+          cells: { ...row.cells, [column.id]: { text: cell.text } },
+        };
+      }),
+    },
+    columnId: column.id,
+  };
+}
+
+export function moveTableRow(
+  data: TableData,
+  rowId: string,
+  direction: 1 | -1
+): TableData {
+  const index = data.rows.findIndex(row => row.id === rowId);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= data.rows.length) return data;
+  const rows = data.rows.slice();
+  const [row] = rows.splice(index, 1);
+  if (!row) return data;
+  rows.splice(target, 0, row);
+  return { ...data, rows };
+}
+
+export function moveTableColumn(
+  data: TableData,
+  columnId: string,
+  direction: 1 | -1
+): TableData {
+  const index = data.columns.findIndex(column => column.id === columnId);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= data.columns.length) return data;
+  const columns = data.columns.slice();
+  const [column] = columns.splice(index, 1);
+  if (!column) return data;
+  columns.splice(target, 0, column);
+  return { ...data, columns };
+}
+
+export function clearTableRow(data: TableData, rowId: string): TableData {
+  const row = data.rows.find(item => item.id === rowId);
+  if (!row || Object.keys(row.cells).length === 0) return data;
+  return {
+    ...data,
+    rows: data.rows.map(item => (item.id === rowId ? { ...item, cells: {} } : item)),
+  };
+}
+
+export function clearTableColumn(data: TableData, columnId: string): TableData {
+  let changed = false;
+  const rows = data.rows.map(row => {
+    if (!row.cells[columnId]) return row;
+    changed = true;
+    const cells = { ...row.cells };
+    delete cells[columnId];
+    return { ...row, cells };
+  });
+  return changed ? { ...data, rows } : data;
+}
+
+export function setTableRowColor(
+  data: TableData,
+  rowId: string,
+  color: string | undefined
+): TableData {
+  return {
+    ...data,
+    rows: data.rows.map(row => {
+      if (row.id !== rowId) return row;
+      const next = { ...row };
+      if (color) next.backgroundColor = color;
+      else delete next.backgroundColor;
+      return next;
+    }),
+  };
+}
+
+export function setTableColumnColor(
+  data: TableData,
+  columnId: string,
+  color: string | undefined
+): TableData {
+  return {
+    ...data,
+    columns: data.columns.map(column => {
+      if (column.id !== columnId) return column;
+      const next = { ...column };
+      if (color) next.backgroundColor = color;
+      else delete next.backgroundColor;
+      return next;
+    }),
+  };
 }

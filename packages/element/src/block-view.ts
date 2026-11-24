@@ -248,7 +248,6 @@ export class BlockView {
             return host.readonly;
           },
           commit: (data, options) => host.updateTable(blockId, data, options),
-          focusAfter: () => host.focusAfterBlock(blockId),
         },
         block.props.table ?? createTableData()
       );

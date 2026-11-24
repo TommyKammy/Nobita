@@ -1,7 +1,7 @@
 import { createBlock, createDoc } from './doc.js';
 import { cloneDatabaseData, databaseCellDisplay, normalizeDatabaseData, sortedDatabaseRows } from './database.js';
 import { normalizeMark, normalizeRuns, runsToHtml } from './text.js';
-import { normalizeTableData, tableToTsv } from './table.js';
+import { cloneTableData, normalizeTableData, tableToTsv } from './table.js';
 import type {
   Block,
   BlockProps,
@@ -171,6 +171,7 @@ function cloneBlockList(blocks: readonly Block[]): Block[] {
     props: {
       ...block.props,
       ...(block.props.database ? { database: cloneDatabaseData(block.props.database) } : {}),
+      ...(block.props.table ? { table: cloneTableData(block.props.table) } : {}),
     },
     children: cloneBlockList(block.children),
   }));
@@ -295,7 +296,7 @@ function tableToHtml(block: Block): string {
       const cells = table.columns
         .map(column => {
           const cell = row.cells[column.id];
-          const color = row.backgroundColor ?? column.backgroundColor;
+          const color = column.backgroundColor ?? row.backgroundColor;
           const style = color
             ? ` style="background-color:${escapeHtml(color)}"`
             : '';

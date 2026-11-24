@@ -436,9 +436,8 @@ function serializeBlocks(blocks: readonly Block[], depth: number, lines: string[
       }
       case 'table': {
         const table = block.props.table ?? createTableData({ rows: 1, columns: 1 });
-        const header = table.columns.map((column, index) => {
-          const first = table.rows[0]?.cells[column.id]?.text ?? `Column ${index + 1}`;
-          return escapeTableText(first || `Column ${index + 1}`);
+        const header = table.columns.map(column => {
+          return escapeTableText(table.rows[0]?.cells[column.id]?.text ?? '');
         });
         lines.push(`${pad}| ${header.join(' | ')} |`);
         lines.push(`${pad}| ${table.columns.map(() => '---').join(' | ')} |`);

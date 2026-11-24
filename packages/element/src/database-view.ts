@@ -239,6 +239,7 @@ export class DatabaseView {
   #instanceId = createId('db');
   #searchQuery = '';
   #searchFocusPending = false;
+  #searchSelection: { start: number; end: number } | null = null;
   #collapsedGroups = new Set<string>();
 
   constructor(host: DatabaseHost, data: DatabaseData) {
@@ -504,11 +505,15 @@ export class DatabaseView {
 
     if (this.#searchFocusPending) {
       this.#searchFocusPending = false;
+      const selection = this.#searchSelection;
+      this.#searchSelection = null;
       requestAnimationFrame(() => {
         const input = this.element.querySelector<HTMLInputElement>('.nb-db-search');
         if (!input) return;
         input.focus();
-        input.setSelectionRange(input.value.length, input.value.length);
+        const start = Math.min(selection?.start ?? input.value.length, input.value.length);
+        const end = Math.min(selection?.end ?? start, input.value.length);
+        input.setSelectionRange(start, end);
       });
     }
     if (view.type === 'table' && this.#pendingFocus) {
@@ -578,6 +583,10 @@ export class DatabaseView {
     search.setAttribute('aria-label', 'Search rows');
     search.addEventListener('input', () => {
       this.#searchQuery = search.value;
+      this.#searchSelection = {
+        start: search.selectionStart ?? search.value.length,
+        end: search.selectionEnd ?? search.value.length,
+      };
       this.#searchFocusPending = true;
       this.render();
     }, { signal: this.#events.signal });
@@ -2531,10 +2540,19 @@ export class DatabaseView {
     startRowId: string,
     startColumnId: string,
     grid: string[][],
-    clearReferences = false
+    clearReferences = false,
+    groupKey?: string
   ): void {
     const view = this.#activeView();
-    const rows = this.#renderedRows(view);
+    const group =
+      groupKey !== undefined
+        ? this.#groupsFor(view).find(item => item.key === groupKey)
+        : undefined;
+    const rows = group ? group.rows : this.#renderedRows(view);
+    const groupColumn =
+      group && view.groupBy
+        ? this.#data.columns.find(column => column.id === view.groupBy)
+        : undefined;
     const visibleColumns = this.#visibleColumns(view);
     const startRow = rows.findIndex(row => row.id === startRowId);
     const startColumn = visibleColumns.findIndex(column => column.id === startColumnId);
@@ -2555,6 +2573,17 @@ export class DatabaseView {
       let target = rows[startRow + rowOffset];
       if (!target) {
         target = createDatabaseRow();
+        if (group && groupColumn) {
+          const cells = { ...target.cells };
+          if (groupColumn.type === 'checkbox') {
+            cells[groupColumn.id] = { checked: group.key === 'true' };
+          } else if (groupColumn.type === 'multi-select') {
+            if (group.key) cells[groupColumn.id] = { values: [group.key] };
+          } else if (group.key) {
+            cells[groupColumn.id] = { text: group.key };
+          }
+          target = { ...target, cells };
+        }
         added.push(target);
       }
       const current = byId.get(target.id) ?? target;
@@ -2647,6 +2676,12 @@ export class DatabaseView {
   #onPaste = (event: ClipboardEvent): void => {
     const target = event.target as Element | null;
     if (target?.closest('.nb-db-popover, .nb-db-card-title')) return;
+    if (
+      (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+      !target.closest('.nb-db-cell')
+    ) {
+      return;
+    }
     const text = event.clipboardData?.getData('text/plain') ?? '';
     if (!text) return;
     const hasGrid = text.includes('\t') || text.includes('\n');
@@ -2666,9 +2701,10 @@ export class DatabaseView {
       cell?.dataset.columnId ??
       this.#active?.columnId;
     if (!startRowId || !startColumnId) return;
+    const groupKey = cell?.closest<HTMLElement>('.nb-db-group')?.dataset.group;
     event.preventDefault();
     event.stopPropagation();
-    this.#applyGrid(startRowId, startColumnId, grid);
+    this.#applyGrid(startRowId, startColumnId, grid, false, groupKey);
   };
 
   #openMultiSelectPopover(

@@ -42,7 +42,7 @@ Covered today:
 - code language / callout tone pickers
 - block-link navigation, including the legacy clipboard fallback
 - page reference insertion, navigation, resolver refresh and missing-page fallback
-- simple table rendering, editing, row/column actions and HTML import
+- simple table rendering, editing, hover handles, row/column menus, colors, drag-to-add and HTML import
 - database multi-view, multi-sort, typed filters, search, hidden columns, statistics and table grouping
 
 Add a test when changing toolbar, menus, selection, clipboard, drag, data views
