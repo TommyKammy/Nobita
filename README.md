@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **73.1 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
+- **87.2 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -29,7 +29,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, simple table, database, page links |
 | Inline | Bold, italic, underline, strikethrough, inline code, links, mentions, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo |
-| Data views | Multiple table/board views per database, view tabs, multi-sort, typed filters with AND/OR, search, column hide/show, footer statistics, table grouping/collapse, column resize, cell range copy/paste and TSV import; typed columns (text, number, select, multi-select, date, checkbox, URL, files, people), row menus |
+| Data views | Multiple table/board views per database, AFFiNE-style view settings, per-view column order/widths/visibility, nested AND/OR filters, multi-sort, search, footer statistics, table grouping/collapse with persisted group state, row detail panel, column menus, drag cell selection and fill, TSV copy/paste and import; typed columns (text, number, select, multi-select, date, checkbox, URL, files, people) |
 | Menus | Slash menu with fuzzy search and block actions (move/copy/link), block handle menu, selection toolbar with Turn into / Align / format / Color, link popover, mention picker |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 73.1 KB bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 87.2 KB bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -366,8 +366,8 @@ Bundle sizes:
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 277.8 KB | **73.1 KB** |
-| Demo app (editor + UI + seed data) | 309.5 KB | 83.3 KB |
+| Editor ESM (`nobita.js`) | 340.7 KB | **87.2 KB** |
+| Demo app (editor + UI + seed data) | 373.4 KB | 97.5 KB |
 
 The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.
 

@@ -4,7 +4,10 @@ import {
   createDatabaseData,
   createDatabaseRow,
   databaseStatValue,
+  databaseTitleColumn,
   databaseView,
+  databaseViewColumnStates,
+  databaseVisibleColumns,
   duplicateDatabaseData,
   filteredDatabaseRows,
   groupedDatabaseRows,
@@ -73,6 +76,17 @@ describe('database model', () => {
     expect(copy.rows[0]?.cells[copy.columns[1]!.id]?.text).toBe('two');
     // The original is untouched.
     expect(data.rows[0]?.cells[first.id]?.text).toBe('one');
+
+    data.views![0]!.groupProperties = [
+      {
+        key: 'group',
+        manuallyCardSort: [data.rows[0]!.id],
+      },
+    ];
+    const orderedCopy = duplicateDatabaseData(data);
+    expect(orderedCopy.views?.[0]?.groupProperties?.[0]?.manuallyCardSort).toEqual([
+      orderedCopy.rows[0]?.id,
+    ]);
   });
 
   it('sorts by typed values with empty values last', () => {
@@ -133,7 +147,137 @@ describe('database model', () => {
       type: 'board',
       groupBy: 'tags',
       filters: [{ columnId: 'name', operator: 'contains', value: 'on' }],
+      filter: {
+        type: 'group',
+        op: 'and',
+        conditions: [{ columnId: 'name', operator: 'contains', value: 'on' }],
+      },
     });
+    expect(data.view?.columns?.map(column => column.id)).toEqual([
+      'name',
+      'tags',
+      'files',
+      'people',
+    ]);
+  });
+
+  it('supports view columns, nested filters, group settings and title columns', () => {
+    const data = normalizeDatabaseData({
+      variant: 'database',
+      titleColumnId: 'name',
+      columns: [
+        { id: 'name', name: 'Name', type: 'text' },
+        { id: 'status', name: 'Status', type: 'select', options: ['Todo', 'Done'] },
+        { id: 'score', name: 'Score', type: 'number' },
+      ],
+      rows: [
+        { id: 'r1', cells: { name: { text: 'One' }, status: { text: 'Todo' }, score: { text: '1' } } },
+        { id: 'r2', cells: { name: { text: 'Two' }, status: { text: 'Done' }, score: { text: '2' } } },
+        { id: 'r3', cells: { name: { text: 'Three' }, status: { text: 'Todo' }, score: { text: '3' } } },
+      ],
+      views: [
+        {
+          id: 'v1',
+          name: 'Table',
+          type: 'table',
+          filters: [],
+          columns: [
+            { id: 'status', width: 240 },
+            { id: 'name', width: 120, hide: true },
+            { id: 'score', width: 180 },
+          ],
+          filter: {
+            type: 'group',
+            op: 'and',
+            conditions: [
+              {
+                type: 'group',
+                op: 'or',
+                conditions: [
+                  { columnId: 'status', operator: 'is', value: 'Todo' },
+                  { columnId: 'score', operator: 'greaterThan', value: '2' },
+                ],
+              },
+            ],
+          },
+          groupBy: 'status',
+          groupProperties: [
+            { key: 'Done', hide: true, collapsed: true },
+            { key: 'Todo', manuallyCardSort: ['r3', 'r1'] },
+          ],
+        },
+      ],
+      activeViewId: 'v1',
+    });
+    expect(data.titleColumnId).toBe('name');
+    const view = databaseView(data);
+    expect(databaseVisibleColumns(data, view).map(column => column.id)).toEqual([
+      'status',
+      'score',
+    ]);
+    expect(databaseViewColumnStates(data, view).map(item => item.width)).toEqual([
+      240, 120, 180,
+    ]);
+    expect(filteredDatabaseRows(data, view).map(row => row.id)).toEqual(['r1', 'r3']);
+    const groups = groupedDatabaseRows(data, view);
+    expect(groups.map(group => group.key)).toEqual(['Done', 'Todo']);
+    expect(groups[0]?.hidden).toBe(true);
+    expect(groups[0]?.collapsed).toBe(true);
+    expect(groups[1]?.rows.map(row => row.id)).toEqual(['r3', 'r1']);
+    expect(databaseStatValue(data.rows, data.columns[2]!, 'countUnique')).toBe('3');
+    expect(databaseStatValue(data.rows, data.columns[2]!, 'range')).toBe('2');
+  });
+
+  it('ignores empty nested filter groups', () => {
+    const name = createDatabaseColumn('Name');
+    const data: DatabaseData = {
+      variant: 'database',
+      columns: [name],
+      rows: [
+        createDatabaseRow({ [name.id]: { text: 'One' } }),
+        createDatabaseRow({ [name.id]: { text: 'Two' } }),
+      ],
+      view: {
+        type: 'table',
+        filters: [],
+        filter: {
+          type: 'group',
+          op: 'or',
+          conditions: [
+            { columnId: name.id, operator: 'is', value: 'One' },
+            { type: 'group', op: 'and', conditions: [] },
+          ],
+        },
+      },
+    };
+    expect(
+      filteredDatabaseRows(data).map(row => row.cells[name.id]?.text)
+    ).toEqual(['One']);
+  });
+
+  it('honors view header title columns when normalizing', () => {
+    const data = normalizeDatabaseData({
+      variant: 'database',
+      columns: [
+        { id: 'status', name: 'Status', type: 'select', options: ['Todo'] },
+        { id: 'name', name: 'Name', type: 'text' },
+      ],
+      rows: [
+        { id: 'r1', cells: { status: { text: 'Todo' }, name: { text: 'One' } } },
+      ],
+      views: [
+        {
+          id: 'v1',
+          name: 'Table',
+          type: 'table',
+          filters: [],
+          header: { titleColumnId: 'name' },
+        },
+      ],
+      activeViewId: 'v1',
+    });
+    expect(data.titleColumnId).toBeUndefined();
+    expect(databaseTitleColumn(data)?.id).toBe('name');
   });
 
   it('filters, sorts and groups rows for table and board views', () => {

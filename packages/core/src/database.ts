@@ -6,13 +6,17 @@ import type {
   DatabaseData,
   DatabaseFile,
   DatabaseFilter,
+  DatabaseFilterGroup,
+  DatabaseFilterNode,
   DatabaseFilterOperator,
+  DatabaseGroupProperty,
   DatabasePerson,
   DatabaseRow,
   DatabaseSort,
   DatabaseStatType,
   DatabaseVariant,
   DatabaseView,
+  DatabaseViewColumn,
   DatabaseViewType,
 } from './types.js';
 import { safeHref, safeImageSrc } from './url.js';
@@ -62,22 +66,34 @@ export const DATABASE_FILTER_OPERATORS: readonly DatabaseFilterOperator[] = [
 export const DATABASE_STAT_TYPES: readonly DatabaseStatType[] = [
   'count',
   'countValues',
+  'countUnique',
+  'countEmpty',
+  'countNotEmpty',
   'sum',
   'average',
   'median',
   'min',
   'max',
+  'range',
 ];
 
 export const DATABASE_STAT_LABELS: Record<DatabaseStatType, string> = {
   count: 'Count all',
   countValues: 'Count values',
+  countUnique: 'Count unique',
+  countEmpty: 'Count empty',
+  countNotEmpty: 'Count not empty',
   sum: 'Sum',
   average: 'Average',
   median: 'Median',
   min: 'Min',
   max: 'Max',
+  range: 'Range',
 };
+
+export const DEFAULT_DATABASE_COLUMN_WIDTH = 180;
+export const MIN_DATABASE_COLUMN_WIDTH = 100;
+export const MAX_DATABASE_COLUMN_WIDTH = 480;
 
 export function createDatabaseView(
   type: DatabaseViewType = 'table',
@@ -88,18 +104,21 @@ export function createDatabaseView(
     name: name ?? (type === 'board' ? 'Board' : 'Table'),
     type,
     filters: [],
+    filter: { type: 'group', op: 'and', conditions: [] },
   };
 }
 
 export function createDatabaseColumn(
   name: string,
   type: DatabaseColumnType = 'text',
-  options: string[] = []
+  options: string[] = [],
+  data?: Record<string, unknown>
 ): DatabaseColumn {
   return {
     id: createId('c'),
     name,
     type,
+    ...(data ? { data: { ...data } } : {}),
     ...((type === 'select' || type === 'multi-select')
       ? { options: options.length > 0 ? options : ['Todo', 'In progress', 'Done'] }
       : {}),
@@ -149,7 +168,17 @@ export function createDatabaseData(options: CreateDatabaseOptions = {}): Databas
 
 function withDefaultView(data: Omit<DatabaseData, 'views' | 'activeViewId'>): DatabaseData {
   const view = createDatabaseView('table');
-  return { ...data, views: [view], activeViewId: view.id };
+  view.columns = data.columns.map(column => ({
+    id: column.id,
+    width: column.width ?? DEFAULT_DATABASE_COLUMN_WIDTH,
+  }));
+  const titleColumnId = data.titleColumnId ?? data.columns[0]?.id;
+  return {
+    ...data,
+    ...(titleColumnId ? { titleColumnId } : {}),
+    views: [view],
+    activeViewId: view.id,
+  };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -237,13 +266,23 @@ function parseColumn(value: unknown, index: number, seen: Set<string>): Database
       : undefined;
   const width =
     typeof value.width === 'number' && Number.isFinite(value.width)
-      ? Math.min(800, Math.max(80, Math.round(value.width)))
+      ? Math.min(MAX_DATABASE_COLUMN_WIDTH, Math.max(MIN_DATABASE_COLUMN_WIDTH, Math.round(value.width)))
       : undefined;
+  const data = isRecord(value.data)
+    ? Object.fromEntries(
+        Object.entries(value.data)
+          .filter(([, item]) =>
+            typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean'
+          )
+          .slice(0, 20)
+      )
+    : undefined;
   return {
     id,
     name,
     type,
     ...(options ? { options } : {}),
+    ...(data && Object.keys(data).length > 0 ? { data } : {}),
     ...(width ? { width } : {}),
   };
 }
@@ -299,6 +338,95 @@ function parseFilter(
   return filter;
 }
 
+function parseFilterGroup(
+  value: unknown,
+  columns: readonly DatabaseColumn[],
+  depth = 0
+): DatabaseFilterGroup | undefined {
+  if (!isRecord(value) || depth > 4) return undefined;
+  const op = value.op === 'or' ? 'or' : 'and';
+  const raw = Array.isArray(value.conditions) ? value.conditions.slice(0, 30) : [];
+  const conditions: DatabaseFilterNode[] = [];
+  for (const item of raw) {
+    if (isRecord(item) && item.type === 'group') {
+      const group = parseFilterGroup(item, columns, depth + 1);
+      if (group && group.conditions.length > 0) conditions.push(group);
+      continue;
+    }
+    const filter = parseFilter(item, columns);
+    if (filter) conditions.push(filter);
+  }
+  return { type: 'group', op, conditions };
+}
+
+function parseViewColumns(
+  value: unknown,
+  columns: readonly DatabaseColumn[],
+  hiddenColumns: readonly string[],
+  stats: Readonly<Record<string, DatabaseStatType>>,
+  legacyWidths: ReadonlyMap<string, number>
+): DatabaseViewColumn[] {
+  const known = new Set(columns.map(column => column.id));
+  const hidden = new Set(hiddenColumns);
+  const seen = new Set<string>();
+  const result: DatabaseViewColumn[] = [];
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 200)) {
+      if (!isRecord(item) || typeof item.id !== 'string' || !known.has(item.id)) continue;
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      const width =
+        typeof item.width === 'number' && Number.isFinite(item.width)
+          ? Math.min(MAX_DATABASE_COLUMN_WIDTH, Math.max(MIN_DATABASE_COLUMN_WIDTH, Math.round(item.width)))
+          : legacyWidths.get(item.id);
+      const stat =
+        typeof item.stat === 'string' &&
+        (DATABASE_STAT_TYPES as readonly string[]).includes(item.stat)
+          ? (item.stat as DatabaseStatType)
+          : stats[item.id];
+      result.push({
+        id: item.id,
+        ...(width ? { width } : {}),
+        ...(item.hide === true || hidden.has(item.id) ? { hide: true } : {}),
+        ...(stat ? { stat } : {}),
+      });
+    }
+  }
+  for (const column of columns) {
+    if (seen.has(column.id)) continue;
+    const width = legacyWidths.get(column.id) ?? DEFAULT_DATABASE_COLUMN_WIDTH;
+    const stat = stats[column.id];
+    result.push({
+      id: column.id,
+      width,
+      ...(hidden.has(column.id) ? { hide: true } : {}),
+      ...(stat ? { stat } : {}),
+    });
+  }
+  return result;
+}
+
+function parseGroupProperties(value: unknown): DatabaseGroupProperty[] {
+  if (!Array.isArray(value)) return [];
+  const result: DatabaseGroupProperty[] = [];
+  const seen = new Set<string>();
+  for (const item of value.slice(0, 100)) {
+    if (!isRecord(item) || typeof item.key !== 'string' || item.key.length > 200) continue;
+    if (seen.has(item.key)) continue;
+    seen.add(item.key);
+    const manuallyCardSort = Array.isArray(item.manuallyCardSort)
+      ? item.manuallyCardSort.filter((id): id is string => typeof id === 'string').slice(0, 1000)
+      : undefined;
+    result.push({
+      key: item.key,
+      ...(item.hide === true ? { hide: true } : {}),
+      ...(item.collapsed === true ? { collapsed: true } : {}),
+      ...(manuallyCardSort && manuallyCardSort.length > 0 ? { manuallyCardSort } : {}),
+    });
+  }
+  return result;
+}
+
 function parseSorts(value: unknown, columns: readonly DatabaseColumn[]): DatabaseSort[] {
   if (!Array.isArray(value)) return [];
   const sorts: DatabaseSort[] = [];
@@ -324,6 +452,15 @@ function parseView(
         .filter((filter): filter is DatabaseFilter => Boolean(filter))
         .slice(0, 30)
     : [];
+  const filter =
+    parseFilterGroup(value.filter, columns) ??
+    (filters.length > 0
+      ? {
+          type: 'group' as const,
+          op: value.filterMode === 'or' ? ('or' as const) : ('and' as const),
+          conditions: filters,
+        }
+      : { type: 'group' as const, op: 'and' as const, conditions: [] });
   const groupBy =
     typeof value.groupBy === 'string' && columns.some(column => column.id === value.groupBy)
       ? value.groupBy
@@ -347,6 +484,30 @@ function parseView(
       }
     }
   }
+  const legacyWidths = new Map(
+    columns
+      .filter(column => typeof column.width === 'number')
+      .map(column => [column.id, column.width as number])
+  );
+  const viewColumns = parseViewColumns(
+    value.columns,
+    columns,
+    hiddenColumns,
+    stats,
+    legacyWidths
+  );
+  const groupProperties = parseGroupProperties(value.groupProperties);
+  const headerValue = isRecord(value.header) ? value.header : {};
+  const header = {
+    ...(typeof headerValue.titleColumnId === 'string' &&
+    columns.some(column => column.id === headerValue.titleColumnId)
+      ? { titleColumnId: headerValue.titleColumnId }
+      : {}),
+    ...(typeof headerValue.iconColumnId === 'string' &&
+    columns.some(column => column.id === headerValue.iconColumnId)
+      ? { iconColumnId: headerValue.iconColumnId }
+      : {}),
+  };
   return {
     id:
       typeof value.id === 'string' && value.id.length > 0 ? value.id : createId('v'),
@@ -358,12 +519,17 @@ function parseView(
           : 'Table',
     type,
     filters,
+    filter,
     ...(value.filterMode === 'or' ? { filterMode: 'or' as const } : {}),
     ...(groupBy ? { groupBy } : {}),
+    ...(groupProperties.length > 0 ? { groupProperties } : {}),
+    ...(value.hideEmptyGroups === true ? { hideEmptyGroups: true } : {}),
     ...(sorts.length > 0 ? { sorts } : {}),
     ...(sort ? { sort } : {}),
+    columns: viewColumns,
     ...(hiddenColumns.length > 0 ? { hiddenColumns } : {}),
     ...(Object.keys(stats).length > 0 ? { stats } : {}),
+    ...(Object.keys(header).length > 0 ? { header } : {}),
   };
 }
 
@@ -411,11 +577,26 @@ export function normalizeDatabaseData(value: unknown, fallbackVariant: DatabaseV
     typeof value.title === 'string' && value.title.trim()
       ? value.title.trim().slice(0, 200)
       : undefined;
+  const hasHeaderTitleColumn = [view, ...views].some(item => {
+    const columnId = item?.header?.titleColumnId;
+    return (
+      typeof columnId === 'string' &&
+      columns.some(column => column.id === columnId)
+    );
+  });
+  const titleColumnId =
+    typeof value.titleColumnId === 'string' &&
+    columns.some(column => column.id === value.titleColumnId)
+      ? value.titleColumnId
+      : hasHeaderTitleColumn
+        ? undefined
+        : columns[0]?.id;
   return {
     variant,
     columns,
     rows,
     ...(title ? { title } : {}),
+    ...(titleColumnId ? { titleColumnId } : {}),
     ...(sort ? { sort } : {}),
     ...(view ? { view } : {}),
     ...(views.length > 0 ? { views } : {}),
@@ -432,6 +613,17 @@ function cloneCell(cell: DatabaseCell): DatabaseCell {
   };
 }
 
+function cloneFilterNode(node: DatabaseFilterNode): DatabaseFilterNode {
+  if (node.type === 'group') {
+    return {
+      type: 'group',
+      op: node.op,
+      conditions: node.conditions.map(cloneFilterNode),
+    };
+  }
+  return { ...node };
+}
+
 function cloneView(view: DatabaseView): DatabaseView {
   return {
     ...(view.id ? { id: view.id } : {}),
@@ -439,23 +631,56 @@ function cloneView(view: DatabaseView): DatabaseView {
     type: view.type,
     filters: view.filters.map(filter => ({ ...filter })),
     ...(view.filterMode ? { filterMode: view.filterMode } : {}),
+    ...(view.filter ? { filter: cloneFilterNode(view.filter) as DatabaseFilterGroup } : {}),
     ...(view.groupBy ? { groupBy: view.groupBy } : {}),
+    ...(view.groupProperties
+      ? {
+          groupProperties: view.groupProperties.map(group => ({
+            ...group,
+            ...(group.manuallyCardSort
+              ? { manuallyCardSort: [...group.manuallyCardSort] }
+              : {}),
+          })),
+        }
+      : {}),
+    ...(view.hideEmptyGroups ? { hideEmptyGroups: true } : {}),
     ...(view.sorts ? { sorts: view.sorts.map(sort => ({ ...sort })) } : {}),
     ...(view.sort ? { sort: { ...view.sort } } : {}),
+    ...(view.columns ? { columns: view.columns.map(column => ({ ...column })) } : {}),
     ...(view.hiddenColumns ? { hiddenColumns: [...view.hiddenColumns] } : {}),
     ...(view.stats ? { stats: { ...view.stats } } : {}),
+    ...(view.header ? { header: { ...view.header } } : {}),
   };
+}
+
+function remapFilterNode(
+  node: DatabaseFilterNode,
+  columnMap: ReadonlyMap<string, string>
+): DatabaseFilterNode | undefined {
+  if (node.type === 'group') {
+    const conditions = node.conditions.flatMap(item => {
+      const next = remapFilterNode(item, columnMap);
+      return next ? [next] : [];
+    });
+    return { type: 'group', op: node.op, conditions };
+  }
+  const columnId = columnMap.get(node.columnId);
+  return columnId ? { ...node, columnId } : undefined;
 }
 
 function remapView(
   view: DatabaseView,
   columnMap: ReadonlyMap<string, string>,
-  id?: string
+  id?: string,
+  rowMap?: ReadonlyMap<string, string>
 ): DatabaseView {
   const filters = view.filters.flatMap(filter => {
     const columnId = columnMap.get(filter.columnId);
     return columnId ? [{ ...filter, columnId }] : [];
   });
+  const filter = view.filter
+    ? (remapFilterNode(view.filter, columnMap) as DatabaseFilterGroup | undefined)
+    : undefined;
   const groupBy = view.groupBy ? columnMap.get(view.groupBy) : undefined;
   const sorts = (view.sorts ?? (view.sort ? [view.sort] : [])).flatMap(sort => {
     const columnId = columnMap.get(sort.columnId);
@@ -470,16 +695,49 @@ function remapView(
     const nextId = columnMap.get(columnId);
     if (nextId) stats[nextId] = stat;
   }
+  const columns = view.columns?.flatMap(column => {
+    const nextId = columnMap.get(column.id);
+    return nextId ? [{ ...column, id: nextId }] : [];
+  });
+  const groupProperties = view.groupProperties?.map(group => ({
+    ...group,
+    ...(group.manuallyCardSort
+      ? {
+          manuallyCardSort: group.manuallyCardSort.flatMap(rowId => {
+            const nextRowId = rowMap?.get(rowId);
+            return nextRowId ? [nextRowId] : [];
+          }),
+        }
+      : {}),
+  }));
+  const titleHeaderId = view.header?.titleColumnId
+    ? columnMap.get(view.header.titleColumnId)
+    : undefined;
+  const iconHeaderId = view.header?.iconColumnId
+    ? columnMap.get(view.header.iconColumnId)
+    : undefined;
+  const header =
+    titleHeaderId || iconHeaderId
+      ? {
+          ...(titleHeaderId ? { titleColumnId: titleHeaderId } : {}),
+          ...(iconHeaderId ? { iconColumnId: iconHeaderId } : {}),
+        }
+      : undefined;
   return {
     ...(id ? { id } : view.id ? { id: view.id } : {}),
     ...(view.name ? { name: view.name } : {}),
     type: view.type,
     filters,
+    ...(filter ? { filter } : {}),
     ...(view.filterMode ? { filterMode: view.filterMode } : {}),
     ...(groupBy ? { groupBy } : {}),
+    ...(groupProperties ? { groupProperties } : {}),
+    ...(view.hideEmptyGroups ? { hideEmptyGroups: true } : {}),
     ...(sorts.length > 0 ? { sorts } : {}),
+    ...(columns ? { columns } : {}),
     ...(hiddenColumns.length > 0 ? { hiddenColumns } : {}),
     ...(Object.keys(stats).length > 0 ? { stats } : {}),
+    ...(header && Object.keys(header).length > 0 ? { header } : {}),
   };
 }
 
@@ -488,9 +746,11 @@ export function cloneDatabaseData(data: DatabaseData): DatabaseData {
   return {
     variant: data.variant,
     ...(data.title ? { title: data.title } : {}),
+    ...(data.titleColumnId ? { titleColumnId: data.titleColumnId } : {}),
     columns: data.columns.map(column => ({
       ...column,
       ...(column.options ? { options: [...column.options] } : {}),
+      ...(column.data ? { data: { ...column.data } } : {}),
     })),
     rows: data.rows.map(row => ({
       id: row.id,
@@ -515,29 +775,37 @@ export function duplicateDatabaseData(data: DatabaseData): DatabaseData {
       ...column,
       id,
       ...(column.options ? { options: [...column.options] } : {}),
+      ...(column.data ? { data: { ...column.data } } : {}),
     };
   });
+  const rowMap = new Map<string, string>();
   const rows = data.rows.map(row => {
     const cells: Record<string, DatabaseCell> = {};
     for (const [oldId, cell] of Object.entries(row.cells)) {
       const nextId = columnMap.get(oldId);
       if (nextId) cells[nextId] = cloneCell(cell);
     }
-    return { id: createId('r'), cells };
+    const id = createId('r');
+    rowMap.set(row.id, id);
+    return { id, cells };
   });
-  const view = data.view ? remapView(data.view, columnMap) : undefined;
+  const view = data.view ? remapView(data.view, columnMap, undefined, rowMap) : undefined;
   const viewIdMap = new Map<string, string>();
   const views = data.views?.map(item => {
     const id = createId('v');
     if (item.id) viewIdMap.set(item.id, id);
-    return remapView(item, columnMap, id);
+    return remapView(item, columnMap, id, rowMap);
   });
   const activeViewId = data.activeViewId
     ? viewIdMap.get(data.activeViewId)
     : views?.[0]?.id;
+  const titleColumnId = data.titleColumnId
+    ? columnMap.get(data.titleColumnId)
+    : undefined;
   return {
     variant: data.variant,
     ...(data.title ? { title: data.title } : {}),
+    ...(titleColumnId ? { titleColumnId } : {}),
     columns,
     rows,
     ...(data.sort && columnMap.has(data.sort.columnId)
@@ -637,9 +905,81 @@ export function databaseViews(data: DatabaseData): DatabaseView[] {
       name: 'Table',
       type: 'table',
       filters: [],
+      filter: { type: 'group', op: 'and', conditions: [] },
+      columns: data.columns.map(column => ({
+        id: column.id,
+        width: column.width ?? DEFAULT_DATABASE_COLUMN_WIDTH,
+      })),
       ...(data.sort ? { sort: data.sort } : {}),
     },
   ];
+}
+
+export interface DatabaseViewColumnState {
+  column: DatabaseColumn;
+  width: number;
+  hide: boolean;
+  stat?: DatabaseStatType;
+}
+
+/** Ordered columns for a view, including hidden ones. */
+export function databaseViewColumnStates(
+  data: DatabaseData,
+  view: DatabaseView = databaseView(data)
+): DatabaseViewColumnState[] {
+  const byId = new Map(data.columns.map(column => [column.id, column]));
+  const hidden = new Set(view.hiddenColumns ?? []);
+  const stats = view.stats ?? {};
+  const result: DatabaseViewColumnState[] = [];
+  const seen = new Set<string>();
+  for (const item of view.columns ?? []) {
+    const column = byId.get(item.id);
+    if (!column || seen.has(item.id)) continue;
+    seen.add(item.id);
+    const stat = item.stat ?? stats[item.id];
+    result.push({
+      column,
+      width:
+        item.width ??
+        column.width ??
+        DEFAULT_DATABASE_COLUMN_WIDTH,
+      hide: item.hide === true || hidden.has(item.id),
+      ...(stat ? { stat } : {}),
+    });
+  }
+  for (const column of data.columns) {
+    if (seen.has(column.id)) continue;
+    const stat = stats[column.id];
+    result.push({
+      column,
+      width: column.width ?? DEFAULT_DATABASE_COLUMN_WIDTH,
+      hide: hidden.has(column.id),
+      ...(stat ? { stat } : {}),
+    });
+  }
+  return result;
+}
+
+/** Visible columns in view order. */
+export function databaseVisibleColumns(
+  data: DatabaseData,
+  view: DatabaseView = databaseView(data)
+): DatabaseColumn[] {
+  return databaseViewColumnStates(data, view)
+    .filter(item => !item.hide)
+    .map(item => item.column);
+}
+
+export function databaseTitleColumn(
+  data: DatabaseData,
+  view: DatabaseView = databaseView(data)
+): DatabaseColumn | undefined {
+  const id = data.titleColumnId ?? view.header?.titleColumnId;
+  return (
+    (id ? data.columns.find(column => column.id === id) : undefined) ??
+    databaseVisibleColumns(data, view)[0] ??
+    data.columns[0]
+  );
 }
 
 /** Saved active view, or a table view derived from the legacy fields. */
@@ -777,22 +1117,58 @@ function matchesFilter(
   }
 }
 
+function hasFilterConditions(node: DatabaseFilterNode): boolean {
+  if (node.type !== 'group') return true;
+  return node.conditions.some(condition => hasFilterConditions(condition));
+}
+
+function matchesFilterNode(
+  row: DatabaseRow,
+  node: DatabaseFilterNode,
+  data: DatabaseData
+): boolean {
+  if (node.type === 'group') {
+    const matches: boolean[] = [];
+    for (const item of node.conditions) {
+      if (item.type === 'group' && !hasFilterConditions(item)) continue;
+      if (
+        item.type !== 'group' &&
+        !data.columns.some(column => column.id === item.columnId)
+      ) {
+        continue;
+      }
+      matches.push(matchesFilterNode(row, item, data));
+    }
+    if (matches.length === 0) return true;
+    return node.op === 'or' ? matches.some(Boolean) : matches.every(Boolean);
+  }
+  const column = data.columns.find(item => item.id === node.columnId);
+  if (!column) return true;
+  return matchesFilter(row, column, node);
+}
+
+/** Filter tree for a view, deriving it from legacy filters when needed. */
+export function databaseFilterGroup(
+  view: DatabaseView
+): DatabaseFilterGroup {
+  if (view.filter) return view.filter;
+  return {
+    type: 'group',
+    op: view.filterMode === 'or' ? 'or' : 'and',
+    conditions: view.filters ?? [],
+  };
+}
+
 /** Rows after filters and sorting for a view. */
 export function filteredDatabaseRows(
   data: DatabaseData,
   view: DatabaseView = databaseView(data)
 ): DatabaseRow[] {
-  const filters = (view.filters ?? []).flatMap(filter => {
-    const column = data.columns.find(item => item.id === filter.columnId);
-    return column ? [{ filter, column }] : [];
-  });
+  const filter = databaseFilterGroup(view);
   const rows =
-    filters.length === 0
+    filter.conditions.length === 0
       ? [...data.rows]
-      : data.rows.filter(row => {
-          const matches = filters.map(entry => matchesFilter(row, entry.column, entry.filter));
-          return view.filterMode === 'or' ? matches.some(Boolean) : matches.every(Boolean);
-        });
+      : data.rows.filter(row => matchesFilterNode(row, filter, data));
   return sortRows(rows, data.columns, effectiveSorts(data, view));
 }
 
@@ -827,20 +1203,37 @@ export function databaseStatValue(
 ): string {
   if (!type) return '';
   if (type === 'count') return String(rows.length);
+  if (type === 'countEmpty') {
+    return String(rows.filter(row => isEmptyCell(row.cells[column.id], column)).length);
+  }
+  if (type === 'countNotEmpty') {
+    return String(rows.filter(row => !isEmptyCell(row.cells[column.id], column)).length);
+  }
   const values = rows
     .map(row => databaseCellText(row.cells[column.id], column.type).trim())
     .filter(Boolean);
   if (type === 'countValues') return String(values.length);
+  if (type === 'countUnique') return String(new Set(values).size);
   const numbers = values
     .map(value => Number.parseFloat(value))
     .filter(value => Number.isFinite(value));
-  if (type !== 'sum' && type !== 'average' && type !== 'median' && type !== 'min' && type !== 'max') {
+  if (
+    type !== 'sum' &&
+    type !== 'average' &&
+    type !== 'median' &&
+    type !== 'min' &&
+    type !== 'max' &&
+    type !== 'range'
+  ) {
     return '';
   }
   if (numbers.length === 0) return '';
   if (type === 'sum') return formatStatNumber(numbers.reduce((sum, value) => sum + value, 0));
   if (type === 'min') return formatStatNumber(Math.min(...numbers));
   if (type === 'max') return formatStatNumber(Math.max(...numbers));
+  if (type === 'range') {
+    return formatStatNumber(Math.max(...numbers) - Math.min(...numbers));
+  }
   if (type === 'average') {
     return formatStatNumber(numbers.reduce((sum, value) => sum + value, 0) / numbers.length);
   }
@@ -857,6 +1250,52 @@ export interface DatabaseGroup {
   key: string;
   label: string;
   rows: DatabaseRow[];
+  hidden?: boolean;
+  collapsed?: boolean;
+}
+
+function applyGroupSettings(
+  groups: DatabaseGroup[],
+  view: DatabaseView
+): DatabaseGroup[] {
+  const settings = new Map(
+    (view.groupProperties ?? []).map(group => [group.key, group])
+  );
+  const hasOrder = settings.size > 0;
+  const ordered = hasOrder
+    ? [...groups].sort((a, b) => {
+        const ai = view.groupProperties?.findIndex(group => group.key === a.key) ?? -1;
+        const bi = view.groupProperties?.findIndex(group => group.key === b.key) ?? -1;
+        if (ai < 0 && bi < 0) return 0;
+        if (ai < 0) return 1;
+        if (bi < 0) return -1;
+        return ai - bi;
+      })
+    : groups;
+  const hasSort = databaseSorts(view).length > 0;
+  return ordered
+    .filter(group => !(view.hideEmptyGroups && group.rows.length === 0))
+    .map(group => {
+      const setting = settings.get(group.key);
+      let rows = group.rows;
+      if (!hasSort && setting?.manuallyCardSort?.length) {
+        const order = new Map(setting.manuallyCardSort.map((id, index) => [id, index]));
+        rows = [...rows].sort((a, b) => {
+          const ai = order.get(a.id);
+          const bi = order.get(b.id);
+          if (ai === undefined && bi === undefined) return 0;
+          if (ai === undefined) return 1;
+          if (bi === undefined) return -1;
+          return ai - bi;
+        });
+      }
+      return {
+        ...group,
+        rows,
+        ...(setting?.hide ? { hidden: true } : {}),
+        ...(setting?.collapsed ? { collapsed: true } : {}),
+      };
+    });
 }
 
 /** Group filtered rows for a board or grouped view. */
@@ -871,18 +1310,21 @@ export function groupedDatabaseRows(
   if (!column) return [{ key: 'all', label: 'All rows', rows }];
 
   if (column.type === 'checkbox') {
-    return [
-      {
-        key: 'true',
-        label: 'Checked',
-        rows: rows.filter(row => row.cells[column.id]?.checked === true),
-      },
-      {
-        key: 'false',
-        label: 'Unchecked',
-        rows: rows.filter(row => row.cells[column.id]?.checked !== true),
-      },
-    ];
+    return applyGroupSettings(
+      [
+        {
+          key: 'true',
+          label: 'Checked',
+          rows: rows.filter(row => row.cells[column.id]?.checked === true),
+        },
+        {
+          key: 'false',
+          label: 'Unchecked',
+          rows: rows.filter(row => row.cells[column.id]?.checked !== true),
+        },
+      ],
+      view
+    );
   }
 
   if (column.type === 'select' || column.type === 'multi-select') {
@@ -915,7 +1357,7 @@ export function groupedDatabaseRows(
         : !cell?.text;
     });
     if (empty.length > 0) groups.push({ key: '', label: 'No value', rows: empty });
-    return groups;
+    return applyGroupSettings(groups, view);
   }
 
   const values = new Map<string, DatabaseRow[]>();
@@ -925,13 +1367,16 @@ export function groupedDatabaseRows(
     group.push(row);
     values.set(value, group);
   }
-  return [...values.entries()]
-    .sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
-    .map(([key, groupRows]) => ({
-      key,
-      label: key || 'No value',
-      rows: groupRows,
-    }));
+  return applyGroupSettings(
+    [...values.entries()]
+      .sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
+      .map(([key, groupRows]) => ({
+        key,
+        label: key || 'No value',
+        rows: groupRows,
+      })),
+    view
+  );
 }
 
 export function databaseRowNumber(data: DatabaseData, rowId: string): number {

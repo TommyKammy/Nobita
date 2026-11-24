@@ -2,7 +2,7 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **73.1 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **87.2 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
 > `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
@@ -47,8 +47,8 @@ The P0/P1 passes have already closed alignment, dates, Heading 4–6,
 2. **Block selection** (Escape, Shift+Arrow, Cmd+A stages) is absent. Nobita can
    select text across blocks, but non-text blocks (image, database, divider, page)
    cannot be selected as blocks.
-3. **Database search**, typed filters, multi-sort, multiple views, hidden columns and footer statistics are implemented; calendar view and nested filter groups remain.
-4. **Database keyboard row deletion** is absent; cell range selection and copy/paste are implemented.
+3. **Database search**, nested typed filters, multi-sort, multiple views, per-view columns, footer statistics and row detail are implemented; calendar view remains.
+4. **Database drag selection**, drag fill, row selection/deletion and TSV copy/paste are implemented.
 5. **Page workspace / `[[` / comments** are app-level features that should
    not be pulled into the editor core casually. Mentions and page references
    are generic primitives; routing, backlinks and page trees stay in the host.
@@ -188,13 +188,13 @@ table/board views.
 | Todo/data view | ❌ | Feature-flagged in AFFiNE |
 | Multiple views per database | ✅ | Named table/board views |
 | Add / rename / duplicate / delete view | ✅ | View bar and menu |
-| Filter | ✅ | Typed operators, AND/OR mode |
+| Filter | ✅ | Typed operators, nested AND/OR groups |
 | Sort | ✅ | Multiple sort keys, empty last |
 | Search | ✅ | Live search across visible rows |
 | Group by | ✅ | Table: text/number/date/select/multi-select/checkbox; board: select/multi-select/checkbox |
-| View options | ◐ | Hidden columns, stats and view actions; hide-empty/date settings remain |
+| View options | ✅ | View settings, properties, per-view columns, group settings and layout; date grouping settings remain partial |
 | Add row / add column | ✅ | Header/footer and table actions |
-| Database title editing | ❌ | Label is fixed ("Table"/"Database") |
+| Database title editing | ✅ | Editable inline title and database menu surface |
 
 ### 5.2 Properties and cells
 
@@ -250,7 +250,7 @@ table-specific actions become a priority.
 | Markdown paste/export | ✅ | ✅ incl. pipe tables |
 | Notion HTML import | ✅ | ❌ |
 | Block slice copy | ✅ | 🟡 custom JSON + Markdown/HTML |
-| Database cell/area copy | ✅ | 🟡 single-cell native only |
+| Database cell/area copy | ✅ | ✅ TSV range copy/cut/paste |
 | Image upload / paste | ✅ | ❌ URL only |
 | Attachment / PDF import | ✅ | ❌ |
 | Page Markdown/JSON export | App-level | ✅ demo |
@@ -291,8 +291,8 @@ the editor core just for parity:
   YouTube/GitHub/Figma/Loom/iframe embeds.
 - **Math:** LaTeX rendering and inline equations.
 - **Navigation graph:** linked docs, backlinks, synced docs.
-- **Full data-view framework:** row pages, calendar view, progress/image properties,
-  per-view widths and nested filter groups.
+- **Full data-view framework:** row pages, calendar view, rich-text/progress/image
+  properties and formulas/relations.
 - **AI features.**
 
 ## 9. Priorities
@@ -327,8 +327,8 @@ the editor core just for parity:
      Delete selected, batch duplicate/copy.
    - Makes image/database/table/divider selectable and unlocks table-from-selection.
    - Est. 4–6 KB plus careful tests.
-2. **Database column move/duplicate and per-view widths.**
-   - Extend the current view model; hide/show and view duplication already ship.
+2. **Database calendar view and rich-text cells.**
+   - The table-first database rebuild now covers view settings, nested filters, per-view columns and row detail.
 3. **Create Table from selected blocks** (toolbar/block selection).
    - Convert blocks into database rows; requires block selection first.
    - Est. 2–3 KB.
@@ -339,7 +339,7 @@ the editor core just for parity:
 ### P2 — large or scope expansion
 
 - Calendar database view.
-- Row detail pages / title property / page-per-row.
+- Row detail pages (the current row detail panel is data-only) and rich-text title/property cells.
 - Page workspace navigation, `[[`, backlinks.
 - Comments and collaboration.
 - Attachments/PDF, managed image hosting, bookmark previews, embeds.
@@ -357,6 +357,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 73.1 KB gzip. Phase 1 data views added about 7.5 KB gzip,
-Phase 2 references/input added about 2.4 KB, page links about 1.3 KB and table/database P1 about 13.9 KB; remaining
+The current editor is 87.2 KB gzip. Phase 1 data views added about 7.5 KB gzip,
+Phase 2 references/input added about 2.4 KB, page links about 1.3 KB and table/database P1 about 28.0 KB; remaining
 items are incremental on top of the existing view model.

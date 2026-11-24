@@ -43,7 +43,7 @@ Covered today:
 - block-link navigation, including the legacy clipboard fallback
 - page reference insertion, navigation, resolver refresh and missing-page fallback
 - simple table rendering, editing, hover handles, drag cell selection, row/column menus, colors, drag-to-add and HTML import
-- database multi-view, multi-sort, typed filters, search, hidden columns, statistics and table grouping
+- database multi-view, multi-sort, nested filters, search, per-view columns, statistics, table grouping, drag selection/fill, row detail, column menus and view settings
 
 Add a test when changing toolbar, menus, selection, clipboard, drag, data views
 or mobile layout. Prefer `data-*` selectors over UI copy.
