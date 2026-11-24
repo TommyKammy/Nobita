@@ -1024,6 +1024,189 @@ test('maps cut rows onto another database by column name', async ({ page }) => {
   expect(rows[0]?.cells['b-status']?.text).toBe('Todo');
 });
 
+test('maps same-named columns one-to-one across databases', async ({ page }) => {
+  await openFixture(page);
+  const database = (id: string, prefix: string) => ({
+    variant: 'database',
+    titleColumnId: `${prefix}-name`,
+    columns: [
+      { id: `${prefix}-name`, name: 'Name', type: 'text' },
+      { id: `${prefix}-amount1`, name: 'Amount', type: 'number' },
+      { id: `${prefix}-amount2`, name: 'Amount', type: 'number' },
+    ],
+    rows:
+      id === 'db1'
+        ? [
+            {
+              id: 'r1',
+              cells: {
+                [`${prefix}-name`]: { text: 'One' },
+                [`${prefix}-amount1`]: { text: '10' },
+                [`${prefix}-amount2`]: { text: '20' },
+              },
+            },
+          ]
+        : [],
+    views: [
+      {
+        id: `${prefix}-view`,
+        name: 'Table',
+        type: 'table',
+        filters: [],
+        columns: [
+          { id: `${prefix}-name`, width: 200 },
+          { id: `${prefix}-amount1`, width: 160 },
+          { id: `${prefix}-amount2`, width: 160 },
+        ],
+      },
+    ],
+    activeViewId: `${prefix}-view`,
+  });
+  await setDoc(page, {
+    version: 1,
+    id: 'cross-database-amounts',
+    title: '',
+    blocks: [
+      {
+        id: 'db1',
+        type: 'database',
+        text: [],
+        props: { database: database('db1', 'a') },
+        children: [],
+      },
+      {
+        id: 'db2',
+        type: 'database',
+        text: [],
+        props: { database: database('db2', 'b') },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db').nth(0).locator('.nb-db-row-check').first().click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const dbs = root?.querySelectorAll<HTMLElement>('.nb-db');
+    if (!dbs || dbs.length < 2) return;
+    const data = new DataTransfer();
+    dbs[0]?.dispatchEvent(
+      new ClipboardEvent('cut', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      })
+    );
+    dbs[1]?.dispatchEvent(
+      new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      })
+    );
+  });
+  const doc = await getDoc(page);
+  const cells = (
+    doc.blocks[1]?.props.database as {
+      rows: Array<{
+        id: string;
+        cells: Record<string, { text?: string }>;
+      }>;
+    }
+  ).rows[0]?.cells;
+  expect(cells?.['b-amount1']?.text).toBe('10');
+  expect(cells?.['b-amount2']?.text).toBe('20');
+});
+
+test('keeps fill ranges within the source group', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'fill-group-context',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'tags',
+                name: 'Tags',
+                type: 'multi-select',
+                options: ['A', 'B'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { name: { text: 'One' }, tags: { values: ['A', 'B'] } },
+              },
+              {
+                id: 'rX',
+                cells: { name: { text: 'X' }, tags: { values: ['A'] } },
+              },
+              {
+                id: 'r2',
+                cells: { name: { text: 'Two' }, tags: { values: ['A', 'B'] } },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                groupBy: 'tags',
+                groupProperties: [
+                  { key: 'A', manuallyCardSort: ['r1', 'rX'] },
+                  { key: 'B', manuallyCardSort: ['r1', 'r2'] },
+                ],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'tags', width: 200 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  const source = page.locator(
+    '.nb-db-group[data-group="B"] .nb-db-cell[data-row-id="r2"][data-column-id="name"]'
+  );
+  await source.click();
+  const handle = page.locator('.nb-db-fill-handle');
+  const handleBox = await handle.boundingBox();
+  const target = await page
+    .locator(
+      '.nb-db-group[data-group="B"] .nb-db-cell[data-row-id="r1"][data-column-id="name"]'
+    )
+    .boundingBox();
+  if (!handleBox || !target) throw new Error('Missing fill target');
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  const doc = await getDoc(page);
+  const rows = (
+    doc.blocks[0]?.props.database as {
+      rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+    }
+  ).rows;
+  expect(rows.find(row => row.id === 'rX')?.cells.name?.text).toBe('X');
+  expect(rows.find(row => row.id === 'r1')?.cells.name?.text).toBe('Two');
+});
+
 test('synchronizes the detail panel after an external undo', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);

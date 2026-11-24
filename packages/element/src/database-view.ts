@@ -352,7 +352,7 @@ export class DatabaseView {
   #events = new AbortController();
   #cells = new Map<string, CellNodes[]>();
   #titleInput: HTMLInputElement | null = null;
-  #active: { rowId: string; columnId: string } | null = null;
+  #active: { rowId: string; columnId: string; groupKey?: string } | null = null;
   #pendingFocus: { rowId: string; columnId: string; at: 'start' | 'end' } | null = null;
   #popoverCleanup: (() => void) | null = null;
   #countElement: HTMLElement | null = null;
@@ -362,6 +362,7 @@ export class DatabaseView {
     startColumnId: string;
     endRowId: string;
     endColumnId: string;
+    groupKey?: string;
   } | null = null;
   #rangeCells = new Set<string>();
   #selectedRows = new Set<string>();
@@ -451,7 +452,12 @@ export class DatabaseView {
     if (!target) return;
     target.focus();
     if (nodes.text) placeCaret(nodes.text, at);
-    this.#active = { rowId, columnId };
+    const groupKey = nodes.td.closest<HTMLElement>('.nb-db-group')?.dataset.group;
+    this.#active = {
+      rowId,
+      columnId,
+      ...(groupKey !== undefined ? { groupKey } : {}),
+    };
     this.#syncSelectionVisuals();
   }
 
@@ -3669,7 +3675,12 @@ export class DatabaseView {
       input.addEventListener(
         'focus',
         () => {
-          this.#active = { rowId: row.id, columnId: column.id };
+          const groupKey = input.closest<HTMLElement>('.nb-db-group')?.dataset.group;
+          this.#active = {
+            rowId: row.id,
+            columnId: column.id,
+            ...(groupKey !== undefined ? { groupKey } : {}),
+          };
           if (column.type === 'number') {
             input.value = this.#currentCell(row.id, column.id)?.text ?? '';
             input.select();
@@ -3717,7 +3728,12 @@ export class DatabaseView {
       text.addEventListener(
         'focus',
         () => {
-          this.#active = { rowId: row.id, columnId: column.id };
+          const groupKey = text.closest<HTMLElement>('.nb-db-group')?.dataset.group;
+          this.#active = {
+            rowId: row.id,
+            columnId: column.id,
+            ...(groupKey !== undefined ? { groupKey } : {}),
+          };
         },
         { signal: this.#events.signal }
       );
@@ -4315,7 +4331,14 @@ export class DatabaseView {
   ): void {
     if (this.#readonly || event.button !== 0) return;
     const previous = this.#active;
-    this.#active = { rowId, columnId };
+    const groupKey = (event.currentTarget as HTMLElement | null)?.closest<HTMLElement>(
+      '.nb-db-group'
+    )?.dataset.group;
+    this.#active = {
+      rowId,
+      columnId,
+      ...(groupKey !== undefined ? { groupKey } : {}),
+    };
     this.#selectedRows.clear();
     this.#syncSelectionVisuals();
     if (!event.shiftKey) {
@@ -4408,7 +4431,11 @@ export class DatabaseView {
   } | null {
     if (!this.#range) return null;
     const view = this.#activeView();
-    const rows = this.#renderedRows(view);
+    const groupKey = this.#range.groupKey;
+    const rows =
+      groupKey !== undefined
+        ? this.#groupsFor(view).find(group => group.key === groupKey)?.rows ?? []
+        : this.#renderedRows(view);
     const columns = this.#visibleColumns(view);
     const startRow = rows.findIndex(row => row.id === this.#range?.startRowId);
     const endRow = rows.findIndex(row => row.id === this.#range?.endRowId);
@@ -4527,6 +4554,7 @@ export class DatabaseView {
     if (sourceRowIndex < 0 || !column) return;
     const source = visibleRows[sourceRowIndex];
     if (!source) return;
+    const groupKey = active.groupKey;
     let moved = false;
     const move = (moveEvent: PointerEvent): void => {
       const target = this.#cellFromEvent(moveEvent);
@@ -4545,6 +4573,7 @@ export class DatabaseView {
         startColumnId: active.columnId,
         endRowId: lastRow.id,
         endColumnId: active.columnId,
+        ...(groupKey !== undefined ? { groupKey } : {}),
       };
       this.#renderRange();
     };
@@ -4891,17 +4920,28 @@ export class DatabaseView {
           : [];
         const columnMap = new Map<string, string>();
         if (sourceColumns.length > 0) {
+          const used = new Set<string>();
           for (const source of sourceColumns) {
             if (!source || typeof source.id !== 'string') continue;
             const name = typeof source.name === 'string' ? source.name : '';
             const type = typeof source.type === 'string' ? source.type : '';
             const targetColumn =
-              this.#data.columns.find(column => column.id === source.id) ??
               this.#data.columns.find(
-                column => column.name === name && (!type || column.type === type)
+                column => column.id === source.id && !used.has(column.id)
               ) ??
-              this.#data.columns.find(column => column.name === name);
-            if (targetColumn) columnMap.set(source.id, targetColumn.id);
+              this.#data.columns.find(
+                column =>
+                  column.name === name &&
+                  (!type || column.type === type) &&
+                  !used.has(column.id)
+              ) ??
+              this.#data.columns.find(
+                column => column.name === name && !used.has(column.id)
+              );
+            if (targetColumn) {
+              used.add(targetColumn.id);
+              columnMap.set(source.id, targetColumn.id);
+            }
           }
         } else {
           for (const column of this.#data.columns) {
