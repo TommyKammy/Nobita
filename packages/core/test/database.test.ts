@@ -3,7 +3,10 @@ import {
   createDatabaseColumn,
   createDatabaseData,
   createDatabaseRow,
+  databaseView,
   duplicateDatabaseData,
+  filteredDatabaseRows,
+  groupedDatabaseRows,
   normalizeDatabaseData,
   sortedDatabaseRows,
 } from '../src/database.js';
@@ -11,6 +14,7 @@ import { createBlock, createDoc, duplicateBlockTree } from '../src/doc.js';
 import { blocksToHtml, parseDoc } from '../src/serialize.js';
 import { blocksToMarkdown, markdownToBlocks } from '../src/markdown.js';
 import { countWords } from '../src/doc.js';
+import type { DatabaseData } from '../src/types.js';
 
 describe('database model', () => {
   it('creates table and database variants', () => {
@@ -89,6 +93,96 @@ describe('database model', () => {
     expect(sortedDatabaseRows(data).map(row => row.cells[name.id]?.text)).toEqual(['b', 'a', 'c']);
     data.sort = { columnId: score.id, direction: 'desc' };
     expect(sortedDatabaseRows(data).map(row => row.cells[name.id]?.text)).toEqual(['a', 'b', 'c']);
+  });
+
+
+  it('normalizes new property values, widths, filters and board views', () => {
+    const data = normalizeDatabaseData({
+      variant: 'database',
+      columns: [
+        { id: 'name', name: 'Name', type: 'text', width: 240 },
+        { id: 'tags', name: 'Tags', type: 'multi-select', options: ['A', 'B'] },
+        { id: 'files', name: 'Files', type: 'files' },
+        { id: 'people', name: 'People', type: 'people' },
+      ],
+      rows: [
+        {
+          id: 'r1',
+          cells: {
+            name: { text: 'One' },
+            tags: { values: ['A', 'A', ' B ', ''] },
+            files: { files: [{ name: 'Spec', url: 'https://example.com/spec.pdf', size: 12 }] },
+            people: { people: [{ id: 'u1', label: 'Ada' }] },
+          },
+        },
+      ],
+      view: {
+        type: 'board',
+        groupBy: 'tags',
+        filters: [{ columnId: 'name', operator: 'contains', value: 'on' }],
+        sort: { columnId: 'name', direction: 'asc' },
+      },
+    });
+    expect(data.columns[0]?.width).toBe(240);
+    expect(data.rows[0]?.cells.tags?.values).toEqual(['A', 'B']);
+    expect(data.rows[0]?.cells.files?.files?.[0]?.name).toBe('Spec');
+    expect(data.rows[0]?.cells.people?.people?.[0]?.label).toBe('Ada');
+    expect(data.view).toMatchObject({
+      type: 'board',
+      groupBy: 'tags',
+      filters: [{ columnId: 'name', operator: 'contains', value: 'on' }],
+    });
+  });
+
+  it('filters, sorts and groups rows for table and board views', () => {
+    const status = createDatabaseColumn('Status', 'select', ['Todo', 'Done']);
+    const name = createDatabaseColumn('Name');
+    const data: DatabaseData = {
+      variant: 'database',
+      columns: [name, status],
+      rows: [
+        createDatabaseRow({ [name.id]: { text: 'B' }, [status.id]: { text: 'Todo' } }),
+        createDatabaseRow({ [name.id]: { text: 'A' }, [status.id]: { text: 'Done' } }),
+        createDatabaseRow({ [name.id]: { text: 'C' }, [status.id]: { text: 'Todo' } }),
+        createDatabaseRow({ [name.id]: { text: 'D' } }),
+      ],
+      view: {
+        type: 'board',
+        groupBy: status.id,
+        filters: [{ columnId: status.id, operator: 'is', value: 'Todo' }],
+        sort: { columnId: name.id, direction: 'asc' },
+      },
+    };
+    expect(databaseView(data).type).toBe('board');
+    expect(filteredDatabaseRows(data).map(row => row.cells[name.id]?.text)).toEqual(['B', 'C']);
+    const groups = groupedDatabaseRows(data);
+    expect(groups.map(group => [group.label, group.rows.length])).toEqual([
+      ['Todo', 2],
+      ['Done', 0],
+    ]);
+  });
+
+  it('duplicates view column references and deep-clones rich cells', () => {
+    const tags = createDatabaseColumn('Tags', 'multi-select', ['A']);
+    const data: DatabaseData = {
+      variant: 'table',
+      columns: [tags],
+      rows: [createDatabaseRow({ [tags.id]: { values: ['A'] } })],
+      view: {
+        type: 'board',
+        groupBy: tags.id,
+        filters: [{ columnId: tags.id, operator: 'contains', value: 'A' }],
+      },
+    };
+    const copy = duplicateDatabaseData(data);
+    const copiedColumnId = copy.columns[0]!.id;
+    expect(copiedColumnId).not.toBe(tags.id);
+    expect(copy.view?.groupBy).toBe(copiedColumnId);
+    expect(copy.view?.filters[0]?.columnId).toBe(copiedColumnId);
+    expect(copy.rows[0]?.cells[copiedColumnId]?.values).toEqual(['A']);
+    expect(copy.rows[0]?.cells[copiedColumnId]?.values).not.toBe(
+      data.rows[0]?.cells[tags.id]?.values
+    );
   });
 
   it('duplicates database blocks with fresh table ids', () => {

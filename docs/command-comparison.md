@@ -2,7 +2,7 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **48.0 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **54.7 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
 > `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
@@ -47,8 +47,8 @@ The P0/P1 passes have already closed alignment, dates, Heading 4–6,
 2. **Block selection** (Escape, Shift+Arrow, Cmd+A stages) is absent. Nobita can
    select text across blocks, but non-text blocks (image, database, divider)
    cannot be selected as blocks.
-3. **Database search/filter/grouping** is absent; only sort exists.
-4. **Database row/area selection and keyboard row deletion** are absent.
+3. **Database search** is absent; filters, grouping and board views are implemented.
+4. **Database keyboard row deletion** is absent; cell range selection and copy/paste are implemented.
 5. **Linked docs / `[[` / `@` mentions / comments** are app-level features that
    should not be pulled into the editor core casually.
 
@@ -103,7 +103,7 @@ in Nobita's toolbar or block menu.
 | --- | --- | --- |
 | Table View | ✅ | Nobita `Database` / `Table` variants |
 | Calendar View | ❌ | — |
-| Kanban View | ❌ | — |
+| Kanban View | ✅ | Board view with grouping and card drag |
 | Todo data view | ❌ | AFFiNE feature-flagged block query view |
 
 ## 2. Text conversion and inline formatting
@@ -181,15 +181,15 @@ table, calendar and kanban views. Nobita uses one `database` block with
 | AFFiNE | Nobita | Notes |
 | --- | --- | --- |
 | Table view | ✅ | Both `Table` and `Database` variants |
-| Kanban view | ❌ | Needs grouping by select/property |
+| Kanban view | ✅ | Board view with select/checkbox grouping and card drag |
 | Calendar view | ❌ | Needs date property + calendar grid |
 | Todo/data view | ❌ | Feature-flagged in AFFiNE |
-| Multiple views per database | ❌ | One view per block |
+| Multiple views per database | ❌ | One saved view per block |
 | Add / rename / duplicate / delete view | ❌ | — |
-| Filter | ❌ | — |
+| Filter | ✅ | Column/operator/value filters |
 | Sort | ✅ | Asc/desc/clear, empty last |
 | Search | ❌ | — |
-| Group by | ❌ | — |
+| Group by | ✅ | Select, multi-select and checkbox columns |
 | View options | ❌ | Hide empty groups, date settings, etc. |
 | Add row / add column | ✅ | Header and footer buttons |
 | Database title editing | ❌ | Label is fixed ("Table"/"Database") |
@@ -202,7 +202,7 @@ table, calendar and kanban views. Nobita uses one `database` block with
 | Text / rich text | ✅ | Plain text only |
 | Number | ✅ | Native number input |
 | Select | ✅ | Single-select with options |
-| Multi-select | ❌ | — |
+| Multi-select | ✅ | Comma-separated option editing |
 | Checkbox | ✅ | — |
 | Date | 🟡 | ISO text input; no native picker/calendar |
 | Progress | ❌ | — |
@@ -210,14 +210,14 @@ table, calendar and kanban views. Nobita uses one `database` block with
 | Link | 🟡 | URL column behaves as text |
 | Created time | ❌ | — |
 | Property colors / tags | 🟡 | Select dots colored; no custom tag colors |
-| Rename / change type / delete / insert column | ✅ | Column popover |
+| Rename / change type / delete / insert / resize column | ✅ | Column popover and drag handle |
 | Move / duplicate / hide column | ❌ | — |
 | Row insert / duplicate / delete | ✅ | Row handle menu |
 | Row detail / open as page | ❌ | — |
-| Row/area selection | ❌ | — |
+| Row/area selection | 🟡 | Cell range selection; row selection only |
 | Delete selected rows (keyboard) | ❌ | Cell text deletion works |
 | Cell background color / merge | ❌ | Simple table feature in AFFiNE |
-| Copy/paste cell ranges | ❌ | Single-cell native clipboard works |
+| Copy/paste cell ranges | ✅ | TSV copy/paste; files/people use pickers |
 | Undo / redo | ✅ | Cell edits merge into typing steps |
 | Readonly | ✅ | Controls disabled, actions hidden |
 | JSON / Markdown / HTML table round-trip | ✅ | JSON full; Markdown/HTML values and table structure |
@@ -325,15 +325,11 @@ the editor core just for parity:
      Delete selected, batch duplicate/copy.
    - Makes image/database/divider selectable and unlocks table-from-selection.
    - Est. 4–6 KB plus careful tests.
-2. **Database search and filter bar.**
-   - Search over cell text; filter by column/type; derived rows, no schema break.
-   - Est. 3–5 KB.
-3. **Database row/area selection + keyboard delete + `Mod-A`.**
-   - Builds on cell navigation; no new data model.
-   - Est. 2–3 KB.
-4. **Multi-select property + column move/hide/duplicate.**
-   - Est. 2–3 KB.
-5. **Create Table from selected blocks** (toolbar/block selection).
+2. **Database search.**
+   - Search over cell text; derived rows, no schema break.
+3. **Multiple saved views, column move/hide/duplicate.**
+   - View tabs and configuration; reuse the existing view model.
+4. **Create Table from selected blocks** (toolbar/block selection).
    - Convert blocks into database rows; requires block selection first.
    - Est. 2–3 KB.
 6. **Bracket auto-pair and backtick-wrap-selection.**
@@ -342,7 +338,7 @@ the editor core just for parity:
 
 ### P2 — large or scope expansion
 
-- Calendar and Kanban database views (largest data-view item).
+- Calendar database view.
 - Row detail pages / title property / page-per-row.
 - Linked docs, `[[`, `@` mentions, backlinks.
 - Comments and collaboration.
@@ -361,6 +357,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 48.0 KB gzip. The implemented P0/P1 items added about
-7.7 KB gzip; the remaining divider/alias item should stay under ~0.5 KB. That
-keeps the bundle in the mid-40s while closing the most visible interaction gaps.
+The current editor is 54.7 KB gzip. Phase 1 data views added about 6.7 KB gzip;
+the remaining search/multi-view items are incremental on top of the existing
+view model.

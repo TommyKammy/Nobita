@@ -84,6 +84,8 @@ export const icon = {
   hash: wrap('<path d="M7.5 3.5 6 16.5M13 3.5l-1.5 13M3.5 7.5h13M3 12.5h13"/>'),
   calendar: wrap('<rect x="3" y="4.5" width="14" height="12.5" rx="2.5"/><path d="M3 8.5h14M6.5 3v3M13.5 3v3"/>'),
   tag: wrap('<path d="M3.5 9.2V4.2a1 1 0 0 1 1-1h5l7.1 7.1a1.5 1.5 0 0 1 0 2.1l-4.9 4.9a1.5 1.5 0 0 1-2.1 0L3.5 9.2Z"/><circle cx="7" cy="6.9" r="1"/>'),
+  file: wrap('<path d="M5 3.5h6.5L15.5 7v9.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5v-11A1.5 1.5 0 0 1 5 3.5Z"/><path d="M11 3.5V7h4"/>'),
+  user: wrap('<circle cx="10" cy="6.5" r="3"/><path d="M4.5 16.5c.6-3 2.8-4.8 5.5-4.8s4.9 1.8 5.5 4.8"/>'),
   checkboxSquare: wrap('<rect x="3" y="3" width="14" height="14" rx="3.5"/><path d="m6.3 10.2 2.4 2.4 5-5"/>'),
   sortAsc: wrap('<path d="M6 15V5M3 8l3-3 3 3M11 7h6M11 10.5h4M11 14h2"/>'),
   sortDesc: wrap('<path d="M6 5v10M3 12l3 3 3-3M11 7h2M11 10.5h4M11 14h6"/>'),

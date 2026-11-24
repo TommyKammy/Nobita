@@ -259,14 +259,29 @@ Tables and databases are one block type:
 ```ts
 interface DatabaseData {
   variant: 'table' | 'database';
-  columns: { id; name; type; options? }[];
-  rows: { id; cells: Record<columnId, { text?; checked? }> }[];
+  columns: { id; name; type; options?; width? }[];
+  rows: {
+    id;
+    cells: Record<columnId, {
+      text?; checked?;
+      values?: string[];
+      files?: { name; url }[];
+      people?: { id; label }[];
+    }>;
+  }[];
   sort?: { columnId; direction };
+  view?: {
+    type: 'table' | 'board';
+    filters: { columnId; operator; value? }[];
+    groupBy?: columnId;
+    sort?: { columnId; direction };
+  };
 }
 ```
 
 - `table` defaults to three text columns; `database` defaults to Name / Status / Due / Done.
-- Empty cells are omitted, so row data stays compact. `parseDoc` normalizes column ids, types, select options, row ids and sort state.
+- Column types are text, number, select, multi-select, date, checkbox, URL, files and people.
+- Empty cells are omitted, so row data stays compact. `parseDoc` normalizes column ids, types, select/multi-select options, widths, row ids, filters, grouping and sort state.
 - `duplicateBlockTree` remaps every row and column id, so duplicated pages and pasted blocks never share database identity.
 
 Rendering lives in `DatabaseView` (`packages/element/src/database-view.ts`). The `.nb-db` card is `contenteditable="false"`; text cells opt back in as nested editing hosts. The body-level editor ignores events from `.nb-db`, exactly as it ignores image captions and image URL inputs. This is the same pattern as the single-editing-host design, scoped one level deeper:
@@ -277,8 +292,10 @@ Rendering lives in `DatabaseView` (`packages/element/src/database-view.ts`). The
 - Tab / Shift+Tab move between cells; Enter moves down; arrow keys cross cell boundaries at caret edges; Escape returns to the document.
 - Cell edits commit through `updateDatabase` without restoring the body selection, which would steal focus from the cell. Text commits use a `mergeKey`, so one typing burst is one undo step.
 - A cell write does not rebuild the grid. `DatabaseView` compares a structural key (columns, types, names, options, row ids, sort, readonly). Values are synced in place; structure changes re-render and restore focus to the active cell when possible.
-- Sorting is derived at render time (`sortedDatabaseRows`), so the underlying row order is never mutated.
-- Column headers open a popover for rename/type/options/insert/delete/sort. Row handles open insert/duplicate/delete. Select cells open an option picker.
+- Sorting, filtering and grouping are derived at render time (`filteredDatabaseRows`, `groupedDatabaseRows`), so the underlying row order is never mutated.
+- The active view stores table/board mode, filters, grouping and sort. Board cards can be dragged between select, multi-select and checkbox groups.
+- Column headers open a popover for rename/type/options/insert/delete/sort and expose a resize handle. Row handles open insert/duplicate/delete. Select/multi-select/files/people cells open pickers.
+- Shift+click selects a cell rectangle; copy/paste uses TSV and can import spreadsheet ranges.
 - Readonly mode disables controls, removes row/column actions and leaves plain text cells non-editable.
 
 Exports are part of the core, not the UI:
@@ -331,9 +348,9 @@ changing the document format.
 - The optional D1 adapter stores the whole document as one JSON row. D1 caps a
   row at 2 MB, so images belong in R2 and very large documents need splitting or
   a different backend.
-- Data views are table-view only: no board/kanban, filters, grouping, column
-  resize, cell range selection or multi-cell paste yet. Date cells store ISO
-  strings and are edited as text.
+- Data views use one saved view per block; multiple named views, calendar view
+  and column hide/move are not implemented yet. Date cells store ISO strings
+  and are edited as text.
 - No synced blocks, comments, mentions, math or embeds.
 - Images are URL-based; uploads and drag-in files are future work.
 - Code language is stored but not editable through the UI.
