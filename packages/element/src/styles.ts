@@ -2400,6 +2400,11 @@ select.nb-db-detail-input {
   border-color: var(--nb-border);
   background: var(--nb-surface);
 }
+.nb-db-detail-picker {
+  flex: 1;
+  justify-content: flex-start;
+  height: 30px;
+}
 select.nb-db-input { text-align: left; }
 .nb-db-detail-text { min-height: 30px; contenteditable: true; }
 .nb-db-detail-add {

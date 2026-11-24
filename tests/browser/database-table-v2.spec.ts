@@ -541,6 +541,127 @@ test('adds a property to the open detail panel', async ({ page }) => {
   expect(database.rows[0]?.cells[columnId!]?.text).toBe('Note');
 });
 
+test('renders files and people in the detail panel', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'detail-files-people',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              { id: 'files', name: 'Files', type: 'files' },
+              { id: 'people', name: 'People', type: 'people' },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: {
+                  name: { text: 'One' },
+                  files: {
+                    files: [
+                      {
+                        id: 'f1',
+                        name: 'Spec',
+                        url: 'https://example.com/spec',
+                      },
+                    ],
+                  },
+                  people: { people: [{ id: 'p1', label: 'Ada' }] },
+                },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'files', width: 200 },
+                  { id: 'people', width: 200 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  const files = page.locator(
+    '.nb-db-detail-field[data-column-id="files"] .nb-db-detail-picker'
+  );
+  const people = page.locator(
+    '.nb-db-detail-field[data-column-id="people"] .nb-db-detail-picker'
+  );
+  await expect(files).toHaveText('Spec');
+  await expect(people).toHaveText('Ada');
+  await files.click();
+  const popover = page.locator('.nb-db-popover');
+  await popover.getByLabel('File name').fill('Notes');
+  await popover.getByLabel('File URL').fill('https://example.com/notes');
+  await popover.getByRole('button', { name: 'Add file' }).click();
+  await popover.getByRole('button', { name: 'Done' }).click();
+  await expect(files).toHaveText('2 files');
+  const doc = await getDoc(page);
+  expect(
+    (
+      doc.blocks[0]?.props.database as {
+        rows: Array<{ id: string; cells: Record<string, { files?: unknown[] }> }>;
+      }
+    ).rows[0]?.cells.files?.files
+  ).toHaveLength(2);
+});
+
+test('keeps row actions when the title column is hidden', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const view = (doc.blocks[0]?.props.database as { views: Array<Record<string, unknown>> })
+    .views[0]!;
+  view.hiddenColumns = ['name'];
+  await setDoc(page, doc);
+  await expect(page.locator('.nb-db-row-expand')).toHaveCount(3);
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="status"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  await expect(page.locator('.nb-db-detail')).toBeVisible();
+  await expect(page.locator('.nb-db-detail-title')).toHaveValue('One');
+});
+
+test('undoes detail edits from the detail panel', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  const check = page.locator(
+    '.nb-db-detail-field[data-column-id="done"] button[role="checkbox"]'
+  );
+  await check.click();
+  await expect(check).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Control+z');
+  await expect(check).toHaveAttribute('aria-checked', 'false');
+  const doc = await getDoc(page);
+  expect(
+    (
+      doc.blocks[0]?.props.database as {
+        rows: Array<{ id: string; cells: Record<string, { checked?: boolean }> }>;
+      }
+    ).rows[0]?.cells.done?.checked
+  ).toBeFalsy();
+});
+
 test('expands saved collapsed groups in readonly views', async ({ page }) => {
   await openFixture(page);
   const doc = v2Doc();

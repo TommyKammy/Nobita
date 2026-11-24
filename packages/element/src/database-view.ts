@@ -1458,6 +1458,10 @@ export class DatabaseView {
       columns.some(column => column.id === state.column.id)
     );
     const titleColumn = this.#titleColumn(view);
+    const opsColumnId =
+      titleColumn && columns.some(column => column.id === titleColumn.id)
+        ? titleColumn.id
+        : columns[0]?.id;
     const colgroup = document.createElement('colgroup');
     const handleCol = document.createElement('col');
     handleCol.style.width = '24px';
@@ -1595,7 +1599,7 @@ export class DatabaseView {
       tr.append(handle);
       for (const column of columns) {
         const td = this.#createCell(row, column);
-        if (column.id === titleColumn?.id && !this.#readonly) {
+        if (column.id === opsColumnId && !this.#readonly) {
           td.classList.add('has-row-ops');
           const ops = document.createElement('div');
           ops.className = 'nb-db-row-ops';
@@ -2533,7 +2537,7 @@ export class DatabaseView {
     const nav = document.createElement('div');
     nav.className = 'nb-db-detail-nav';
     const navigate = (direction: -1 | 1): void => {
-      const rows = this.#rowsFor(this.#activeView());
+      const rows = this.#renderedRows(this.#activeView());
       const index = rows.findIndex(item => item.id === this.#detailRowId);
       const nextRow = rows[index + direction];
       if (nextRow) this.#openDetailPanel(nextRow.id);
@@ -2628,6 +2632,19 @@ export class DatabaseView {
       if (event.target === backdrop) this.#closeDetailPanel();
     });
     backdrop.addEventListener('keydown', event => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && event.key.toLowerCase() === 'z') {
+        event.preventDefault();
+        event.stopPropagation();
+        this.#history(event.shiftKey);
+        return;
+      }
+      if (mod && event.key.toLowerCase() === 'y') {
+        event.preventDefault();
+        event.stopPropagation();
+        this.#history(true);
+        return;
+      }
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
@@ -2750,6 +2767,27 @@ export class DatabaseView {
         );
       }
       field.append(input);
+      return field;
+    }
+
+    if (column.type === 'files' || column.type === 'people') {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'nb-db-select nb-db-multi nb-db-detail-picker';
+      button.disabled = this.#readonly;
+      if (column.type === 'files') {
+        this.#applyFilesLabel(button, cell?.files ?? []);
+      } else {
+        this.#applyPeopleLabel(button, cell?.people ?? []);
+      }
+      button.addEventListener('click', () => {
+        if (column.type === 'files') {
+          this.#openFilesPopover(column.id, row.id, button);
+        } else {
+          this.#openPeoplePopover(column.id, row.id, button);
+        }
+      }, { signal: this.#detailEvents.signal });
+      field.append(button);
       return field;
     }
 
@@ -2925,18 +2963,21 @@ export class DatabaseView {
           if (moved) ordered.splice(groupTo, 0, moved);
           const order = ordered.map(entry => entry.id);
           const settings = view.groupProperties ?? [];
-          const index = settings.findIndex(item => item.key === group.key);
-          const nextGroup = {
-            ...(settings[index] ?? {}),
-            key: group.key,
-            manuallyCardSort: order,
-          };
-          const groupProperties =
-            index >= 0
-              ? settings.map((item, itemIndex) =>
-                  itemIndex === index ? nextGroup : item
-                )
-              : [...settings, nextGroup];
+          const keys = this.#groupsFor(view).map(item => item.key);
+          for (const item of settings) {
+            if (!keys.includes(item.key)) keys.push(item.key);
+          }
+          if (!keys.includes(group.key)) keys.push(group.key);
+          const byKey = new Map(settings.map(item => [item.key, item]));
+          const groupProperties = keys.map(key =>
+            key === group.key
+              ? {
+                  ...(byKey.get(key) ?? {}),
+                  key,
+                  manuallyCardSort: order,
+                }
+              : byKey.get(key) ?? { key }
+          );
           views = this.#views().map(item =>
             item.id === view.id ? { ...item, groupProperties } : item
           );
@@ -3188,6 +3229,17 @@ export class DatabaseView {
         check.setAttribute('aria-checked', String(Boolean(cell?.checked)));
         continue;
       }
+      const picker = field.querySelector<HTMLButtonElement>(
+        'button.nb-db-detail-picker'
+      );
+      if (picker) {
+        if (column.type === 'files') {
+          this.#applyFilesLabel(picker, cell?.files ?? []);
+        } else if (column.type === 'people') {
+          this.#applyPeopleLabel(picker, cell?.people ?? []);
+        }
+        continue;
+      }
       const select = field.querySelector<HTMLSelectElement>('select');
       if (select) {
         const selected =
@@ -3222,7 +3274,7 @@ export class DatabaseView {
     next: HTMLButtonElement,
     rowId: string
   ): void {
-    const rows = this.#rowsFor(this.#activeView());
+    const rows = this.#renderedRows(this.#activeView());
     const index = rows.findIndex(item => item.id === rowId);
     prev.disabled = index <= 0;
     next.disabled = index < 0 || index >= rows.length - 1;
