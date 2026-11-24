@@ -316,7 +316,7 @@ test('formats number cells from column settings', async ({ page }) => {
               { id: 'score', name: 'Score', type: 'number' },
             ],
             rows: [
-              { id: 'r1', cells: { name: { text: 'One' }, score: { text: '10' } } },
+              { id: 'r1', cells: { name: { text: 'One' }, score: { text: '0.1' } } },
             ],
             views: [
               {

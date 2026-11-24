@@ -142,11 +142,30 @@ function formatDatabaseNumber(value: string, column: DatabaseColumn): string {
   const number = Number.parseFloat(value);
   if (!Number.isFinite(number)) return value;
   const decimalValue =
-    typeof column.data?.decimal === 'number' ? column.data.decimal : 0;
-  const decimals = Math.max(0, Math.min(6, Math.round(decimalValue)));
+    typeof column.data?.decimal === 'number' ? column.data.decimal : undefined;
+  const decimals =
+    decimalValue === undefined
+      ? undefined
+      : Math.max(0, Math.min(6, Math.round(decimalValue)));
   const format = typeof column.data?.format === 'string' ? column.data.format : 'number';
-  if (format === 'percent') return `${number.toFixed(decimals)}%`;
-  if (format === 'decimal') return number.toFixed(decimals);
+  const fraction =
+    decimals === undefined
+      ? {}
+      : { minimumFractionDigits: decimals, maximumFractionDigits: decimals };
+  if (format === 'percent') {
+    return new Intl.NumberFormat(undefined, {
+      style: 'percent',
+      useGrouping: false,
+      ...fraction,
+    }).format(number);
+  }
+  if (format === 'decimal') {
+    return new Intl.NumberFormat(undefined, {
+      style: 'decimal',
+      useGrouping: false,
+      ...(decimals === undefined ? { maximumFractionDigits: 0 } : fraction),
+    }).format(number);
+  }
   if (format === 'currency') {
     const currency =
       typeof column.data?.currency === 'string' ? column.data.currency : 'USD';
@@ -154,16 +173,16 @@ function formatDatabaseNumber(value: string, column: DatabaseColumn): string {
       return new Intl.NumberFormat(undefined, {
         style: 'currency',
         currency,
-        minimumFractionDigits: decimals,
-        maximumFractionDigits: decimals,
+        ...fraction,
       }).format(number);
     } catch {
-      return number.toFixed(decimals);
+      return number.toFixed(decimals ?? 0);
     }
   }
   return new Intl.NumberFormat(undefined, {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
+    style: 'decimal',
+    useGrouping: false,
+    ...(decimals === undefined ? { maximumFractionDigits: 0 } : fraction),
   }).format(number);
 }
 
