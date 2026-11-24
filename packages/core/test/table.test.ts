@@ -183,6 +183,23 @@ describe('simple table', () => {
         codeImport.props.table.columns[0]!.id
       ]?.text
     ).toBe('<br>');
+
+    const escapedBreak = setTableCellText(table, r1.id, c1.id, '\\\nnext');
+    const escapedBlock = createBlock('table', {
+      id: 't',
+      props: { table: escapedBreak },
+    });
+    const escapedMarkdown = blocksToMarkdown(createDoc({ blocks: [escapedBlock] }), {
+      title: false,
+    });
+    const escapedImport = markdownToBlocks(escapedMarkdown, {
+      extractTitle: false,
+    }).blocks.find(item => item.type === 'table');
+    expect(
+      escapedImport?.props.table?.rows[0]?.cells[
+        escapedImport.props.table.columns[0]!.id
+      ]?.text
+    ).toBe('\\\nnext');
   });
 
   it('duplicates, moves, clears and colors rows and columns', () => {

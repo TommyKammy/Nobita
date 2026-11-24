@@ -1454,6 +1454,7 @@ export class NobitaEditor implements BlockHost {
       return;
     }
     if (block.type === 'table') {
+      this.#focusedBlockId = blockId;
       view.focusTable();
       return;
     }

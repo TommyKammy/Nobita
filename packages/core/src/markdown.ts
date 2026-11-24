@@ -146,6 +146,32 @@ function splitTableRow(line: string): string[] {
 const TABLE_LT = '\u0000LT\u0000';
 const TABLE_GT = '\u0000GT\u0000';
 
+function protectTableEscapes(value: string): string {
+  let out = '';
+  let index = 0;
+  while (index < value.length) {
+    if (value[index] !== '\\') {
+      out += value[index];
+      index += 1;
+      continue;
+    }
+    let end = index;
+    while (value[end] === '\\') end += 1;
+    const count = end - index;
+    const next = value[end];
+    const pairs = Math.floor(count / 2);
+    out += '\\'.repeat(pairs * 2);
+    if (count % 2 === 1 && (next === '<' || next === '>')) {
+      out += next === '<' ? TABLE_LT : TABLE_GT;
+      index = end + 1;
+    } else {
+      if (count % 2 === 1) out += '\\';
+      index = end;
+    }
+  }
+  return out;
+}
+
 function decodeTableText(value: string): string {
   const codeSpans: string[] = [];
   let protectedText = '';
@@ -175,10 +201,7 @@ function decodeTableText(value: string): string {
 
   let text = plainText(
     parseInlineMarkdown(
-      protectedText
-        .replace(/\\</gu, TABLE_LT)
-        .replace(/\\>/gu, TABLE_GT)
-        .replace(/<br\s*\/?>/giu, '\n')
+      protectTableEscapes(protectedText).replace(/<br\s*\/?>/giu, '\n')
     )
   )
     .replaceAll(TABLE_LT, '<')

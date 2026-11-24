@@ -233,7 +233,7 @@ test('selects table cells by dragging and supports copy and clear', async ({ pag
       ?.shadowRoot?.querySelector('.nb-table-cell[data-row-id="r2"][data-column-id="c2"]');
     if (!cell) return;
     const data = new DataTransfer();
-    data.setData('text/plain', 'X\tY\nZ\tW');
+    data.setData('text/plain', 'X\tY\nZ\tW\n');
     cell.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: data }));
   });
   await expect(first).toBeFocused();
@@ -254,6 +254,88 @@ test('selects table cells by dragging and supports copy and clear', async ({ pag
   expect(table.rows[0]?.cells).toEqual({});
   expect(table.rows[1]?.cells).toEqual({});
   await expect(page.locator('.nb-table-selection')).toHaveAttribute('data-visible', 'false');
+});
+
+test('keeps the full width selected for ragged TSV paste', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'table-ragged',
+    title: '',
+    blocks: [
+      {
+        id: 't1',
+        type: 'table',
+        text: [],
+        props: {
+          table: {
+            columns: [{ id: 'c1' }, { id: 'c2' }],
+            rows: [
+              { id: 'r1', cells: { c1: { text: 'A' }, c2: { text: 'B' } } },
+              { id: 'r2', cells: { c1: { text: 'C' }, c2: { text: 'D' } } },
+            ],
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  const first = page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c1"]');
+  const last = page.locator('.nb-table-cell[data-row-id="r2"][data-column-id="c2"]');
+  const firstBox = await first.boundingBox();
+  const lastBox = await last.boundingBox();
+  if (!firstBox || !lastBox) throw new Error('Missing table cells');
+  await page.mouse.move(firstBox.x + 8, firstBox.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(lastBox.x + lastBox.width - 8, lastBox.y + lastBox.height - 8, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  await page.evaluate(() => {
+    const cell = document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-table-cell[data-row-id="r2"][data-column-id="c2"]');
+    if (!cell) return;
+    const data = new DataTransfer();
+    data.setData('text/plain', 'X\tY\nZ');
+    cell.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: data }));
+  });
+  await expect(page.locator('.nb-table-cell-wrap[aria-selected="true"]')).toHaveCount(4);
+  const doc = await getDoc(page);
+  const table = doc.blocks[0]?.props.table as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  };
+  expect(table.rows[0]?.cells.c1?.text).toBe('X');
+  expect(table.rows[0]?.cells.c2?.text).toBe('Y');
+  expect(table.rows[1]?.cells.c1?.text).toBe('Z');
+  expect(table.rows[1]?.cells.c2?.text).toBe('D');
+});
+
+test('focuses a table block for page-link insertion', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'table-focus-block',
+    title: '',
+    blocks: [
+      { id: 'before', type: 'paragraph', text: [{ text: 'Before' }], props: {}, children: [] },
+      tableDoc().blocks[0],
+      { id: 'after', type: 'paragraph', text: [{ text: 'After' }], props: {}, children: [] },
+    ],
+  });
+  const ids = await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        focus(blockId: string, offset?: number): void;
+        insertPageLink(page: { id: string; title: string }): string | null;
+      };
+    }).__editor;
+    editor?.focus('after', 0);
+    editor?.focus('t1', 0);
+    editor?.insertPageLink({ id: 'p2', title: 'Page' });
+    return document.querySelector('nobita-editor')?.doc?.blocks.map(block => block.id);
+  });
+  expect(ids).toEqual(['before', 't1', expect.any(String), 'after']);
 });
 
 test('types into the active cell after a drag selection', async ({ page }) => {

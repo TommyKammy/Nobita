@@ -52,35 +52,44 @@ function parseTsv(source: string): string[][] {
   let row: string[] = [];
   let field = '';
   let quoted = false;
+  let fieldStarted = false;
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
     if (quoted) {
       if (char === '"' && text[index + 1] === '"') {
         field += '"';
+        fieldStarted = true;
         index += 1;
       } else if (char === '"') {
         quoted = false;
       } else {
         field += char;
+        fieldStarted = true;
       }
       continue;
     }
     if (char === '"' && field === '') {
       quoted = true;
+      fieldStarted = true;
     } else if (char === '\t') {
       row.push(field);
       field = '';
+      fieldStarted = false;
     } else if (char === '\n') {
       row.push(field);
       rows.push(row);
       row = [];
       field = '';
+      fieldStarted = false;
     } else {
       field += char;
+      fieldStarted = true;
     }
   }
-  row.push(field);
-  rows.push(row);
+  if (fieldStarted || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
   return rows;
 }
 
@@ -790,15 +799,19 @@ export class SimpleTableView {
 
     let lastRowId = '';
     let lastColumnId = '';
+    let widestColumn = -1;
     grid.forEach((values, rowOffset) => {
       const row = data.rows[bounds.rowStart + rowOffset];
       if (!row) return;
+      lastRowId = row.id;
       values.forEach((value, columnOffset) => {
         const column = data.columns[bounds.columnStart + columnOffset];
         if (!column) return;
         data = setTableCellText(data, row.id, column.id, value);
-        lastRowId = row.id;
-        lastColumnId = column.id;
+        if (columnOffset > widestColumn) {
+          widestColumn = columnOffset;
+          lastColumnId = column.id;
+        }
       });
     });
     const anchorRow = data.rows[bounds.rowStart];
