@@ -146,6 +146,27 @@ test('fills a column by dragging the selection handle', async ({ page }) => {
   expect(rows.find(row => row.id === 'r3')?.cells.name?.text).toBe('One');
 });
 
+test('does not route header input copy through the cell grid', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-row-check').first().click();
+  await page.locator('.nb-db-title-input').click();
+  const result = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector('.nb-db-title-input');
+    if (!target) return null;
+    const data = new DataTransfer();
+    const event = new ClipboardEvent('copy', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    });
+    target.dispatchEvent(event);
+    return { prevented: event.defaultPrevented, text: data.getData('text/plain') };
+  });
+  expect(result).toEqual({ prevented: false, text: '' });
+});
+
 test('opens the row detail panel and edits the title', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);

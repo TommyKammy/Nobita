@@ -4084,6 +4084,16 @@ export class DatabaseView {
 
   #onDatabaseKeyDown = (event: KeyboardEvent): void => {
     if (this.#readonly) return;
+    const target = event.target;
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      (target instanceof HTMLElement &&
+        (target.matches('[contenteditable="true"]') ||
+          Boolean(target.closest('.nb-db-text[contenteditable="true"]'))))
+    ) {
+      return;
+    }
     if (this.#selectedRows.size > 0) {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -4138,7 +4148,14 @@ export class DatabaseView {
   }
 
   #onCopy = (event: ClipboardEvent): void => {
-    if ((event.target as Element | null)?.closest('.nb-db-popover')) return;
+    const target = event.target as Element | null;
+    if (target?.closest('.nb-db-popover, .nb-db-detail')) return;
+    if (
+      (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+      !target.closest('.nb-db-cell')
+    ) {
+      return;
+    }
     const rowText = this.#selectedRowsText();
     const text = rowText || (this.#rangeCells.size > 1 ? this.#rangeText() : '');
     if (!text) return;
@@ -4147,7 +4164,14 @@ export class DatabaseView {
   };
 
   #onCut = (event: ClipboardEvent): void => {
-    if ((event.target as Element | null)?.closest('.nb-db-popover')) return;
+    const target = event.target as Element | null;
+    if (target?.closest('.nb-db-popover, .nb-db-detail')) return;
+    if (
+      (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+      !target.closest('.nb-db-cell')
+    ) {
+      return;
+    }
     const rowText = this.#selectedRowsText();
     if (rowText) {
       event.clipboardData?.setData('text/plain', rowText);
