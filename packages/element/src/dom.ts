@@ -119,18 +119,6 @@ export function nativeSelection(root: ShadowRoot): Selection | null {
   return window.getSelection();
 }
 
-export function clientRectForSelection(root: ShadowRoot): DOMRect | null {
-  const selection = nativeSelection(root);
-  if (!selection || selection.rangeCount === 0) return null;
-  const range = selection.getRangeAt(0);
-  const rects = range.getClientRects();
-  const last = rects[rects.length - 1];
-  if (last && last.width + last.height > 0) return last;
-  const rect = range.getBoundingClientRect();
-  if (rect.width + rect.height > 0) return rect;
-  return null;
-}
-
 export function caretRect(
   root: HTMLElement,
   offset: number,
@@ -179,6 +167,3 @@ export function closestElement(node: Node | null, selector: string): HTMLElement
   const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
   return (element?.closest(selector) as HTMLElement | null) ?? null;
 }
-
-export const isMac = (): boolean =>
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/u.test(navigator.platform);

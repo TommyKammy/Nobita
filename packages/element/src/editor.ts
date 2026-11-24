@@ -143,6 +143,32 @@ function rectAnchor(rect: DOMRect): {
   };
 }
 
+interface OrderedRange {
+  flat: Block[];
+  start: Point;
+  end: Point;
+}
+
+interface BlockRange extends OrderedRange {
+  startIndex: number;
+  endIndex: number;
+}
+
+function orderedRange(
+  blocks: readonly Block[],
+  selection: EditorSelection
+): OrderedRange {
+  const flat = flattenBlocks(blocks);
+  const order = flat.map(block => block.id);
+  const forward =
+    compareTextPositions(order, selection.anchor, selection.focus) <= 0;
+  return {
+    flat,
+    start: forward ? selection.anchor : selection.focus,
+    end: forward ? selection.focus : selection.anchor,
+  };
+}
+
 export class NobitaEditor implements BlockHost {
   readonly root: ShadowRoot;
   readonly store: EditorStore;
@@ -1250,10 +1276,23 @@ export class NobitaEditor implements BlockHost {
   }
 
   #ordered(selection: EditorSelection): { start: Point; end: Point } {
-    const order = flattenBlocks(this.store.doc.blocks).map(block => block.id);
-    return compareTextPositions(order, selection.anchor, selection.focus) <= 0
-      ? { start: selection.anchor, end: selection.focus }
-      : { start: selection.focus, end: selection.anchor };
+    const { start, end } = orderedRange(this.store.doc.blocks, selection);
+    return { start, end };
+  }
+
+  #blockRange(
+    selection: EditorSelection,
+    blocks: readonly Block[] = this.store.doc.blocks
+  ): BlockRange | null {
+    const range = orderedRange(blocks, selection);
+    const startIndex = range.flat.findIndex(
+      block => block.id === range.start.blockId
+    );
+    const endIndex = range.flat.findIndex(
+      block => block.id === range.end.blockId
+    );
+    if (startIndex < 0 || endIndex < 0) return null;
+    return { ...range, startIndex, endIndex };
   }
 
   #offsetInSelection(blockId: string, selection: EditorSelection): number {
@@ -1376,9 +1415,11 @@ export class NobitaEditor implements BlockHost {
   }
 
   #applyDeletion(doc: Doc, selection: EditorSelection): { doc: Doc; caret: Point | null } {
-    const { start, end } = this.#ordered(selection);
-    if (start.blockId === end.blockId) {
-      const block = findBlock(doc.blocks, start.blockId);
+    const range = this.#blockRange(selection, doc.blocks);
+    if (!range) return { doc, caret: null };
+    const { flat, start, end, startIndex, endIndex } = range;
+    if (startIndex === endIndex) {
+      const block = flat[startIndex];
       if (!block) return { doc, caret: null };
       const runs = deleteTextRange(block.text, start.offset, end.offset);
       return {
@@ -1386,11 +1427,10 @@ export class NobitaEditor implements BlockHost {
         caret: { blockId: start.blockId, offset: Math.min(start.offset, runsLength(runs)) },
       };
     }
-    const startBlock = findBlock(doc.blocks, start.blockId);
-    const endBlock = findBlock(doc.blocks, end.blockId);
+    const startBlock = flat[startIndex];
+    const endBlock = flat[endIndex];
     if (!startBlock || !endBlock) return { doc, caret: null };
-    const order = flattenBlocks(doc.blocks).map(block => block.id);
-    const between = order.slice(order.indexOf(start.blockId) + 1, order.indexOf(end.blockId));
+    const between = flat.slice(startIndex + 1, endIndex).map(block => block.id);
     let next = replaceBlockText(
       doc,
       start.blockId,
@@ -1806,20 +1846,18 @@ export class NobitaEditor implements BlockHost {
   }
 
   #selectionBlocks(selection: EditorSelection): Block[] {
-    const { start, end } = this.#ordered(selection);
+    const range = this.#blockRange(selection);
+    if (!range) return [];
+    const { flat, start, end, startIndex, endIndex } = range;
     const partial = (block: Block, from: number, to: number): Block => {
       const copy = duplicateBlockTree(block);
       return { ...copy, text: sliceRuns(block.text, from, to), children: [] };
     };
-    if (start.blockId === end.blockId) {
-      const block = findBlock(this.store.doc.blocks, start.blockId);
+    if (startIndex === endIndex) {
+      const block = flat[startIndex];
       if (!block) return [];
       return [partial(block, start.offset, end.offset)];
     }
-    const flat = flattenBlocks(this.store.doc.blocks);
-    const startIndex = flat.findIndex(block => block.id === start.blockId);
-    const endIndex = flat.findIndex(block => block.id === end.blockId);
-    if (startIndex < 0 || endIndex < 0) return [];
     const out: Block[] = [];
     const first = flat[startIndex];
     if (first) out.push(partial(first, start.offset, runsLength(first.text)));
@@ -1849,22 +1887,20 @@ export class NobitaEditor implements BlockHost {
       this.#toolbar.hide();
       return;
     }
-    const { start, end } = this.#ordered(selection);
-    const block = findBlock(this.store.doc.blocks, start.blockId);
-    if (!block) {
+    const range = this.#blockRange(selection);
+    const block = range ? range.flat[range.startIndex] : null;
+    if (!range || !block) {
       this.#toolbar.hide();
       return;
     }
+    const { start, end, flat, startIndex, endIndex } = range;
     let state: InlineMark;
-    if (start.blockId === end.blockId) {
+    if (startIndex === endIndex) {
       state = markStateInRange(block.text, start.offset, end.offset);
     } else {
       state = {
         ...markStateInRange(block.text, start.offset, runsLength(block.text)),
       };
-      const flat = flattenBlocks(this.store.doc.blocks);
-      const startIndex = flat.findIndex(item => item.id === start.blockId);
-      const endIndex = flat.findIndex(item => item.id === end.blockId);
       let highlight: HighlightColor | undefined;
       let color: TextColor | undefined;
       let first = true;
@@ -1907,12 +1943,11 @@ export class NobitaEditor implements BlockHost {
         : [];
     }
     if (this.#isCollapsed(selection)) return [selection.focus.blockId];
-    const { start, end } = this.#ordered(selection);
-    const flat = flattenBlocks(this.store.doc.blocks);
-    const startIndex = flat.findIndex(block => block.id === start.blockId);
-    const endIndex = flat.findIndex(block => block.id === end.blockId);
-    if (startIndex < 0 || endIndex < 0) return [];
-    return flat.slice(startIndex, endIndex + 1).map(block => block.id);
+    const range = this.#blockRange(selection);
+    if (!range) return [];
+    return range.flat
+      .slice(range.startIndex, range.endIndex + 1)
+      .map(block => block.id);
   }
 
   #applyTurnInto(type: BlockType, level?: HeadingLevel): void {
@@ -1979,10 +2014,12 @@ export class NobitaEditor implements BlockHost {
   ): boolean {
     const selection = this.#currentSelection() ?? this.#lastSelection;
     if (!selection || this.#isCollapsed(selection)) return false;
-    const { start, end } = this.#ordered(selection);
+    const range = this.#blockRange(selection);
+    if (!range) return false;
+    const { start, end, flat, startIndex, endIndex } = range;
     let doc = this.store.doc;
-    if (start.blockId === end.blockId) {
-      const block = findBlock(doc.blocks, start.blockId);
+    if (startIndex === endIndex) {
+      const block = flat[startIndex];
       if (!block) return false;
       doc = replaceBlockText(
         doc,
@@ -1990,10 +2027,6 @@ export class NobitaEditor implements BlockHost {
         transform(block.text, start.offset, end.offset)
       );
     } else {
-      const flat = flattenBlocks(doc.blocks);
-      const startIndex = flat.findIndex(block => block.id === start.blockId);
-      const endIndex = flat.findIndex(block => block.id === end.blockId);
-      if (startIndex < 0 || endIndex < 0) return false;
       for (let index = startIndex; index <= endIndex; index += 1) {
         const block = flat[index];
         if (!block) continue;
@@ -2057,27 +2090,26 @@ export class NobitaEditor implements BlockHost {
       if (!restored) return;
       this.#restoreSelection(restored);
       const link = value ? normalizeLink(value) : null;
-      const ordered = this.#ordered(restored);
+      const range = this.#blockRange(restored);
+      if (!range) return;
+      const { start, end, flat, startIndex, endIndex } = range;
       let doc = this.store.doc;
-      const flat = flattenBlocks(doc.blocks);
-      const startIndex = flat.findIndex(block => block.id === ordered.start.blockId);
-      const endIndex = flat.findIndex(block => block.id === ordered.end.blockId);
       const linkMark: InlineMark | undefined = link ? { link } : undefined;
-      if (ordered.start.blockId === ordered.end.blockId) {
-        const target = findBlock(doc.blocks, ordered.start.blockId);
+      if (startIndex === endIndex) {
+        const target = flat[startIndex];
         if (target) {
           doc = replaceBlockText(
             doc,
-            ordered.start.blockId,
-            applyMarkPatch(target.text, ordered.start.offset, ordered.end.offset, { link })
+            start.blockId,
+            applyMarkPatch(target.text, start.offset, end.offset, { link })
           );
         }
       } else {
         for (let index = startIndex; index <= endIndex; index += 1) {
           const current = flat[index];
           if (!current) continue;
-          const from = index === startIndex ? ordered.start.offset : 0;
-          const to = index === endIndex ? ordered.end.offset : runsLength(current.text);
+          const from = index === startIndex ? start.offset : 0;
+          const to = index === endIndex ? end.offset : runsLength(current.text);
           doc = replaceBlockText(
             doc,
             current.id,

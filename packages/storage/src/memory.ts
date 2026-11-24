@@ -5,14 +5,13 @@ import type {
   SaveDocumentOptions,
   StoredDoc,
 } from '@nobita/core';
-import { DocumentConflictError } from './errors.js';
-import { assertDoc, assertVersion, cloneDoc } from './validate.js';
-
-interface MemoryEntry {
-  doc: Doc;
-  version: number;
-  updatedAt: number;
-}
+import {
+  docSummary,
+  prepareEntry,
+  sortSummaries,
+  storedDoc,
+  type DocumentEntry,
+} from './entry.js';
 
 export interface MemoryDocumentStoreOptions {
   now?: () => number;
@@ -23,7 +22,7 @@ export interface MemoryDocumentStoreOptions {
  * Documents are cloned on the way in and out so callers cannot mutate the map.
  */
 export class MemoryDocumentStore implements DocumentStore {
-  #docs = new Map<string, MemoryEntry>();
+  #docs = new Map<string, DocumentEntry>();
   #now: () => number;
 
   constructor(options: MemoryDocumentStoreOptions = {}) {
@@ -32,42 +31,25 @@ export class MemoryDocumentStore implements DocumentStore {
 
   async load(id: string): Promise<StoredDoc | null> {
     const entry = this.#docs.get(id);
-    if (!entry) return null;
-    return {
-      doc: cloneDoc(entry.doc),
-      version: entry.version,
-      updatedAt: entry.updatedAt,
-    };
+    return entry ? storedDoc(entry) : null;
   }
 
   async save(doc: Doc, options: SaveDocumentOptions = {}): Promise<DocSummary> {
-    assertDoc(doc);
-    assertVersion(options.version);
-    const current = this.#docs.get(doc.id);
-    const currentVersion = current?.version ?? 0;
-    if (options.version !== undefined && options.version !== currentVersion) {
-      throw new DocumentConflictError(options.version);
-    }
-
-    const version = currentVersion + 1;
-    const updatedAt = this.#now();
-    this.#docs.set(doc.id, { doc: cloneDoc(doc), version, updatedAt });
-    return { id: doc.id, title: doc.title, version, updatedAt };
+    const entry = prepareEntry(
+      doc,
+      options,
+      () => this.#docs.get(doc.id)?.version ?? 0,
+      this.#now
+    );
+    this.#docs.set(doc.id, entry);
+    return docSummary(entry);
   }
 
   async list(): Promise<DocSummary[]> {
-    return [...this.#docs.values()]
-      .map(entry => ({
-        id: entry.doc.id,
-        title: entry.doc.title,
-        version: entry.version,
-        updatedAt: entry.updatedAt,
-      }))
-      .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
+    return sortSummaries([...this.#docs.values()].map(docSummary));
   }
 
   async delete(id: string): Promise<boolean> {
     return this.#docs.delete(id);
   }
 }
-

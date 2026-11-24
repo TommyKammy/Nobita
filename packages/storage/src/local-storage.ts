@@ -5,8 +5,15 @@ import type {
   SaveDocumentOptions,
   StoredDoc,
 } from '@nobita/core';
-import { DocumentConflictError, DocumentStoreError } from './errors.js';
-import { assertDoc, assertVersion, cloneDoc } from './validate.js';
+import {
+  docSummary,
+  prepareEntry,
+  sortSummaries,
+  storedDoc,
+  type DocumentEntry,
+} from './entry.js';
+import { DocumentStoreError } from './errors.js';
+import { assertDoc, assertVersion } from './validate.js';
 
 /** The subset of the Web Storage API used by the adapter. */
 export interface StorageLike {
@@ -22,12 +29,6 @@ export interface LocalStorageDocumentStoreOptions {
   /** Defaults to `nobita:doc:`. */
   prefix?: string;
   now?: () => number;
-}
-
-interface StoredEntry {
-  doc: Doc;
-  version: number;
-  updatedAt: number;
 }
 
 /**
@@ -53,26 +54,16 @@ export class LocalStorageDocumentStore implements DocumentStore {
 
   async load(id: string): Promise<StoredDoc | null> {
     const entry = this.#read(id);
-    if (!entry) return null;
-    return {
-      doc: cloneDoc(entry.doc),
-      version: entry.version,
-      updatedAt: entry.updatedAt,
-    };
+    return entry ? storedDoc(entry) : null;
   }
 
   async save(doc: Doc, options: SaveDocumentOptions = {}): Promise<DocSummary> {
-    assertDoc(doc);
-    assertVersion(options.version);
-    const current = this.#read(doc.id);
-    const currentVersion = current?.version ?? 0;
-    if (options.version !== undefined && options.version !== currentVersion) {
-      throw new DocumentConflictError(options.version);
-    }
-
-    const version = currentVersion + 1;
-    const updatedAt = this.#now();
-    const entry: StoredEntry = { doc: cloneDoc(doc), version, updatedAt };
+    const entry = prepareEntry(
+      doc,
+      options,
+      () => this.#read(doc.id)?.version ?? 0,
+      this.#now
+    );
     try {
       this.#storage.setItem(this.#key(doc.id), JSON.stringify(entry));
     } catch (error) {
@@ -80,7 +71,7 @@ export class LocalStorageDocumentStore implements DocumentStore {
         cause: error,
       });
     }
-    return { id: doc.id, title: doc.title, version, updatedAt };
+    return docSummary(entry);
   }
 
   async list(): Promise<DocSummary[]> {
@@ -90,20 +81,12 @@ export class LocalStorageDocumentStore implements DocumentStore {
       if (!key || !key.startsWith(this.#prefix)) continue;
       try {
         const entry = this.#read(key.slice(this.#prefix.length));
-        if (!entry) continue;
-        summaries.push({
-          id: entry.doc.id,
-          title: entry.doc.title,
-          version: entry.version,
-          updatedAt: entry.updatedAt,
-        });
+        if (entry) summaries.push(docSummary(entry));
       } catch {
         // Ignore corrupt or foreign entries instead of breaking the listing.
       }
     }
-    return summaries.sort(
-      (a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)
-    );
+    return sortSummaries(summaries);
   }
 
   async delete(id: string): Promise<boolean> {
@@ -117,7 +100,7 @@ export class LocalStorageDocumentStore implements DocumentStore {
     return `${this.#prefix}${id}`;
   }
 
-  #read(id: string): StoredEntry | null {
+  #read(id: string): DocumentEntry | null {
     const raw = this.#storage.getItem(this.#key(id));
     if (raw === null) return null;
     let value: unknown;

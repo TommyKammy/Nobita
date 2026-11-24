@@ -231,7 +231,7 @@ export class Toolbar {
     align.type = 'button';
     align.className = 'nb-tool nb-tool-dropdown nb-tool-group-start';
     align.dataset.key = 'align';
-    align.setAttribute('aria-label', 'Alignment');
+    align.setAttribute('aria-label', 'Alignment: Left');
     align.setAttribute('aria-haspopup', 'menu');
     align.setAttribute('aria-expanded', 'false');
     align.title = 'Alignment';
