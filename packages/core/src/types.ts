@@ -57,7 +57,7 @@ export interface DatabaseData {
  * Inline character formatting. Missing keys mean "off", which keeps serialized
  * documents small and diffs stable.
  */
-export const HIGHLIGHT_COLORS = [
+export const PALETTE_COLORS = [
   'red',
   'orange',
   'yellow',
@@ -68,14 +68,22 @@ export const HIGHLIGHT_COLORS = [
   'grey',
 ] as const;
 
-export type HighlightColor = (typeof HIGHLIGHT_COLORS)[number];
+export type PaletteColor = (typeof PALETTE_COLORS)[number];
+export type HighlightColor = PaletteColor;
+export type TextColor = PaletteColor;
 
-export function isHighlightColor(value: unknown): value is HighlightColor {
+/** The highlight and text-color palettes share the same eight names. */
+export const HIGHLIGHT_COLORS = PALETTE_COLORS;
+export const TEXT_COLORS = PALETTE_COLORS;
+
+export function isHighlightColor(value: unknown): value is PaletteColor {
   return (
     typeof value === 'string' &&
-    (HIGHLIGHT_COLORS as readonly string[]).includes(value)
+    (PALETTE_COLORS as readonly string[]).includes(value)
   );
 }
+
+export const isTextColor = isHighlightColor;
 
 export interface InlineMark {
   bold?: true;
@@ -85,6 +93,7 @@ export interface InlineMark {
   code?: true;
   link?: string;
   highlight?: HighlightColor;
+  color?: TextColor;
 }
 
 export type MarkKey = keyof InlineMark;

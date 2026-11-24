@@ -34,6 +34,7 @@ import {
   setBlockType,
   setHighlightInRange,
   setImageProps,
+  setTextColorInRange,
   sliceRuns,
   splitBlock,
   toggleChecked,
@@ -50,6 +51,7 @@ import {
   type InlineMark,
   type Point,
   type TextAlign,
+  type TextColor,
 } from '@nobita/core';
 import { BlockView } from './block-view.js';
 import type { BlockHost } from './bridge.js';
@@ -255,7 +257,8 @@ export class NobitaEditor implements BlockHost {
       key => this.#toggleMark(key),
       () => this.#toggleLink(),
       align => this.#applyAlignment(align),
-      color => this.#applyHighlight(color)
+      color => this.#applyHighlight(color),
+      color => this.#applyTextColor(color)
     );
     this.#linkPopover = new LinkPopover(this.#overlay);
 
@@ -1879,6 +1882,7 @@ export class NobitaEditor implements BlockHost {
       const startIndex = flat.findIndex(item => item.id === start.blockId);
       const endIndex = flat.findIndex(item => item.id === end.blockId);
       let highlight: HighlightColor | undefined;
+      let color: TextColor | undefined;
       let first = true;
       for (let index = startIndex; index <= endIndex; index += 1) {
         const current = flat[index];
@@ -1888,13 +1892,17 @@ export class NobitaEditor implements BlockHost {
         const part = markStateInRange(current.text, from, to);
         if (first) {
           highlight = part.highlight;
+          color = part.color;
           first = false;
-        } else if (highlight !== part.highlight) {
-          highlight = undefined;
+        } else {
+          if (highlight !== part.highlight) highlight = undefined;
+          if (color !== part.color) color = undefined;
         }
       }
       if (highlight) state.highlight = highlight;
       else delete state.highlight;
+      if (color) state.color = color;
+      else delete state.color;
     }
     this.#toolbar.show(rect, state, block.props.align ?? 'left');
   }
@@ -1939,6 +1947,14 @@ export class NobitaEditor implements BlockHost {
     if (this.#readonly) return;
     const changed = this.#transformSelection((runs, from, to) =>
       setHighlightInRange(runs, from, to, highlight)
+    );
+    if (changed) this.#updateToolbar();
+  }
+
+  #applyTextColor(color: TextColor | null): void {
+    if (this.#readonly) return;
+    const changed = this.#transformSelection((runs, from, to) =>
+      setTextColorInRange(runs, from, to, color)
     );
     if (changed) this.#updateToolbar();
   }

@@ -2,12 +2,12 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **44.5 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **47.1 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
 > `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
-> Down, standard block Copy and the eight-color highlight palette. Statuses
-> below reflect those passes.
+> Down, standard block Copy, the eight-color highlight palette and the
+> eight-color text-color palette. Statuses below reflect those passes.
 
 Scope: the **document editor** and its Table / Database surfaces. AFFiNE's
 edgeless canvas, cloud account, sync, AI and admin features are listed only as
@@ -41,7 +41,7 @@ typed data view.
 Against AFFiNE, the remaining gaps are not "missing block types" but
 **convenience commands around selection, formatting and data-view querying**.
 The P0/P1 passes have already closed alignment, dates, Heading 4–6,
-`Mod-Backspace`, move/copy and highlight colors; the current gaps are:
+`Mod-Backspace`, move/copy, highlight colors and text colors; the current gaps are:
 
 1. **Inline equation** is absent and needs a math renderer.
 2. **Block selection** (Escape, Shift+Arrow, Cmd+A stages) is absent. Nobita can
@@ -118,6 +118,7 @@ in Nobita's toolbar or block menu.
 | Link | `Mod-K` | ✅ | Link popover, URL normalization/sanitization |
 | Alignment | `Mod-Shift-L/E/R` | ✅ | Toolbar, slash menu, hotkeys |
 | Highlight colors | Toolbar dropdown | ✅ | 8 background colors; toggles off; HTML round-trip; Markdown drops color |
+| Text colors | Toolbar dropdown | ✅ | 8 foreground colors; default color; HTML round-trip; Markdown drops color |
 | Inline equation | Toolbar | ❌ | Needs a math renderer |
 | Auto-pair brackets | Type `(`, `[`, `{`, quotes | ❌ | Does not insert closing pair |
 | Backtick wraps selection in code | Select text + `` ` `` | ❌ | Inline code shortcut supports markdown only |
@@ -158,6 +159,7 @@ in Nobita's toolbar or block menu.
 | Bold / italic / underline / strike / code / link | ✅ | Selection toolbar |
 | Inline equation | ❌ | — |
 | Highlight colors | ✅ | Selection toolbar palette; 8 colors |
+| Text colors | ✅ | Selection toolbar palette; 8 foreground colors |
 | Create Table from selected blocks | ❌ | Convert selection to database rows |
 | Create Linked Doc | ❌ | Page-level feature |
 | Comment | ❌ | No comment model |
@@ -306,6 +308,8 @@ the editor core just for parity:
   text/HTML/private-JSON serialization as selection copy.
 - ✅ **Highlight colors** (P1): eight-color background palette in the selection
   toolbar, HTML `<mark>` round-trip, Markdown degradation.
+- ✅ **Text colors** (P1): eight-color foreground palette, default-color reset,
+  HTML `<span data-nb-color>` round-trip, Markdown degradation.
 
 ### P0 — remaining small wins
 
@@ -357,6 +361,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 44.5 KB gzip. The implemented P0/P1 items added about
-4.0 KB gzip; the remaining divider/alias item should stay under ~0.5 KB. That
+The current editor is 47.1 KB gzip. The implemented P0/P1 items added about
+6.6 KB gzip; the remaining divider/alias item should stay under ~0.5 KB. That
 keeps the bundle in the mid-40s while closing the most visible interaction gaps.

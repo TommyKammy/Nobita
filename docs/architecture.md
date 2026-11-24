@@ -38,11 +38,13 @@ Invariants:
   makes rendering and history cheap.
 
 Inline marks are five boolean flags (`bold`, `italic`, `underline`, `strike`,
-`code`) plus two value marks: `link` (a URL string) and `highlight` (one of
-eight named colors). A highlight is stored as a palette token, not a CSS string,
-so documents stay small and HTML import can whitelist values. `parseDoc` drops
-unknown colors. The editor renders the token as `data-highlight`, HTML export
-uses `<mark data-nb-highlight>`, and Markdown intentionally drops the color.
+`code`) plus three value marks: `link` (a URL string), `highlight` (background)
+and `color` (foreground). Highlight and text color share the same eight named
+palette tokens. They are stored as palette names, not CSS strings, so documents
+stay small and HTML import can whitelist values. `parseDoc` drops unknown colors.
+The editor renders them as `data-highlight` and `data-text-color`; HTML export
+uses `<mark data-nb-highlight>` and `<span data-nb-color>`. Markdown
+intentionally drops both colors.
 
 `core/doc.ts` implements structural updates by recursively copying only the path
 to the changed block. `core/store.ts` builds transactions and history on top.
@@ -213,7 +215,7 @@ consistent.
 Copy writes three representations:
 
 - `text/plain` — readable text with list markers.
-- `text/html` — semantic HTML with inline marks, including `<mark data-nb-highlight>`.
+- `text/html` — semantic HTML with inline marks, including `<mark data-nb-highlight>` and `<span data-nb-color>`.
 - `application/x-nobita+json` — exact blocks, including nesting and props.
 
 Selection copy, the block menu Copy and `/copy` share this serializer. The

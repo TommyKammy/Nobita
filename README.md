@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **44.5 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
+- **47.1 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -27,7 +27,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Area | Included |
 | --- | --- |
 | Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, table/database |
-| Inline | Bold, italic, underline, strikethrough, inline code, links, alignment, 8-color highlight palette |
+| Inline | Bold, italic, underline, strikethrough, inline code, links, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo |
 | Data views | Rows, typed columns (text, number, select, date, checkbox, URL), add/rename/delete, row menus, sort, Markdown table round-trip, HTML table paste/export |
 | Menus | Slash menu with fuzzy search and block actions (move/copy), block handle menu, formatting toolbar, link popover |
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 44.5 KB bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 47.1 KB bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -251,6 +251,7 @@ Every visual token is a CSS custom property on the host element:
 | `--nb-accent`, `--nb-accent-soft`, `--nb-selection` | Accent and selection |
 | `--nb-code-bg` | Code block background |
 | `--nb-hl-{red,orange,yellow,green,teal,blue,purple,grey}` | Inline highlight palette |
+| `--nb-fg-{red,orange,yellow,green,teal,blue,purple,grey}` | Inline text-color palette |
 | `--nb-shadow`, `--nb-shadow-lg` | Chrome |
 | `--nb-page-width`, `--nb-page-padding-y`, `--nb-page-padding-x` | Page geometry |
 | `--nb-db-bleed` | Optional horizontal bleed for root data views (`0` by default) |
@@ -282,8 +283,8 @@ Bundle sizes:
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 159.4 KB | **44.5 KB** |
-| Demo app (editor + UI + seed data) | 187.7 KB | 53.7 KB |
+| Editor ESM (`nobita.js`) | 171.5 KB | **47.1 KB** |
+| Demo app (editor + UI + seed data) | 199.9 KB | 56.4 KB |
 
 The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.
 

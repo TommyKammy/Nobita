@@ -17,6 +17,8 @@ export type {
   EditorSelection,
   HeadingLevel,
   HighlightColor,
+  PaletteColor,
+  TextColor,
   BooleanMarkKey,
   InlineContent,
   InlineMark,
@@ -28,8 +30,11 @@ export type {
 export {
   DOC_VERSION,
   HIGHLIGHT_COLORS,
+  PALETTE_COLORS,
+  TEXT_COLORS,
   isHighlightColor,
   isListBlock,
+  isTextColor,
   isTextualBlock,
 } from './types.js';
 
@@ -113,6 +118,7 @@ export {
   runsToHtml,
   setHighlightInRange,
   setLinkInRange,
+  setTextColorInRange,
   sliceRuns,
   toggleMarkInRange,
 } from './text.js';

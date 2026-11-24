@@ -1,10 +1,11 @@
-import { isHighlightColor } from './types.js';
+import { isHighlightColor, isTextColor } from './types.js';
 import type {
   BooleanMarkKey,
   HighlightColor,
   InlineMark,
   InlineRun,
   MarkKey,
+  TextColor,
 } from './types.js';
 import { safeHref } from './url.js';
 
@@ -14,6 +15,7 @@ export const MARK_KEYS: readonly MarkKey[] = [
   'underline',
   'strike',
   'code',
+  'color',
   'highlight',
   'link',
 ];
@@ -24,6 +26,7 @@ const KEY_ORDER: readonly MarkKey[] = [
   'underline',
   'strike',
   'code',
+  'color',
   'highlight',
   'link',
 ];
@@ -39,6 +42,17 @@ const HIGHLIGHT_HTML: Record<HighlightColor, string> = {
   grey: '#eeeeec',
 };
 
+const TEXT_COLOR_HTML: Record<TextColor, string> = {
+  red: '#b91c1c',
+  orange: '#c2410c',
+  yellow: '#a16207',
+  green: '#15803d',
+  teal: '#0f766e',
+  blue: '#1d4ed8',
+  purple: '#7e22ce',
+  grey: '#6b7280',
+};
+
 /** Drop falsy marks and unknown keys, returning `undefined` for "plain". */
 export function normalizeMark(mark: InlineMark | undefined): InlineMark | undefined {
   if (!mark) return undefined;
@@ -48,6 +62,7 @@ export function normalizeMark(mark: InlineMark | undefined): InlineMark | undefi
   if (mark.underline === true) out.underline = true;
   if (mark.strike === true) out.strike = true;
   if (mark.code === true) out.code = true;
+  if (isTextColor(mark.color)) out.color = mark.color;
   if (isHighlightColor(mark.highlight)) out.highlight = mark.highlight;
   if (typeof mark.link === 'string' && mark.link.length > 0) out.link = mark.link;
   return Object.keys(out).length === 0 ? undefined : out;
@@ -176,6 +191,7 @@ export interface MarkPatch {
   underline?: boolean;
   strike?: boolean;
   code?: boolean;
+  color?: TextColor | null;
   highlight?: HighlightColor | null;
   link?: string | null;
 }
@@ -201,6 +217,10 @@ function patchedMark(mark: InlineMark | undefined, patch: MarkPatch): InlineMark
   if (patch.code !== undefined) {
     if (patch.code) next.code = true;
     else delete next.code;
+  }
+  if (patch.color !== undefined) {
+    if (patch.color) next.color = patch.color;
+    else delete next.color;
   }
   if (patch.highlight !== undefined) {
     if (patch.highlight) next.highlight = patch.highlight;
@@ -266,6 +286,8 @@ export function markStateInRange(
         if (state.link !== marks.link) delete state.link;
       } else if (key === 'highlight') {
         if (state.highlight !== marks.highlight) delete state.highlight;
+      } else if (key === 'color') {
+        if (state.color !== marks.color) delete state.color;
       } else if (marks[key] !== true) {
         delete state[key];
       }
@@ -293,6 +315,15 @@ export function setHighlightInRange(
   return applyMarkPatch(runs, start, end, { highlight });
 }
 
+export function setTextColorInRange(
+  runs: readonly InlineRun[],
+  start: number,
+  end: number,
+  color: TextColor | null
+): InlineRun[] {
+  return applyMarkPatch(runs, start, end, { color });
+}
+
 export function setLinkInRange(
   runs: readonly InlineRun[],
   start: number,
@@ -316,6 +347,9 @@ export function runsToHtml(runs: readonly InlineRun[], escape: (text: string) =>
     if (marks.italic) inner = `<em>${inner}</em>`;
     if (marks.underline) inner = `<u>${inner}</u>`;
     if (marks.strike) inner = `<s>${inner}</s>`;
+    if (marks.color) {
+      inner = `<span data-nb-color="${marks.color}" style="color:var(--nb-fg-${marks.color}, ${TEXT_COLOR_HTML[marks.color]})">${inner}</span>`;
+    }
     if (marks.highlight) {
       inner = `<mark data-nb-highlight="${marks.highlight}" style="background-color:var(--nb-hl-${marks.highlight}, ${HIGHLIGHT_HTML[marks.highlight]})">${inner}</mark>`;
     }

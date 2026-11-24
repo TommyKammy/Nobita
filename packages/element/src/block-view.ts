@@ -252,6 +252,7 @@ export class BlockView {
           }
         }
         if (marks.highlight) span.dataset.highlight = marks.highlight;
+        if (marks.color) span.dataset.textColor = marks.color;
         if (classes.length > 0) span.className = classes.join(' ');
         if (tokens.length > 0) span.dataset.mark = tokens.join(' ');
       }
