@@ -174,6 +174,15 @@ describe('simple table', () => {
         literalImport.props.table.columns[0]!.id
       ]?.text
     ).toBe('a <br> b');
+
+    const codeImport = markdownToBlocks('| Code |\n| --- |\n| `<br>` |', {
+      extractTitle: false,
+    }).blocks.find(item => item.type === 'table');
+    expect(
+      codeImport?.props.table?.rows[1]?.cells[
+        codeImport.props.table.columns[0]!.id
+      ]?.text
+    ).toBe('<br>');
   });
 
   it('duplicates, moves, clears and colors rows and columns', () => {

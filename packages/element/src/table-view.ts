@@ -167,6 +167,7 @@ export class SimpleTableView {
     moved: boolean;
   } | null = null;
   #selectionOverlay: HTMLElement | null = null;
+  #activeCell: { rowId: string; columnId: string } | null = null;
   #suppressCellClick = false;
   #suppressAddClick = false;
   #addTip: HTMLElement | null = null;
@@ -295,6 +296,13 @@ export class SimpleTableView {
           () => {
             this.#clearAreaSelection();
             this.#commitCell(row.id, column.id, readCellText(cell));
+          },
+          { signal: this.#events.signal }
+        );
+        cell.addEventListener(
+          'focus',
+          () => {
+            this.#activeCell = { rowId: row.id, columnId: column.id };
           },
           { signal: this.#events.signal }
         );
@@ -634,6 +642,7 @@ export class SimpleTableView {
         this.#area = null;
       }
       this.#syncSelection();
+      if (drag.moved) this.#restoreActiveCaret();
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', finish);
@@ -647,6 +656,41 @@ export class SimpleTableView {
       }
     }
     return null;
+  }
+
+  #restoreActiveCaret(): void {
+    const active = this.#activeCell;
+    if (!active) return;
+    const cell = this.#cells.get(cellKey(active.rowId, active.columnId));
+    if (!cell) return;
+    cell.focus();
+    placeCaret(cell, 'end');
+  }
+
+  #history(redo: boolean): void {
+    const active = this.#activeCell;
+    const rowIndex = active
+      ? this.#data.rows.findIndex(row => row.id === active.rowId)
+      : -1;
+    const columnIndex = active
+      ? this.#data.columns.findIndex(column => column.id === active.columnId)
+      : -1;
+    if (redo) this.#host.redo();
+    else this.#host.undo();
+    const focus = (): void => this.#focusHistoryCell(rowIndex, columnIndex);
+    focus();
+    requestAnimationFrame(focus);
+  }
+
+  #focusHistoryCell(rowIndex: number, columnIndex: number): void {
+    if (this.#data.rows.length === 0 || this.#data.columns.length === 0) return;
+    const row =
+      this.#data.rows[Math.min(Math.max(rowIndex, 0), this.#data.rows.length - 1)];
+    const column =
+      this.#data.columns[
+        Math.min(Math.max(columnIndex, 0), this.#data.columns.length - 1)
+      ];
+    if (row && column) this.focusCell(row.id, column.id, 'end');
   }
 
   #onClickCapture = (event: MouseEvent): void => {
@@ -769,7 +813,10 @@ export class SimpleTableView {
     this.#host.commit(data);
     this.#syncSelection();
     requestAnimationFrame(() => {
-      this.#cells.get(cellKey(anchorRow.id, anchorColumn.id))?.focus();
+      const cell = this.#cells.get(cellKey(anchorRow.id, anchorColumn.id));
+      if (!cell) return;
+      cell.focus();
+      placeCaret(cell, 'end');
     });
   };
 
@@ -943,13 +990,12 @@ export class SimpleTableView {
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key.toLowerCase() === 'z') {
       event.preventDefault();
-      if (event.shiftKey) this.#host.redo();
-      else this.#host.undo();
+      this.#history(event.shiftKey);
       return;
     }
     if (mod && event.key.toLowerCase() === 'y') {
       event.preventDefault();
-      this.#host.redo();
+      this.#history(true);
       return;
     }
     if (this.#area) {

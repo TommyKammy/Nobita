@@ -147,13 +147,46 @@ const TABLE_LT = '\u0000LT\u0000';
 const TABLE_GT = '\u0000GT\u0000';
 
 function decodeTableText(value: string): string {
-  const protectedText = value
-    .replace(/\\</gu, TABLE_LT)
-    .replace(/\\>/gu, TABLE_GT)
-    .replace(/<br\s*\/?>/giu, '\n');
-  return plainText(parseInlineMarkdown(protectedText))
+  const codeSpans: string[] = [];
+  let protectedText = '';
+  let index = 0;
+  while (index < value.length) {
+    const char = value[index];
+    if (char === '\\' && index + 1 < value.length) {
+      protectedText += value.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    if (char === '`') {
+      let fence = '`';
+      while (value[index + fence.length] === '`') fence += '`';
+      const close = value.indexOf(fence, index + fence.length);
+      if (close >= 0) {
+        const token = `\u0000CODE${codeSpans.length}\u0000`;
+        codeSpans.push(value.slice(index + fence.length, close));
+        protectedText += token;
+        index = close + fence.length;
+        continue;
+      }
+    }
+    protectedText += char;
+    index += 1;
+  }
+
+  let text = plainText(
+    parseInlineMarkdown(
+      protectedText
+        .replace(/\\</gu, TABLE_LT)
+        .replace(/\\>/gu, TABLE_GT)
+        .replace(/<br\s*\/?>/giu, '\n')
+    )
+  )
     .replaceAll(TABLE_LT, '<')
     .replaceAll(TABLE_GT, '>');
+  codeSpans.forEach((inner, codeIndex) => {
+    text = text.replaceAll(`\u0000CODE${codeIndex}\u0000`, inner);
+  });
+  return text;
 }
 
 function isTableSeparator(line: string): boolean {

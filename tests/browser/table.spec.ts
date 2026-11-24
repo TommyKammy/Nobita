@@ -256,6 +256,29 @@ test('selects table cells by dragging and supports copy and clear', async ({ pag
   await expect(page.locator('.nb-table-selection')).toHaveAttribute('data-visible', 'false');
 });
 
+test('types into the active cell after a drag selection', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, tableDoc());
+  const first = page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c1"]');
+  const last = page.locator('.nb-table-cell[data-row-id="r2"][data-column-id="c2"]');
+  const firstBox = await first.boundingBox();
+  const lastBox = await last.boundingBox();
+  if (!firstBox || !lastBox) throw new Error('Missing table cells');
+  await page.mouse.move(firstBox.x + 8, firstBox.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(lastBox.x + lastBox.width - 8, lastBox.y + lastBox.height - 8, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  await page.keyboard.type('Q');
+  const doc = await getDoc(page);
+  const table = doc.blocks[0]?.props.table as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  };
+  expect(table.rows[0]?.cells.c1?.text).toBe('AQ');
+  await expect(page.locator('.nb-table-selection')).toHaveAttribute('data-visible', 'false');
+});
+
 test('undoes table row insertion from a focused cell', async ({ page }) => {
   await openFixture(page);
   await setDoc(page, tableDoc());
@@ -266,6 +289,10 @@ test('undoes table row insertion from a focused cell', async ({ page }) => {
   await expect(page.locator('.nb-table-cell').nth(4)).toBeFocused();
   await page.keyboard.press('Control+z');
   await expect(page.locator('.nb-table-grid tbody tr')).toHaveCount(2);
+  await expect(page.locator('.nb-table-cell').nth(2)).toBeFocused();
+  await page.keyboard.press('Control+Shift+z');
+  await expect(page.locator('.nb-table-grid tbody tr')).toHaveCount(3);
+  await expect(page.locator('.nb-table-cell').nth(2)).toBeFocused();
 });
 
 test('shows AFFiNE-style handles and hover add controls', async ({ page }) => {
