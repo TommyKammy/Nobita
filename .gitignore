@@ -1,10 +1,90 @@
-node_modules
-dist
-.DS_Store
-*.tsbuildinfo
-.rea*
-apps/demo/dist
+# Dependencies
+node_modules/
+.pnpm-store/
 
+# Build output
+dist/
+build/
+out/
+.next/
+.vercel/
+.netlify/
+.wrangler/
+.turbo/
+.vite/
+.cache/
+.parcel-cache/
+
+# Test and coverage output
+coverage/
+.nyc_output/
+lcov.info
+vitest.config.*.timestamp-*
 test-results/
 playwright-report/
 blob-report/
+playwright/.cache/
+.playwright/
+
+# TypeScript and tool caches
+*.tsbuildinfo
+.tsbuildinfo
+.eslintcache
+.stylelintcache
+
+# Local environment and secrets
+.env
+.env.*
+.envrc
+.direnv/
+.npmrc
+!.env.example
+!.env.sample
+!.npmrc.example
+*.local
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+
+# Local databases and dumps
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sql.gz
+
+# Logs and crash/profiling output
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.cpuprofile
+*.heapprofile
+*.heapsnapshot
+
+# OS and editor files
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+
+# Temporary and merge artifacts
+*.orig
+*.rej
+*.swp
+*~
+*.bak
+*.tgz
+.tmp/
+tmp/
