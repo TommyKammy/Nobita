@@ -1,6 +1,12 @@
 import type { Doc, EditorSelection } from '@nobita/core';
 import { parseDoc } from '@nobita/core';
-import { NobitaEditor, type NobitaOptions, type NobitaTheme } from './editor.js';
+import {
+  NobitaEditor,
+  type ImageUploadHandler,
+  type MentionProvider,
+  type NobitaOptions,
+  type NobitaTheme,
+} from './editor.js';
 
 const Base = (typeof HTMLElement === 'undefined' ? class {} : HTMLElement) as typeof HTMLElement;
 
@@ -20,6 +26,8 @@ export class NobitaEditorElement extends Base {
   #editor: NobitaEditor | null = null;
   #pendingDoc: Doc | string | undefined;
   #lastDoc: Doc | null = null;
+  #mentionProvider: MentionProvider | undefined;
+  #uploadImage: ImageUploadHandler | undefined;
 
   constructor() {
     super();
@@ -55,6 +63,8 @@ export class NobitaEditorElement extends Base {
           })
         );
       },
+      ...(this.#mentionProvider ? { mentionProvider: this.#mentionProvider } : {}),
+      ...(this.#uploadImage ? { uploadImage: this.#uploadImage } : {}),
     });
     this.#applyMinHeight();
     this.#pendingDoc = undefined;
@@ -105,6 +115,24 @@ export class NobitaEditorElement extends Base {
   set doc(value: Doc | string) {
     if (this.#editor) this.#editor.setDoc(value);
     else this.#pendingDoc = typeof value === 'string' ? parseDoc(value) : value;
+  }
+
+  get mentionProvider(): MentionProvider | undefined {
+    return this.#mentionProvider;
+  }
+
+  set mentionProvider(value: MentionProvider | undefined) {
+    this.#mentionProvider = value;
+    this.#editor?.setMentionProvider(value);
+  }
+
+  get uploadImage(): ImageUploadHandler | undefined {
+    return this.#uploadImage;
+  }
+
+  set uploadImage(value: ImageUploadHandler | undefined) {
+    this.#uploadImage = value;
+    this.#editor?.setUploadImage(value);
   }
 
   get value(): string {

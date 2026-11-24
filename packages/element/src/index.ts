@@ -6,7 +6,14 @@
  * re-exported here.
  */
 export { NobitaEditor } from './editor.js';
-export type { NobitaOptions, NobitaTheme } from './editor.js';
+export type {
+  ImageUploadHandler,
+  ImageUploadResult,
+  MentionItem,
+  MentionProvider,
+  NobitaOptions,
+  NobitaTheme,
+} from './editor.js';
 
 export {
   NobitaEditorElement,

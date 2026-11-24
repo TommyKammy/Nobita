@@ -25,6 +25,7 @@ Stable exports:
 - `NobitaOptions`
 - `NobitaTheme`
 - `NobitaChangeDetail`
+- `MentionItem`, `MentionProvider`, `ImageUploadResult`, `ImageUploadHandler`
 - `htmlToBlocks`, `plainTextToBlocks`, `readClipboardPayload`
 - `icon`
 
@@ -45,19 +46,36 @@ selection helpers, and menu item builders. Do not import these files directly.
 | `historyLimit` | `number` | Undo history limit |
 | `onChange` | `(doc, { source }) => void` | Document change callback |
 | `onSelectionChange` | `(selection \| null) => void` | Selection change callback |
+| `mentionProvider` | `MentionProvider` | Host directory used by the `@` mention picker |
+| `uploadImage` | `ImageUploadHandler` | Upload pasted/dropped images |
+
+`MentionProvider.search(query)` may return items synchronously or as a Promise. Each item is
+`{ id, label, kind?, keywords? }`; the selected item becomes an inline
+`mention: { id, label, kind? }` mark. The editor never fetches users or stores
+uploads itself. Mentions survive JSON and HTML; Markdown export degrades them to
+their label text.
+
+`ImageUploadHandler` receives the pasted/dropped `File` and returns a URL string
+or `{ src, alt?, caption? }`. A notable failure leaves the document unchanged.
+Without a handler, image clipboard/drop events are ignored rather than inserting
+browser-native HTML.
+
+`getBlockLink(blockId)` returns `#block-<id>`. Clicking a matching link inside
+the same document focuses the block. Use normal URLs for links across documents.
 
 ### Editor methods
 
 `getDoc()`, `getJSON(pretty?)`, `getMarkdown()`, `getHTML()`, `setDoc(doc, { history? })`,
 `getSelection()`, `focus(blockId?, offset?)`, `focusTitle()`, `blur()`, `setTitle(title)`,
 `setReadonly(value)`, `setTheme(theme)`, `setPlaceholder(value)`, `undo()`, `redo()`,
-`insertMarkdown(markdown)`, `destroy()`.
+`insertMarkdown(markdown)`, `getBlockLink(blockId)`, `setMentionProvider(provider)`,
+`setUploadImage(handler)`, `destroy()`.
 
 ### `<nobita-editor>`
 
 Attributes: `readonly`, `theme`, `placeholder`, `min-height`, `doc` (JSON string).
 
-Properties: `doc`, `value` (JSON), `markdown`, `editor`.
+Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `uploadImage`.
 
 Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`,
 `setReadonly()`, `setTheme()`.
@@ -72,11 +90,11 @@ Events:
 
 Stable exports include:
 
-- Document types: `Doc`, `Block`, `BlockProps`, `InlineRun`, `InlineMark`, `EditorSelection`
+- Document types: `Doc`, `Block`, `BlockProps`, `InlineRun`, `InlineMark`, `MentionRef`, `EditorSelection`
 - Serialization: `parseDoc`, `docToJSON`, `blocksToMarkdown`, `markdownToBlocks`,
   `blocksToHtml`
 - Editing commands: `setBlockType`, `setBlockAlign`, `toggleChecked`,
-  `setCodeLanguage`, `insertBlockAfter`, etc.
+  `setCodeLanguage`, `setCalloutTone`, `insertBlockAfter`, etc.
 - Data views: `DatabaseView`, `DatabaseFilter`, `databaseView`,
   `filteredDatabaseRows`, `groupedDatabaseRows`
 - Store: `EditorStore`

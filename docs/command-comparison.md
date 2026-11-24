@@ -2,7 +2,7 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **55.5 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **57.6 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
 > `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
@@ -49,8 +49,8 @@ The P0/P1 passes have already closed alignment, dates, Heading 4–6,
    cannot be selected as blocks.
 3. **Database search** is absent; filters, grouping and board views are implemented.
 4. **Database keyboard row deletion** is absent; cell range selection and copy/paste are implemented.
-5. **Linked docs / `[[` / `@` mentions / comments** are app-level features that
-   should not be pulled into the editor core casually.
+5. **Linked docs / nested pages / comments** are app-level features that should
+   not be pulled into the editor core casually. Mentions are a generic inline primitive.
 
 Recommended order is in [Priorities](#priorities).
 
@@ -284,11 +284,11 @@ the editor core just for parity:
 
 - **Edgeless canvas:** frame, mind map, shape, connector, group, surface refs.
 - **Cloud/product:** sync, sharing, permissions, history, notifications, telemetry.
-- **Collaboration:** comments, mentions, presence, CRDT.
-- **Media platform:** attachments, PDF viewer, image uploads, bookmark previews,
+- **Collaboration:** comments, presence, CRDT.
+- **Media platform:** attachments, PDF viewer, managed image hosting, bookmark previews,
   YouTube/GitHub/Figma/Loom/iframe embeds.
 - **Math:** LaTeX rendering and inline equations.
-- **Navigation graph:** linked docs, backlinks, synced docs, `@` mentions.
+- **Navigation graph:** linked docs, backlinks, synced docs.
 - **Full data-view framework:** row pages, calendar/kanban views, filters,
   grouping, multi-select, progress/image properties, view tabs.
 - **AI features.**
@@ -340,9 +340,9 @@ the editor core just for parity:
 
 - Calendar database view.
 - Row detail pages / title property / page-per-row.
-- Linked docs, `[[`, `@` mentions, backlinks.
+- Linked docs, `[[`, backlinks.
 - Comments and collaboration.
-- Attachments/PDF, image uploads, bookmark previews, embeds.
+- Attachments/PDF, managed image hosting, bookmark previews, embeds.
 - LaTeX/equation blocks.
 - Simple table cell colors/merges and row/column move.
 - Edgeless, AI, cloud import/sync.
@@ -357,6 +357,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 55.5 KB gzip. Phase 1 data views added about 7.5 KB gzip;
-the remaining search/multi-view items are incremental on top of the existing
-view model.
+The current editor is 57.6 KB gzip. Phase 1 data views added about 7.5 KB gzip
+and Phase 2 references/input added about 2.1 KB; remaining search/multi-view
+items are incremental on top of the existing view model.

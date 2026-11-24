@@ -9,6 +9,8 @@ import type { CSSProperties } from 'react';
 import {
   NobitaEditorElement,
   defineNobitaEditor,
+  type ImageUploadHandler,
+  type MentionProvider,
   type NobitaChangeDetail,
   type NobitaTheme,
 } from '@nobita/element';
@@ -35,6 +37,8 @@ export interface NobitaEditorProps {
   style?: CSSProperties;
   onChange?: (doc: Doc, meta: { source: string }) => void;
   onSelectionChange?: (selection: EditorSelection | null) => void;
+  mentionProvider?: MentionProvider;
+  uploadImage?: ImageUploadHandler;
 }
 
 /**
@@ -66,6 +70,18 @@ export const NobitaEditor = forwardRef<NobitaReactHandle, NobitaEditorProps>(
       if (!element) return;
       element.setReadonly(props.readonly ?? false);
     }, [props.readonly]);
+
+    useLayoutEffect(() => {
+      const element = hostRef.current;
+      if (!element) return;
+      element.mentionProvider = props.mentionProvider;
+    }, [props.mentionProvider]);
+
+    useLayoutEffect(() => {
+      const element = hostRef.current;
+      if (!element) return;
+      element.uploadImage = props.uploadImage;
+    }, [props.uploadImage]);
 
     useLayoutEffect(() => {
       const element = hostRef.current;

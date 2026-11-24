@@ -35,6 +35,7 @@ export interface BlockMenuContext {
   commit(next: Doc, caret: EditorSelection | null): void;
   focusBlock(blockId: string, offset: number): void;
   copyBlock(offset: number): void;
+  copyLink(): void;
   deleteBlock(): void;
 }
 
@@ -307,6 +308,14 @@ export function buildBlockMenuItems(context: BlockMenuContext): MenuItem[] {
       icon: icon.copy,
       group: 'Actions',
       action: () => context.copyBlock(context.pointFromCaret().offset),
+    },
+    {
+      id: 'copy-link',
+      label: 'Copy link',
+      description: 'Copy a link to this block',
+      icon: icon.link,
+      group: 'Actions',
+      action: () => context.copyLink(),
     },
     {
       id: 'duplicate',

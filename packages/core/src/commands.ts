@@ -7,7 +7,15 @@ import {
   updateBlock,
 } from './doc.js';
 import { createDatabaseData } from './database.js';
-import type { Block, BlockProps, BlockType, Doc, HeadingLevel, InlineRun } from './types.js';
+import type {
+  Block,
+  BlockProps,
+  BlockType,
+  CalloutTone,
+  Doc,
+  HeadingLevel,
+  InlineRun,
+} from './types.js';
 import { normalizeRuns, plainText } from './text.js';
 import { createId } from './id.js';
 
@@ -95,6 +103,15 @@ export function setBlockAlign(doc: Doc, id: string, align: 'left' | 'center' | '
     const props = { ...block.props };
     if (align) props.align = align;
     else delete props.align;
+    return { ...block, props };
+  });
+}
+
+export function setCalloutTone(doc: Doc, id: string, tone: CalloutTone): Doc {
+  return updateBlock(doc, id, block => {
+    const props = { ...block.props };
+    if (tone === 'info') delete props.tone;
+    else props.tone = tone;
     return { ...block, props };
   });
 }

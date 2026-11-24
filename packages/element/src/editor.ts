@@ -19,6 +19,7 @@ import {
   markdownToBlocks,
   markStateInRange,
   marksAt,
+  mentionRangeAt,
   matchBlockMarkdown,
   matchInlineMarkdown,
   mergeBlockWithNext,
@@ -32,6 +33,8 @@ import {
   setBlockAlign,
   setBlockType,
   setHighlightInRange,
+  setCalloutTone,
+  setCodeLanguage,
   setImageProps,
   setTextColorInRange,
   sliceRuns,
@@ -42,6 +45,7 @@ import {
   type Block,
   type BlockProps,
   type BlockType,
+  type CalloutTone,
   type DatabaseData,
   type Doc,
   type EditorSelection,
@@ -67,14 +71,36 @@ import {
   offsetToDomPoint,
   selectionRect,
 } from './dom.js';
+import { icon } from './icons.js';
 import { blockRange, orderedRange, selectionBlocks } from './selection.js';
 import { readRunsFromDom } from './inline-dom.js';
-import { Menu } from './menu.js';
+import { Menu, type MenuItem } from './menu.js';
 import { buildBlockMenuItems, buildSlashMenuItems } from './menu-items.js';
 import { styles } from './styles.js';
 import { LinkPopover, Toolbar, type ToolbarMark } from './toolbar.js';
 
 export type NobitaTheme = 'light' | 'dark' | 'auto';
+
+export interface MentionItem {
+  id: string;
+  label: string;
+  kind?: string;
+  keywords?: readonly string[];
+}
+
+export interface MentionProvider {
+  search(query: string): readonly MentionItem[] | Promise<readonly MentionItem[]>;
+}
+
+export interface ImageUploadResult {
+  src: string;
+  alt?: string;
+  caption?: string;
+}
+
+export type ImageUploadHandler = (
+  file: File
+) => ImageUploadResult | string | Promise<ImageUploadResult | string>;
 
 export interface NobitaOptions {
   doc?: Doc | string;
@@ -86,12 +112,23 @@ export interface NobitaOptions {
   historyLimit?: number;
   onChange?: (doc: Doc, meta: { source: string }) => void;
   onSelectionChange?: (selection: EditorSelection | null) => void;
+  /** Optional host-provided mention directory. */
+  mentionProvider?: MentionProvider;
+  /** Optional host-provided image uploader used by paste and drop. */
+  uploadImage?: ImageUploadHandler;
 }
 
 interface SlashState {
   blockId: string;
   start: number;
   end: number;
+}
+
+interface MentionState {
+  blockId: string;
+  start: number;
+  end: number;
+  query: string;
 }
 
 interface DragState {
@@ -162,6 +199,8 @@ export class NobitaEditor implements BlockHost {
   #lastSelection: EditorSelection | null = null;
   #lastSelectionKey = '';
   #slash: SlashState | null = null;
+  #mention: MentionState | null = null;
+  #mentionQueryToken = 0;
   #drag: DragState | null = null;
   #savedSelection: EditorSelection | null = null;
   #destroyed = false;
@@ -185,6 +224,7 @@ export class NobitaEditor implements BlockHost {
   };
   #onWindowKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape') {
+      this.#mention = null;
       this.#menu.close();
       this.#toolbar.hide();
       this.#linkPopover.hide();
@@ -296,6 +336,34 @@ export class NobitaEditor implements BlockHost {
     this.#syncPlaceholders();
   }
 
+  get mentionProvider(): MentionProvider | undefined {
+    return this.#options.mentionProvider;
+  }
+
+  set mentionProvider(provider: MentionProvider | undefined) {
+    this.setMentionProvider(provider);
+  }
+
+  setMentionProvider(provider: MentionProvider | undefined): void {
+    this.#options = provider
+      ? { ...this.#options, mentionProvider: provider }
+      : (({ mentionProvider: _mentionProvider, ...rest }) => rest)(this.#options);
+  }
+
+  get uploadImage(): ImageUploadHandler | undefined {
+    return this.#options.uploadImage;
+  }
+
+  set uploadImage(handler: ImageUploadHandler | undefined) {
+    this.setUploadImage(handler);
+  }
+
+  setUploadImage(handler: ImageUploadHandler | undefined): void {
+    this.#options = handler
+      ? { ...this.#options, uploadImage: handler }
+      : (({ uploadImage: _uploadImage, ...rest }) => rest)(this.#options);
+  }
+
   getSelection(): EditorSelection | null {
     return this.#currentSelection();
   }
@@ -316,6 +384,13 @@ export class NobitaEditor implements BlockHost {
 
   getHTML(): string {
     return blocksToHtml(this.store.doc.blocks);
+  }
+
+  /** Stable fragment for linking to a block inside the host page. */
+  getBlockLink(blockId: string): string | null {
+    return findBlock(this.store.doc.blocks, blockId)
+      ? `#block-${encodeURIComponent(blockId)}`
+      : null;
   }
 
   setDoc(doc: Doc | string, options: { history?: boolean } = {}): void {
@@ -425,6 +500,7 @@ export class NobitaEditor implements BlockHost {
     window.removeEventListener('resize', this.#onResize);
     window.removeEventListener('keydown', this.#onWindowKeyDown, true);
     this.#menu.close(false);
+    this.#mention = null;
     this.#toolbar.hide();
     this.#linkPopover.hide();
     this.#endDrag();
@@ -699,6 +775,7 @@ export class NobitaEditor implements BlockHost {
     }
 
     if (event.key === 'Escape') {
+      this.#mention = null;
       this.#menu.close();
       this.#toolbar.hide();
       this.#linkPopover.hide();
@@ -707,6 +784,15 @@ export class NobitaEditor implements BlockHost {
 
   paste(blockId: string, event: ClipboardEvent): void {
     if (this.#readonly) return;
+    const image = Array.from(event.clipboardData?.files ?? []).find(file =>
+      file.type.startsWith('image/')
+    );
+    if (image) {
+      // Never let the browser insert a native <img> the model cannot see.
+      event.preventDefault();
+      if (this.#options.uploadImage) void this.#uploadImage(blockId, image);
+      return;
+    }
     event.preventDefault();
     const payload = readClipboardPayload(event);
     if (!payload) return;
@@ -781,6 +867,40 @@ export class NobitaEditor implements BlockHost {
     }
   }
 
+  async #uploadImage(blockId: string, file: File): Promise<void> {
+    const upload = this.#options.uploadImage;
+    if (!upload) return;
+    try {
+      const result = await upload(file);
+      const src = typeof result === 'string' ? result : result.src;
+      if (!src) return;
+      const alt = typeof result === 'string' ? undefined : result.alt;
+      const caption = typeof result === 'string' ? undefined : result.caption;
+      const block = createBlock('image', {
+        props: {
+          src,
+          ...(alt ? { alt } : {}),
+          ...(caption ? { caption } : {}),
+        },
+      });
+      const next = insertBlockRelative(this.store.doc, blockId, block, 'after');
+      this.#commit(next, this.store.selection);
+      this.#views.get(block.id)?.focusImageCaption();
+    } catch {
+      // Host upload failures leave the document untouched.
+    }
+  }
+
+  setCodeLanguage(blockId: string, language: string): void {
+    if (this.#readonly) return;
+    this.#commit(setCodeLanguage(this.store.doc, blockId, language), this.store.selection);
+  }
+
+  setCalloutTone(blockId: string, tone: CalloutTone): void {
+    if (this.#readonly) return;
+    this.#commit(setCalloutTone(this.store.doc, blockId, tone), this.store.selection);
+  }
+
   openBlockMenu(blockId: string, anchor: HTMLElement): void {
     const block = findBlock(this.store.doc.blocks, blockId);
     if (!block) return;
@@ -791,6 +911,7 @@ export class NobitaEditor implements BlockHost {
       commit: (next, caret) => this.#commit(next, caret),
       focusBlock: (id, offset) => this.#focusBlock(id, offset),
       copyBlock: offset => this.#copyBlockToClipboard(blockId, offset),
+      copyLink: () => this.#copyBlockLink(blockId),
       deleteBlock: () => this.#deleteBlock(blockId),
     });
     this.#menu.open({
@@ -843,7 +964,7 @@ export class NobitaEditor implements BlockHost {
   #isNestedField(target: EventTarget | null): boolean {
     if (!(target instanceof Node)) return false;
     const element = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement;
-    return Boolean(element?.closest('.nb-caption, .nb-db, .nb-image-placeholder, input, textarea'));
+    return Boolean(element?.closest('.nb-caption, .nb-db, .nb-image-placeholder, input, textarea, select'));
   }
 
   #activeBlockId(target: EventTarget | null): string | null {
@@ -981,10 +1102,20 @@ export class NobitaEditor implements BlockHost {
       event => {
         const target = event.target as Element | null;
         const link = target?.closest<HTMLElement>('[data-link]');
-        if (link && (event.metaKey || event.ctrlKey)) {
-          event.preventDefault();
+        if (link) {
           const href = safeHref(link.dataset.link);
-          if (href) window.open(href, '_blank', 'noopener,noreferrer');
+          if (href?.startsWith('#block-')) {
+            event.preventDefault();
+            const blockId = decodeURIComponent(href.slice('#block-'.length));
+            if (findBlock(this.store.doc.blocks, blockId)) {
+              this.#focusBlock(blockId, 0);
+            }
+            return;
+          }
+          if (event.metaKey || event.ctrlKey) {
+            event.preventDefault();
+            if (href) window.open(href, '_blank', 'noopener,noreferrer');
+          }
         }
       },
       { signal }
@@ -1013,7 +1144,23 @@ export class NobitaEditor implements BlockHost {
       { signal }
     );
 
-    body.addEventListener('drop', event => event.preventDefault(), { signal });
+    body.addEventListener(
+      'drop',
+      event => {
+        const file = Array.from(event.dataTransfer?.files ?? []).find(item =>
+          item.type.startsWith('image/')
+        );
+        if (file && this.#options.uploadImage) {
+          event.preventDefault();
+          const blockId =
+            this.#activeBlockId(event.target) ?? this.#nearestBlock(event.clientY);
+          if (blockId) void this.#uploadImage(blockId, file);
+          return;
+        }
+        event.preventDefault();
+      },
+      { signal }
+    );
   }
 
   #bindTitle(): void {
@@ -1373,8 +1520,16 @@ export class NobitaEditor implements BlockHost {
 
     if (text === '/' && this.#isSlashPosition(before, point.offset)) {
       this.#openSlashMenu(point.blockId, point.offset);
+    } else if (
+      text === '@' &&
+      this.#options.mentionProvider &&
+      this.#isSlashPosition(before, point.offset)
+    ) {
+      void this.#openMentionMenu(point.blockId, point.offset);
     } else if (this.#slash) {
       this.#syncSlashMenu();
+    } else if (this.#mention) {
+      this.#syncMentionMenu();
     }
   }
 
@@ -1496,8 +1651,11 @@ export class NobitaEditor implements BlockHost {
     const block = findBlock(this.store.doc.blocks, blockId);
     if (!block) return;
     if (point.offset > 0) {
-      const runs = deleteTextRange(block.text, point.offset - 1, point.offset);
-      const caret: Point = { blockId, offset: point.offset - 1 };
+      const mention = mentionRangeAt(block.text, point.offset - 1);
+      const start = mention?.start ?? point.offset - 1;
+      const end = mention?.end ?? point.offset;
+      const runs = deleteTextRange(block.text, start, end);
+      const caret: Point = { blockId, offset: start };
       this.#commit(replaceBlockText(this.store.doc, blockId, runs), { anchor: caret, focus: caret }, {
         mergeKey: `delete:${blockId}`,
       });
@@ -1539,8 +1697,11 @@ export class NobitaEditor implements BlockHost {
     if (!block) return;
     const length = runsLength(block.text);
     if (point.offset < length) {
-      const runs = deleteTextRange(block.text, point.offset, point.offset + 1);
-      const caret: Point = { blockId, offset: point.offset };
+      const mention = mentionRangeAt(block.text, point.offset);
+      const start = mention?.start ?? point.offset;
+      const end = mention?.end ?? point.offset + 1;
+      const runs = deleteTextRange(block.text, start, end);
+      const caret: Point = { blockId, offset: start };
       this.#commit(replaceBlockText(this.store.doc, blockId, runs), { anchor: caret, focus: caret }, {
         mergeKey: `delete:${blockId}`,
       });
@@ -2067,6 +2228,124 @@ export class NobitaEditor implements BlockHost {
     });
   }
 
+  /** ---- mentions ---- */
+
+  async #openMentionMenu(blockId: string, offset: number): Promise<void> {
+    const provider = this.#options.mentionProvider;
+    if (!provider || this.#readonly) return;
+    const mention: MentionState = {
+      blockId,
+      start: offset,
+      end: offset + 1,
+      query: '',
+    };
+    this.#mention = mention;
+    let items: readonly MentionItem[];
+    try {
+      items = await Promise.resolve(provider.search(''));
+    } catch {
+      if (this.#mention === mention) this.#mention = null;
+      return;
+    }
+    if (this.#mention !== mention) return;
+    const selection = this.#currentSelection();
+    const active = this.root.activeElement;
+    if (
+      this.#readonly ||
+      !active ||
+      !this.#body.contains(active) ||
+      !selection ||
+      !this.#isCollapsed(selection) ||
+      selection.anchor.blockId !== blockId ||
+      selection.anchor.offset < offset
+    ) {
+      this.#mention = null;
+      return;
+    }
+    this.#menu.open({
+      items: this.#mentionMenuItems(items, mention),
+      anchor: rectAnchor(this.#caretRect(blockId)),
+      filterable: true,
+      query: mention.query,
+      width: 280,
+      onClose: () => {
+        if (this.#mention === mention) this.#mention = null;
+      },
+    });
+    // The query may have advanced while the initial search was in flight.
+    if (mention.query.length > 0) this.#syncMentionMenu();
+  }
+
+  #syncMentionMenu(): void {
+    const mention = this.#mention;
+    if (!mention) return;
+    const selection = this.#currentSelection();
+    const valid =
+      selection !== null &&
+      this.#isCollapsed(selection) &&
+      selection.anchor.blockId === mention.blockId;
+    const block = valid ? findBlock(this.store.doc.blocks, mention.blockId) : undefined;
+    const end = valid ? selection.anchor.offset : -1;
+    const query = block && end > mention.start ? plainText(block.text).slice(mention.start + 1, end) : '';
+    if (!block || end <= mention.start || /[\s\n]/u.test(query)) {
+      if (this.#mention === mention) this.#mention = null;
+      this.#menu.close();
+      return;
+    }
+    mention.end = end;
+    mention.query = query;
+    if (!this.#menu.isOpen) return;
+    this.#menu.setQuery(query);
+    const provider = this.#options.mentionProvider;
+    if (!provider) return;
+    const token = ++this.#mentionQueryToken;
+    void Promise.resolve(provider.search(query))
+      .then(items => {
+        if (this.#mention !== mention || token !== this.#mentionQueryToken) {
+          return;
+        }
+        this.#menu.setItems(this.#mentionMenuItems(items, mention));
+      })
+      .catch(() => undefined);
+  }
+
+  #mentionMenuItems(
+    items: readonly MentionItem[],
+    mention: MentionState
+  ): MenuItem[] {
+    return items.map(item => ({
+      id: `mention-${item.id}`,
+      label: item.label,
+      icon: icon.user,
+      group: 'Mentions',
+      keywords: [item.id, ...(item.keywords ?? [])],
+      action: () => this.#insertMention(mention, item),
+    }));
+  }
+
+  #insertMention(mention: MentionState, item: MentionItem): void {
+    const block = findBlock(this.store.doc.blocks, mention.blockId);
+    if (!block) return;
+    const end = Math.min(mention.end, runsLength(block.text));
+    const runs = deleteTextRange(block.text, mention.start, end);
+    const text = `@${item.label}`;
+    const nextRuns = insertTextAt(runs, mention.start, text, {
+      mention: {
+        id: item.id,
+        label: item.label,
+        ...(item.kind ? { kind: item.kind } : {}),
+      },
+    });
+    const next = replaceBlockText(this.store.doc, mention.blockId, nextRuns);
+    this.#mention = null;
+    const caret: Point = {
+      blockId: mention.blockId,
+      offset: mention.start + text.length,
+    };
+    this.#commit(next, { anchor: caret, focus: caret });
+    this.#focusBlock(mention.blockId, caret.offset);
+  }
+
   /** ---- slash menu ---- */
 
   #openSlashMenu(blockId: string, slashOffset: number): void {
@@ -2169,6 +2448,12 @@ export class NobitaEditor implements BlockHost {
     const caret: Point = { blockId, offset: offset + text.length };
     this.#commit(next, { anchor: caret, focus: caret });
     this.#focusBlock(blockId, caret.offset);
+  }
+
+  #copyBlockLink(blockId: string): void {
+    const link = this.getBlockLink(blockId);
+    if (!link) return;
+    void navigator.clipboard?.writeText(link).catch(() => undefined);
   }
 
   #deleteBlock(blockId: string): void {

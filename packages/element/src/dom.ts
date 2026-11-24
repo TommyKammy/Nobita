@@ -80,6 +80,21 @@ export function offsetToDomPoint(root: HTMLElement, offset: number): { node: Nod
       total += 1;
       return null;
     }
+    if (
+      node !== root &&
+      node.nodeType === Node.ELEMENT_NODE &&
+      (node as Element).getAttribute('contenteditable') === 'false'
+    ) {
+      // Atomic inline embeds (mentions) only accept a caret on either side.
+      const end = total + textLengthOfSubtree(node);
+      const parent = node.parentNode ?? root;
+      const index = Array.from(parent.childNodes).indexOf(node as ChildNode);
+      if (target <= total) return { node: parent, offset: Math.max(0, index) };
+      if (target <= end) return { node: parent, offset: Math.max(0, index + 1) };
+      total = end;
+      lastText = null;
+      return null;
+    }
     for (const child of Array.from(node.childNodes)) {
       const point = visit(child);
       if (point) return point;
@@ -91,7 +106,7 @@ export function offsetToDomPoint(root: HTMLElement, offset: number): { node: Nod
   if (point) return point;
   const last = lastText as Text | null;
   if (last) return { node: last, offset: last.data.length };
-  return { node: root, offset: 0 };
+  return { node: root, offset: root.childNodes.length };
 }
 
 export function compareTextPositions(

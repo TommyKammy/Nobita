@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **55.5 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
+- **57.6 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -27,17 +27,17 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Area | Included |
 | --- | --- |
 | Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, table/database |
-| Inline | Bold, italic, underline, strikethrough, inline code, links, alignment, 8-color highlight and text-color palettes |
+| Inline | Bold, italic, underline, strikethrough, inline code, links, mentions, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo |
 | Data views | Table and board views, filters, grouping, column resize, cell range copy/paste and TSV import; typed columns (text, number, select, multi-select, date, checkbox, URL, files, people), row menus, sort, Markdown table round-trip, HTML table paste/export |
-| Menus | Slash menu with fuzzy search and block actions (move/copy), block handle menu, selection toolbar with Turn into / Align / format / Color, link popover |
+| Menus | Slash menu with fuzzy search and block actions (move/copy/link), block handle menu, selection toolbar with Turn into / Align / format / Color, link popover, mention picker |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
-| Clipboard | Rich HTML, Markdown, plain text, and a private `application/x-nobita+json` format |
+| Clipboard | Rich HTML, Markdown, plain text, a private `application/x-nobita+json` format, and image paste through an upload adapter |
 | Persistence | JSON in / JSON out, `onChange`, `setDoc`, readonly mode, theming; optional `@nobita/storage` adapters for localStorage, SQLite/D1 and HTTP |
 | A11y | Keyboard menus, labels, focus-visible states, `aria-pressed` toolbar |
 
-Not in the box: multiple named saved views, synced blocks, comments, math, embeds, collaboration, image uploads (URLs only), and virtualization for very large documents. See [Roadmap](#roadmap).
+Not in the box: multiple named saved views, synced blocks, comments, math, embeds, collaboration, a managed image host, and virtualization for very large documents. Image uploads are supported through a host adapter. See [Roadmap](#roadmap).
 
 ## Quick start
 
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 55.5 KB bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 57.6 KB bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -235,16 +235,46 @@ See [docs/public-api.md](docs/public-api.md) for the stable import surface, edit
 | `undo()` / `redo()` | History |
 | `setReadonly(value)` / `setTheme(theme)` | Runtime configuration |
 | `insertMarkdown(markdown)` | Insert blocks at the caret |
+| `getBlockLink(blockId)` | Return the stable `#block-…` link for a block |
+| `setMentionProvider(provider)` | Replace the mention directory at runtime |
+| `setUploadImage(handler)` | Replace the image upload adapter at runtime |
 | `destroy()` | Remove listeners and DOM |
 
-Options: `doc`, `readonly`, `theme` (`light` / `dark` / `auto`), `placeholder`, `autofocus`, `spellcheck`, `historyLimit`, `onChange(doc, { source })`, `onSelectionChange(selection)`.
+Options: `doc`, `readonly`, `theme` (`light` / `dark` / `auto`), `placeholder`, `autofocus`, `spellcheck`, `historyLimit`, `onChange(doc, { source })`, `onSelectionChange(selection)`, `mentionProvider`, `uploadImage`.
+
+### Mentions, links and images
+
+Mentions are inline marks, not a separate node type. The host supplies the directory and decides how to resolve `{ id, label, kind }` later:
+
+```ts
+editor.mentionProvider = {
+  async search(query) {
+    const response = await fetch(`/api/people?q=${encodeURIComponent(query)}`);
+    return (await response.json()).map((user: { id: string; name: string }) => ({
+      id: user.id,
+      label: user.name,
+      kind: 'user',
+    }));
+  },
+};
+
+editor.uploadImage = async file => {
+  const body = new FormData();
+  body.append('file', file);
+  const response = await fetch('/api/uploads', { method: 'POST', body });
+  const result = await response.json();
+  return { src: result.url, alt: file.name };
+};
+```
+
+Typing `@` opens the picker; mention references stay atomic while typing and deleting. `getBlockLink(blockId)` returns `#block-<id>` for links the host can copy; clicking one inside the same document focuses the block. Image paste and drop only run when `uploadImage` is set, and the adapter owns storage, authentication and URL lifetime.
 
 The placeholder behaves like AFFiNE: it appears only on the **focused empty paragraph** (or heading, which shows “Heading 1/2/3/4/5/6”), and disappears as soon as text exists or focus leaves the body. It is not shown while the page title is focused. The default is `Type '/' for commands`; set `placeholder` to override the paragraph text.
 
 ### `<nobita-editor>`
 
 Attributes: `readonly`, `theme`, `placeholder`, `min-height`, `doc` (JSON string).
-Properties: `doc`, `value` (JSON), `markdown`, `editor`.
+Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `uploadImage`.
 Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`, `setReadonly()`, `setTheme()`.
 Events: `nobita-change` (`{ doc, source }`), `nobita-selection` (`{ selection }`), `nobita-ready`.
 
@@ -305,8 +335,8 @@ Bundle sizes:
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 201.1 KB | **55.5 KB** |
-| Demo app (editor + UI + seed data) | 231.3 KB | 65.5 KB |
+| Editor ESM (`nobita.js`) | 209.2 KB | **57.6 KB** |
+| Demo app (editor + UI + seed data) | 239.5 KB | 67.6 KB |
 
 The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.
 
@@ -338,10 +368,9 @@ A command-by-command comparison with AFFiNE, including recommended P0/P1 additio
 
 ## Roadmap
 
-- Block links, mentions, and nested pages inside the editor.
+- Nested pages inside the editor.
 - Collaboration adapter (Yjs/Automerge) behind an explicit interface.
 - Virtualized rendering for 10k+ block documents.
-- Image upload / paste, code language picker, callout tone picker.
 - Vue/Svelte wrappers (the web component already works in both).
 - Published packages and CDN builds.
 

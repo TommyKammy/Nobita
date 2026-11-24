@@ -177,6 +177,22 @@ function marksForElement(element: Element, inherited: InlineMark | undefined): I
   if (color) next.color = color;
   const highlight = highlightForElement(element);
   if (highlight) next.highlight = highlight;
+  const mentionId =
+    element.getAttribute('data-nb-mention-id') ??
+    element.getAttribute('data-mention-id');
+  const mentionLabel =
+    element.getAttribute('data-nb-mention-label') ??
+    element.getAttribute('data-mention-label');
+  if (mentionId && mentionLabel) {
+    const kind =
+      element.getAttribute('data-nb-mention-kind') ??
+      element.getAttribute('data-mention-kind');
+    next.mention = {
+      id: mentionId,
+      label: mentionLabel,
+      ...(kind ? { kind } : {}),
+    };
+  }
   switch (tag(element)) {
     case 'STRONG':
     case 'B':

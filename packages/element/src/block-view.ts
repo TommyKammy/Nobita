@@ -5,6 +5,31 @@ import { DatabaseView, type DatabaseHost } from './database-view.js';
 import { domPointToOffset, nativeSelection } from './dom.js';
 import { icon } from './icons.js';
 
+const CODE_LANGUAGES = [
+  'text',
+  'typescript',
+  'javascript',
+  'tsx',
+  'jsx',
+  'json',
+  'html',
+  'css',
+  'python',
+  'go',
+  'rust',
+  'sql',
+  'bash',
+  'markdown',
+  'yaml',
+] as const;
+
+const CALLOUT_TONES = [
+  { value: 'info', label: 'Info' },
+  { value: 'success', label: 'Success' },
+  { value: 'warning', label: 'Warning' },
+  { value: 'danger', label: 'Danger' },
+] as const;
+
 export interface BlockRenderContext {
   depth: number;
   index: number;
@@ -23,7 +48,8 @@ export class BlockView {
   #content: HTMLElement;
   #children: HTMLElement;
   #text: HTMLElement | null = null;
-  #codeLang: HTMLElement | null = null;
+  #codeLang: HTMLSelectElement | null = null;
+  #toneSelect: HTMLSelectElement | null = null;
   #image: HTMLElement | null = null;
   #caption: HTMLElement | null = null;
   #database: DatabaseView | null = null;
@@ -84,7 +110,7 @@ export class BlockView {
     this.#row.addEventListener('click', event => {
       const target = event.target as Element | null;
       if (!target) return;
-      if (target.closest('button, input, .nb-text, .nb-caption, .nb-db')) return;
+      if (target.closest('button, input, select, .nb-text, .nb-caption, .nb-db')) return;
       host.focusBlock(this.id, 0);
     });
 
@@ -134,7 +160,10 @@ export class BlockView {
     }
 
     if (this.#codeLang) {
-      this.#codeLang.textContent = block.props.language ?? 'text';
+      this.#syncCodeLanguage(block.props.language ?? 'text');
+    }
+    if (this.#toneSelect) {
+      this.#toneSelect.value = block.props.tone ?? 'info';
     }
 
     if (block.type === 'image') {
@@ -155,6 +184,7 @@ export class BlockView {
     this.#database = null;
     this.#text = null;
     this.#codeLang = null;
+    this.#toneSelect = null;
     this.#image = null;
     this.#caption = null;
     this.#content.replaceChildren();
@@ -200,12 +230,42 @@ export class BlockView {
     this.#content.append(text);
 
     if (block.type === 'code') {
-      const lang = document.createElement('div');
+      const lang = document.createElement('select');
       lang.className = 'nb-code-lang';
-      lang.textContent = block.props.language ?? 'text';
       lang.contentEditable = 'false';
+      lang.disabled = this.#host.readonly;
+      lang.setAttribute('aria-label', 'Code language');
+      for (const language of CODE_LANGUAGES) {
+        const option = document.createElement('option');
+        option.value = language;
+        option.textContent = language;
+        lang.append(option);
+      }
+      lang.addEventListener('change', () => {
+        this.#host.setCodeLanguage(this.id, lang.value);
+      });
       this.#codeLang = lang;
       this.#content.append(lang);
+      this.#syncCodeLanguage(block.props.language ?? 'text');
+    }
+    if (block.type === 'callout') {
+      const tone = document.createElement('select');
+      tone.className = 'nb-callout-tone';
+      tone.contentEditable = 'false';
+      tone.disabled = this.#host.readonly;
+      tone.setAttribute('aria-label', 'Callout tone');
+      for (const item of CALLOUT_TONES) {
+        const option = document.createElement('option');
+        option.value = item.value;
+        option.textContent = item.label;
+        tone.append(option);
+      }
+      tone.value = block.props.tone ?? 'info';
+      tone.addEventListener('change', () => {
+        this.#host.setCalloutTone(this.id, tone.value as 'info' | 'success' | 'warning' | 'danger');
+      });
+      this.#toneSelect = tone;
+      this.#content.append(tone);
     }
   }
 
@@ -254,12 +314,33 @@ export class BlockView {
         }
         if (marks.highlight) span.dataset.highlight = marks.highlight;
         if (marks.color) span.dataset.textColor = marks.color;
+        if (marks.mention) {
+          classes.push('nb-m-mention');
+          span.dataset.mentionId = marks.mention.id;
+          span.dataset.mentionLabel = marks.mention.label;
+          if (marks.mention.kind) span.dataset.mentionKind = marks.mention.kind;
+          span.contentEditable = 'false';
+        }
         if (classes.length > 0) span.className = classes.join(' ');
         if (tokens.length > 0) span.dataset.mark = tokens.join(' ');
       }
       fragment.append(span);
     }
     text.replaceChildren(fragment);
+  }
+
+  #syncCodeLanguage(language: string): void {
+    const select = this.#codeLang;
+    if (!select) return;
+    if (
+      !Array.from(select.options).some(option => option.value === language)
+    ) {
+      const option = document.createElement('option');
+      option.value = language;
+      option.textContent = language;
+      select.append(option);
+    }
+    select.value = language;
   }
 
   #renderMarker(context: BlockRenderContext): void {
