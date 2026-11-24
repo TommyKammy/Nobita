@@ -153,8 +153,15 @@ test('deletes every selected record', async ({ page }) => {
     await check.click();
   }
   await expect(page.locator('.nb-db-table tbody tr.is-row-selected')).toHaveCount(3);
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    root?.querySelector<HTMLElement>('.nb-db-row-expand')?.click();
+  });
+  await expect(page.locator('.nb-db-detail')).toBeVisible();
+  await page.locator('.nb-db').focus();
   await page.keyboard.press('Delete');
   await expect(page.locator('.nb-db-table tbody tr:not(.nb-db-empty-row)')).toHaveCount(0);
+  await expect(page.locator('.nb-db-detail')).toHaveCount(0);
   const doc = await getDoc(page);
   expect(
     (doc.blocks[0]?.props.database as { rows: unknown[] }).rows

@@ -298,6 +298,7 @@ export class DatabaseView {
   } | null = null;
   #fillHandle: HTMLElement | null = null;
   #detail: HTMLElement | null = null;
+  #detailRowId: string | null = null;
   #detailEvents = new AbortController();
   #visibleKey = '';
   #boardTitleEditing: { rowId: string; columnId: string } | null = null;
@@ -575,6 +576,12 @@ export class DatabaseView {
   }
 
   render(): void {
+    if (
+      this.#detailRowId &&
+      !this.#data.rows.some(row => row.id === this.#detailRowId)
+    ) {
+      this.#closeDetailPanel();
+    }
     this.#boardTitleEditing = null;
     if (this.#boardBlurTimer !== null) {
       window.clearTimeout(this.#boardBlurTimer);
@@ -2463,6 +2470,7 @@ export class DatabaseView {
   #closeDetailPanel(): void {
     this.#detail?.remove();
     this.#detail = null;
+    this.#detailRowId = null;
     this.#detailEvents.abort();
     this.#detailEvents = new AbortController();
   }
@@ -2471,6 +2479,7 @@ export class DatabaseView {
     this.#closeDetailPanel();
     const row = this.#data.rows.find(item => item.id === rowId);
     if (!row) return;
+    this.#detailRowId = rowId;
     const view = this.#activeView();
     const rows = this.#rowsFor(view);
     const index = rows.findIndex(item => item.id === rowId);
