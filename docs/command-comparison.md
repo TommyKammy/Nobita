@@ -2,7 +2,7 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **70.9 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **73.1 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
 > `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
@@ -89,7 +89,7 @@ in Nobita's toolbar or block menu.
 | --- | --- | --- |
 | New Doc | ❌ | Demo shell can create pages; not exposed from `/` |
 | Linked Doc | ◐ | Page reference block + host routing; no page registry or backlinks |
-| Table (simple table block) | ✅ | Separate `table` block; AFFiNE-style hover handles, row/column menus, colors, hover add controls and HTML/Markdown import |
+| Table (simple table block) | ✅ | Separate `table` block; AFFiNE-style hover handles, drag cell selection, row/column menus, colors, hover add controls and HTML/Markdown import |
 | Image | ✅ | URL-based |
 | Link (bookmark card) | 🟡 | Inline links work; no bookmark card |
 | Attachment / PDF | ❌ | No file storage/upload layer |
@@ -357,6 +357,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 70.9 KB gzip. Phase 1 data views added about 7.5 KB gzip,
-Phase 2 references/input added about 2.4 KB, page links about 1.3 KB and table/database P1 about 11.7 KB; remaining
+The current editor is 73.1 KB gzip. Phase 1 data views added about 7.5 KB gzip,
+Phase 2 references/input added about 2.4 KB, page links about 1.3 KB and table/database P1 about 13.9 KB; remaining
 items are incremental on top of the existing view model.

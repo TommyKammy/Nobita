@@ -21,5 +21,8 @@ export interface BlockHost {
   updateDatabase(blockId: string, data: DatabaseData, options?: { mergeKey?: string }): void;
   undoDatabase(): void;
   redoDatabase(): void;
+  undoTable(): void;
+  redoTable(): void;
+  focusAfterTableHistory(blockId: string): void;
   focusAfterBlock(blockId: string): void;
 }

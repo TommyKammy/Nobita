@@ -143,6 +143,75 @@ function splitTableRow(line: string): string[] {
     .map(cell => cell.trim().replaceAll(placeholder, '|'));
 }
 
+const TABLE_LT = '\u0000LT\u0000';
+const TABLE_GT = '\u0000GT\u0000';
+
+function protectTableEscapes(value: string): string {
+  let out = '';
+  let index = 0;
+  while (index < value.length) {
+    if (value[index] !== '\\') {
+      out += value[index];
+      index += 1;
+      continue;
+    }
+    let end = index;
+    while (value[end] === '\\') end += 1;
+    const count = end - index;
+    const next = value[end];
+    const pairs = Math.floor(count / 2);
+    out += '\\'.repeat(pairs * 2);
+    if (count % 2 === 1 && (next === '<' || next === '>')) {
+      out += next === '<' ? TABLE_LT : TABLE_GT;
+      index = end + 1;
+    } else {
+      if (count % 2 === 1) out += '\\';
+      index = end;
+    }
+  }
+  return out;
+}
+
+function decodeTableText(value: string): string {
+  const codeSpans: string[] = [];
+  let protectedText = '';
+  let index = 0;
+  while (index < value.length) {
+    const char = value[index];
+    if (char === '\\' && index + 1 < value.length) {
+      protectedText += value.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    if (char === '`') {
+      let fence = '`';
+      while (value[index + fence.length] === '`') fence += '`';
+      const close = value.indexOf(fence, index + fence.length);
+      if (close >= 0) {
+        const token = `\u0000CODE${codeSpans.length}\u0000`;
+        codeSpans.push(value.slice(index + fence.length, close));
+        protectedText += token;
+        index = close + fence.length;
+        continue;
+      }
+    }
+    protectedText += char;
+    index += 1;
+  }
+
+  let text = plainText(
+    parseInlineMarkdown(
+      protectTableEscapes(protectedText).replace(/<br\s*\/?>/giu, '\n')
+    )
+  )
+    .replaceAll(TABLE_LT, '<')
+    .replaceAll(TABLE_GT, '>');
+  codeSpans.forEach((inner, codeIndex) => {
+    text = text.replaceAll(`\u0000CODE${codeIndex}\u0000`, inner);
+  });
+  return text;
+}
+
 function isTableSeparator(line: string): boolean {
   const cells = splitTableRow(line);
   return cells.length > 0 && cells.every(cell => /^:?-{3,}:?$/u.test(cell));
@@ -228,7 +297,7 @@ export function markdownToBlocks(
       const tableRows = [createTableRow()];
       headerCells.forEach((value, columnIndex) => {
         const column = columns[columnIndex];
-        if (column && value) tableRows[0]!.cells[column.id] = { text: plainText(parseInlineMarkdown(value)) };
+        if (column && value) tableRows[0]!.cells[column.id] = { text: decodeTableText(value) };
       });
       index += 2;
       while (index < lines.length) {
@@ -237,7 +306,7 @@ export function markdownToBlocks(
         const cells = splitTableRow(line);
         const row = createTableRow();
         columns.forEach((column, columnIndex) => {
-          const value = plainText(parseInlineMarkdown(cells[columnIndex] ?? ''));
+          const value = decodeTableText(cells[columnIndex] ?? '');
           if (value) row.cells[column.id] = { text: value };
         });
         tableRows.push(row);
@@ -344,7 +413,11 @@ export function markdownToBlocks(
 const SERIALIZE_ESCAPABLE = new Set(['\\', '`', '*', '_', '[', ']']);
 
 function escapeTableText(text: string): string {
-  return escapeInline(text).replace(/\|/gu, '\\|').replace(/\n/gu, '<br>');
+  return escapeInline(text)
+    .replace(/\|/gu, '\\|')
+    .replace(/</gu, '\\<')
+    .replace(/>/gu, '\\>')
+    .replace(/\n/gu, '<br>');
 }
 
 function escapeInline(text: string): string {

@@ -534,7 +534,7 @@ export class NobitaEditor implements BlockHost {
     const changed = this.store.undo();
     if (changed) {
       if (titleFocused) this.focusTitle();
-      else this.#restoreSelection(this.store.selection, false);
+      else this.#restoreHistorySelection();
     }
     return changed;
   }
@@ -544,9 +544,19 @@ export class NobitaEditor implements BlockHost {
     const changed = this.store.redo();
     if (changed) {
       if (titleFocused) this.focusTitle();
-      else this.#restoreSelection(this.store.selection, false);
+      else this.#restoreHistorySelection();
     }
     return changed;
+  }
+
+  #restoreHistorySelection(): void {
+    const focusId = this.store.selection?.focus.blockId;
+    const block = focusId ? findBlock(this.store.doc.blocks, focusId) : undefined;
+    if (block?.type === 'table') {
+      this.#focusBlock(block.id, 0);
+      return;
+    }
+    this.#restoreSelection(this.store.selection, false);
   }
 
   insertMarkdown(markdown: string): void {
@@ -910,6 +920,22 @@ export class NobitaEditor implements BlockHost {
 
   redoDatabase(): void {
     this.store.redo();
+  }
+
+  undoTable(): void {
+    this.store.undo();
+  }
+
+  redoTable(): void {
+    this.store.redo();
+  }
+
+  focusAfterTableHistory(blockId: string): void {
+    if (findBlock(this.store.doc.blocks, blockId)) {
+      this.#focusBlock(blockId, 0);
+    } else {
+      this.#restoreSelection(this.store.selection, false);
+    }
   }
 
   focusAfterBlock(blockId: string): void {
@@ -1443,6 +1469,11 @@ export class NobitaEditor implements BlockHost {
     this.#slash = null;
     if (block.type === 'database') {
       view.focusDatabase();
+      return;
+    }
+    if (block.type === 'table') {
+      this.#focusedBlockId = blockId;
+      view.focusTable();
       return;
     }
     if (block.type === 'image') {
