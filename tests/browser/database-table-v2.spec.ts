@@ -1357,6 +1357,158 @@ test('preserves omitted group settings when reordering groups', async ({ page })
   ]);
 });
 
+test('reorders the no-value group', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'no-value-group',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'status',
+                name: 'Status',
+                type: 'select',
+                options: ['Todo'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { name: { text: 'One' }, status: { text: 'Todo' } },
+              },
+              { id: 'r2', cells: { name: { text: 'Two' } } },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                groupBy: 'status',
+                groupProperties: [{ key: 'Todo' }, { key: '', collapsed: true }],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'status', width: 200 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await expect(page.locator('.nb-db-group-label')).toHaveText([
+    'Todo',
+    'No value',
+  ]);
+  await page.locator('.nb-db-tools .nb-db-btn', { hasText: 'Group' }).click();
+  const settings = page.locator('.nb-db-group-setting');
+  await expect(settings).toHaveCount(2);
+  await settings.nth(1).locator('.nb-db-property-move').first().click();
+  const doc = await getDoc(page);
+  expect(
+    (
+      doc.blocks[0]?.props.database as {
+        views: Array<{
+          groupProperties?: Array<{ key: string; collapsed?: boolean }>;
+        }>;
+      }
+    ).views[0]?.groupProperties
+  ).toEqual([{ key: '', collapsed: true }, { key: 'Todo' }]);
+});
+
+test('uses type-aware editors for special title columns', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'checkbox-title',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'done',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              { id: 'done', name: 'Done', type: 'checkbox' },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { name: { text: 'One' }, done: { checked: true } },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'done', width: 120 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="done"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  const title = page.locator('.nb-db-detail-title');
+  await expect(title).toHaveAttribute('readonly', '');
+  await expect(title).toHaveValue('true');
+  const field = page.locator('.nb-db-detail-field[data-column-id="done"]');
+  await expect(field).toHaveCount(1);
+  const check = field.locator('button[role="checkbox"]');
+  await expect(check).toHaveAttribute('aria-checked', 'true');
+  await check.click();
+  await expect(check).toHaveAttribute('aria-checked', 'false');
+  await expect(title).toHaveValue('');
+  const doc = await getDoc(page);
+  expect(
+    (
+      doc.blocks[0]?.props.database as {
+        rows: Array<{ id: string; cells: Record<string, { checked?: boolean }> }>;
+      }
+    ).rows[0]?.cells.done?.checked
+  ).toBeFalsy();
+});
+
+test('hides groups emptied by search', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const view = (doc.blocks[0]?.props.database as { views: Array<Record<string, unknown>> })
+    .views[0]!;
+  view.groupBy = 'status';
+  view.hideEmptyGroups = true;
+  await setDoc(page, doc);
+  await expect(page.locator('.nb-db-group')).toHaveCount(2);
+  await page.getByLabel('Search rows').fill('Three');
+  await expect(page.locator('.nb-db-group')).toHaveCount(1);
+  await expect(page.locator('.nb-db-group-label')).toHaveText(['Todo']);
+});
+
 test('preserves group order when collapsing a group', async ({ page }) => {
   await openFixture(page);
   const doc = v2Doc();

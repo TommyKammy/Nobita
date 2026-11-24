@@ -192,6 +192,12 @@ function detailFieldSchema(column: DatabaseColumn): string {
   return `${column.type}\u0000${(column.options ?? []).join('\u0001')}`;
 }
 
+function titleTextEditable(column: DatabaseColumn | undefined): boolean {
+  return Boolean(
+    column && ['text', 'number', 'date', 'url'].includes(column.type)
+  );
+}
+
 /** Parse spreadsheet-friendly TSV, including quoted tabs/newlines and quotes. */
 function parseTsv(source: string): string[][] {
   const text = source.replace(/\r\n?/gu, '\n');
@@ -537,7 +543,7 @@ export class DatabaseView {
     view: DatabaseViewConfig = this.#activeView()
   ): ReturnType<typeof groupedDatabaseRows> {
     const allowed = new Set(this.#rowsFor(view).map(row => row.id));
-    return groupedDatabaseRows(this.#data, view).map(group => {
+    const groups = groupedDatabaseRows(this.#data, view).map(group => {
       const override = this.#readonly
         ? this.#groupOverrides.get(group.key)
         : undefined;
@@ -550,6 +556,9 @@ export class DatabaseView {
         rows: group.rows.filter(row => allowed.has(row.id)),
       };
     });
+    return view.hideEmptyGroups
+      ? groups.filter(group => group.rows.length > 0)
+      : groups;
   }
 
   #keyFor(data: DatabaseData): string {
@@ -2496,7 +2505,7 @@ export class DatabaseView {
     for (const item of settings) {
       if (visible.has(item.key)) {
         const nextKey = keys[visibleIndex];
-        if (nextKey) {
+        if (nextKey !== undefined) {
           order.push(nextKey);
           visibleIndex += 1;
         }
@@ -2506,7 +2515,7 @@ export class DatabaseView {
     }
     while (visibleIndex < keys.length) {
       const nextKey = keys[visibleIndex];
-      if (nextKey) order.push(nextKey);
+      if (nextKey !== undefined) order.push(nextKey);
       visibleIndex += 1;
     }
     this.#updateActiveView({
@@ -2619,7 +2628,7 @@ export class DatabaseView {
     const fields = document.createElement('div');
     fields.className = 'nb-db-detail-fields';
     for (const column of this.#visibleColumns(view)) {
-      if (column.id === titleColumn?.id) continue;
+      if (column.id === titleColumn?.id && titleTextEditable(titleColumn)) continue;
       fields.append(this.#renderDetailField(row, column));
     }
     panel.append(fields);
@@ -2682,30 +2691,35 @@ export class DatabaseView {
     title.setAttribute('aria-label', 'Record title');
     title.disabled = this.#readonly;
     if (titleColumn) title.dataset.columnId = titleColumn.id;
-    title.addEventListener('input', () => {
-      if (!titleColumn) return;
-      const value =
-        titleColumn.type === 'number'
-          ? title.value.replace(/[^0-9eE+.-]/gu, '')
-          : title.value;
-      this.#commitCell(
-        row.id,
-        titleColumn.id,
-        { ...(row.cells[titleColumn.id] ?? {}), text: value },
-        `db:${row.id}:${titleColumn.id}`
-      );
-    }, { signal: this.#detailEvents.signal });
-    if (titleColumn?.type === 'number') {
-      title.addEventListener('focus', () => {
-        title.value = this.#currentCell(row.id, titleColumn.id)?.text ?? '';
-        title.select();
-      }, { signal: this.#detailEvents.signal });
-      title.addEventListener('blur', () => {
-        title.value = formatDatabaseNumber(
-          this.#currentCell(row.id, titleColumn.id)?.text ?? '',
-          titleColumn
+    if (titleTextEditable(titleColumn)) {
+      title.addEventListener('input', () => {
+        if (!titleColumn) return;
+        const value =
+          titleColumn.type === 'number'
+            ? title.value.replace(/[^0-9eE+.-]/gu, '')
+            : title.value;
+        this.#commitCell(
+          row.id,
+          titleColumn.id,
+          { ...(row.cells[titleColumn.id] ?? {}), text: value },
+          `db:${row.id}:${titleColumn.id}`
         );
       }, { signal: this.#detailEvents.signal });
+      if (titleColumn?.type === 'number') {
+        title.addEventListener('focus', () => {
+          title.value = this.#currentCell(row.id, titleColumn.id)?.text ?? '';
+          title.select();
+        }, { signal: this.#detailEvents.signal });
+        title.addEventListener('blur', () => {
+          title.value = formatDatabaseNumber(
+            this.#currentCell(row.id, titleColumn.id)?.text ?? '',
+            titleColumn
+          );
+        }, { signal: this.#detailEvents.signal });
+      }
+    } else {
+      title.readOnly = true;
+      title.dataset.readonly = 'true';
     }
     return title;
   }
@@ -3247,7 +3261,7 @@ export class DatabaseView {
     const fields = detail.querySelector<HTMLElement>('.nb-db-detail-fields');
     if (fields) {
       const columns = this.#visibleColumns(view).filter(
-        column => column.id !== titleColumn?.id
+        column => !(column.id === titleColumn?.id && titleTextEditable(titleColumn))
       );
       const current = [
         ...fields.querySelectorAll<HTMLElement>('.nb-db-detail-field'),
