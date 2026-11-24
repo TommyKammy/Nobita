@@ -48,6 +48,20 @@ describe('page link block', () => {
     expect(doc.blocks[0]?.props.pageId).toBe(id);
   });
 
+  it('encodes parentheses in Markdown page destinations', () => {
+    const doc = createDoc({
+      blocks: [
+        createBlock('page', {
+          id: 'page',
+          props: { pageId: 'p(1)', pageTitle: 'Parens' },
+        }),
+      ],
+    });
+    expect(blocksToMarkdown(doc, { title: false })).toContain(
+      '[Parens](#page-p%281%29)'
+    );
+  });
+
   it('keeps page block children in HTML exports', () => {
     const doc = createDoc({
       blocks: [

@@ -440,9 +440,12 @@ function serializeBlocks(blocks: readonly Block[], depth: number, lines: string[
           block.props.pageTitle ?? block.props.pageId ?? 'Untitled page'
         );
         const pageId = block.props.pageId;
-        lines.push(
-          pageId ? `${pad}[${title}](#page-${encodeURIComponent(pageId)})` : `${pad}${title}`
-        );
+        const href = pageId
+          ? `#page-${encodeURIComponent(pageId)
+              .replace(/\(/gu, '%28')
+              .replace(/\)/gu, '%29')}`
+          : '';
+        lines.push(pageId ? `${pad}[${title}](${href})` : `${pad}${title}`);
         break;
       }
       case 'callout':
