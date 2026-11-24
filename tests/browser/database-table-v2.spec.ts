@@ -1040,6 +1040,91 @@ test('deletes a selected range while a cell editor is focused', async ({ page })
   expect(rows[1]?.cells.name?.text).toBeUndefined();
 });
 
+test('copies grouped multi-select records once', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'grouped-multi-copy',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'tags',
+                name: 'Tags',
+                type: 'multi-select',
+                options: ['A', 'B'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { name: { text: 'One' }, tags: { values: ['A', 'B'] } },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                groupBy: 'tags',
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'tags', width: 200 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await expect(page.locator('.nb-db-table')).toHaveCount(2);
+  await page.locator('.nb-db-row-check[data-row-id="r1"]').first().click();
+  const copyText = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const db = root?.querySelector('.nb-db');
+    const data = new DataTransfer();
+    const event = new ClipboardEvent('copy', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    });
+    db?.dispatchEvent(event);
+    return data.getData('text/plain');
+  });
+  expect(copyText.trim().split('\n')).toHaveLength(1);
+  expect(copyText).toContain('One');
+  const cutText = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const db = root?.querySelector('.nb-db');
+    const data = new DataTransfer();
+    const event = new ClipboardEvent('cut', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: data,
+    });
+    db?.dispatchEvent(event);
+    return data.getData('text/plain');
+  });
+  expect(cutText.trim().split('\n')).toHaveLength(1);
+  const doc = await getDoc(page);
+  expect(
+    (doc.blocks[0]?.props.database as { rows: unknown[] }).rows
+  ).toHaveLength(0);
+});
+
 test('updates manual group order when dragging a row', async ({ page }) => {
   await openFixture(page);
   const doc = v2Doc();
@@ -1083,6 +1168,61 @@ test('updates manual group order when dragging a row', async ({ page }) => {
   expect(
     groupProperties?.find(group => group.key === 'Todo')?.manuallyCardSort
   ).toEqual(['r1', 'r3']);
+});
+
+test('preserves filtered records in manual group order', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const database = doc.blocks[0]?.props.database as {
+    rows: Array<Record<string, unknown>>;
+    views: Array<Record<string, unknown>>;
+  };
+  database.rows.push({
+    id: 'r4',
+    cells: { name: { text: 'Four' }, status: { text: 'Todo' } },
+  });
+  const view = database.views[0]!;
+  view.groupBy = 'status';
+  view.filters = [
+    { columnId: 'name', operator: 'doesNotContain', value: 'Four' },
+  ];
+  view.groupProperties = [
+    { key: 'Todo', manuallyCardSort: ['r4', 'r3', 'r1'] },
+    { key: 'Done' },
+  ];
+  await setDoc(page, doc);
+  const todoRows = page.locator(
+    '.nb-db-group[data-group="Todo"] .nb-db-cell[data-column-id="name"]'
+  );
+  await expect(todoRows).toHaveText(['Three', 'One']);
+  const grip = page.locator(
+    '.nb-db-group[data-group="Todo"] tr[data-row-id="r1"] .nb-db-row-grip'
+  );
+  const target = page.locator(
+    '.nb-db-group[data-group="Todo"] tr[data-row-id="r3"]'
+  );
+  await target.hover();
+  const start = await grip.boundingBox();
+  const end = await target.boundingBox();
+  if (!start || !end) throw new Error('Missing drag targets');
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  await expect(todoRows).toHaveText(['One', 'Three']);
+  const saved = await getDoc(page);
+  const groupProperties = (
+    saved.blocks[0]?.props.database as {
+      views: Array<{
+        groupProperties?: Array<{ key: string; manuallyCardSort?: string[] }>;
+      }>;
+    }
+  ).views[0]?.groupProperties;
+  expect(
+    groupProperties?.find(group => group.key === 'Todo')?.manuallyCardSort
+  ).toEqual(['r4', 'r1', 'r3']);
 });
 
 test('keeps group order when dragging rows without saved settings', async ({ page }) => {

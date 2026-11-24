@@ -2525,9 +2525,14 @@ export class DatabaseView {
 
   #selectedVisibleRows(): DatabaseRow[] {
     if (this.#selectedRows.size === 0) return [];
-    return this.#renderedRows(this.#activeView()).filter(row =>
-      this.#selectedRows.has(row.id)
-    );
+    const seen = new Set<string>();
+    const rows: DatabaseRow[] = [];
+    for (const row of this.#renderedRows(this.#activeView())) {
+      if (!this.#selectedRows.has(row.id) || seen.has(row.id)) continue;
+      seen.add(row.id);
+      rows.push(row);
+    }
+    return rows;
   }
 
   #closeDetailPanel(): void {
@@ -2990,8 +2995,30 @@ export class DatabaseView {
         if (groupFrom >= 0 && groupTo >= 0 && groupFrom !== groupTo) {
           const [moved] = ordered.splice(groupFrom, 1);
           if (moved) ordered.splice(groupTo, 0, moved);
-          const order = ordered.map(entry => entry.id);
           const settings = view.groupProperties ?? [];
+          const visibleOrder = ordered.map(entry => entry.id);
+          const visible = new Set(visibleOrder);
+          const savedOrder =
+            settings.find(item => item.key === group.key)?.manuallyCardSort ??
+            [];
+          const order: string[] = [];
+          let visibleIndex = 0;
+          for (const id of savedOrder) {
+            if (visible.has(id)) {
+              const nextId = visibleOrder[visibleIndex];
+              if (nextId) {
+                order.push(nextId);
+                visibleIndex += 1;
+              }
+            } else if (!order.includes(id)) {
+              order.push(id);
+            }
+          }
+          while (visibleIndex < visibleOrder.length) {
+            const nextId = visibleOrder[visibleIndex];
+            if (nextId) order.push(nextId);
+            visibleIndex += 1;
+          }
           const keys = this.#groupsFor(view).map(item => item.key);
           for (const item of settings) {
             if (!keys.includes(item.key)) keys.push(item.key);
