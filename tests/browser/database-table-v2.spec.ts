@@ -902,6 +902,128 @@ test('restores hidden fields when pasting cut rows', async ({ page }) => {
   expect(cells?.files?.files?.[0]?.name).toBe('Spec');
 });
 
+test('maps cut rows onto another database by column name', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'cross-database-cut',
+    title: '',
+    blocks: [
+      {
+        id: 'db1',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'a-name',
+            columns: [
+              { id: 'a-name', name: 'Name', type: 'text' },
+              {
+                id: 'a-status',
+                name: 'Status',
+                type: 'select',
+                options: ['Todo'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: {
+                  'a-name': { text: 'One' },
+                  'a-status': { text: 'Todo' },
+                },
+              },
+            ],
+            views: [
+              {
+                id: 'va',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'a-name', width: 200 },
+                  { id: 'a-status', width: 160 },
+                ],
+              },
+            ],
+            activeViewId: 'va',
+          },
+        },
+        children: [],
+      },
+      {
+        id: 'db2',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'b-name',
+            columns: [
+              { id: 'b-name', name: 'Name', type: 'text' },
+              {
+                id: 'b-status',
+                name: 'Status',
+                type: 'select',
+                options: ['Todo'],
+              },
+            ],
+            rows: [],
+            views: [
+              {
+                id: 'vb',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'b-name', width: 200 },
+                  { id: 'b-status', width: 160 },
+                ],
+              },
+            ],
+            activeViewId: 'vb',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db').nth(0).locator('.nb-db-row-check').first().click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const dbs = root?.querySelectorAll<HTMLElement>('.nb-db');
+    if (!dbs || dbs.length < 2) return;
+    const data = new DataTransfer();
+    dbs[0]?.dispatchEvent(
+      new ClipboardEvent('cut', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      })
+    );
+    dbs[1]?.dispatchEvent(
+      new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: data,
+      })
+    );
+  });
+  const doc = await getDoc(page);
+  const rows = (
+    doc.blocks[1]?.props.database as {
+      rows: Array<{
+        id: string;
+        cells: Record<string, { text?: string }>;
+      }>;
+    }
+  ).rows;
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.cells['b-name']?.text).toBe('One');
+  expect(rows[0]?.cells['b-status']?.text).toBe('Todo');
+});
+
 test('synchronizes the detail panel after an external undo', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);

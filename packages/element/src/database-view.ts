@@ -3428,6 +3428,17 @@ export class DatabaseView {
           column.type === 'multi-select'
             ? new Set(cell?.values ?? [])
             : new Set(cell?.text ? [cell.text] : []);
+        const optionValues = new Set(
+          Array.from(select.options).map(option => option.value)
+        );
+        for (const value of selected) {
+          if (!value || optionValues.has(value)) continue;
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = value;
+          select.append(option);
+          optionValues.add(value);
+        }
         for (const option of select.options) {
           if (!option.value) continue;
           option.selected = selected.has(option.value);
@@ -4784,6 +4795,11 @@ export class DatabaseView {
 
   #selectedRowsPayload(): string {
     return JSON.stringify({
+      columns: this.#data.columns.map(column => ({
+        id: column.id,
+        name: column.name,
+        type: column.type,
+      })),
       rows: this.#selectedVisibleRows().map(row => ({ cells: row.cells })),
     });
   }
@@ -4863,21 +4879,49 @@ export class DatabaseView {
     if (typed) {
       try {
         const parsed = JSON.parse(typed) as {
+          columns?: Array<{
+            id?: unknown;
+            name?: unknown;
+            type?: unknown;
+          }>;
           rows?: Array<{ cells?: Record<string, DatabaseCell> }>;
         };
-        const rows = (Array.isArray(parsed.rows) ? parsed.rows : []).map(
+        const sourceColumns = Array.isArray(parsed.columns)
+          ? parsed.columns
+          : [];
+        const columnMap = new Map<string, string>();
+        if (sourceColumns.length > 0) {
+          for (const source of sourceColumns) {
+            if (!source || typeof source.id !== 'string') continue;
+            const name = typeof source.name === 'string' ? source.name : '';
+            const type = typeof source.type === 'string' ? source.type : '';
+            const targetColumn =
+              this.#data.columns.find(column => column.id === source.id) ??
+              this.#data.columns.find(
+                column => column.name === name && (!type || column.type === type)
+              ) ??
+              this.#data.columns.find(column => column.name === name);
+            if (targetColumn) columnMap.set(source.id, targetColumn.id);
+          }
+        } else {
+          for (const column of this.#data.columns) {
+            columnMap.set(column.id, column.id);
+          }
+        }
+        const rows = (Array.isArray(parsed.rows) ? parsed.rows : []).flatMap(
           item => {
             const cells: Record<string, DatabaseCell> = {};
-            for (const [columnId, cell] of Object.entries(item.cells ?? {})) {
+            for (const [sourceId, cell] of Object.entries(item.cells ?? {})) {
+              const columnId = columnMap.get(sourceId);
+              if (!columnId) continue;
               if (!cell || typeof cell !== 'object' || Array.isArray(cell)) {
-                continue;
-              }
-              if (!this.#data.columns.some(column => column.id === columnId)) {
                 continue;
               }
               cells[columnId] = this.#cloneCell(cell);
             }
-            return { id: createId('r'), cells };
+            return Object.keys(cells).length > 0
+              ? [{ id: createId('r'), cells }]
+              : [];
           }
         );
         if (rows.length > 0) {
