@@ -207,6 +207,12 @@ test('keeps the row detail open when an edit changes sort order', async ({ page 
   await page.locator('.nb-db-detail-title').fill('Zebra');
   await expect(page.locator('.nb-db-detail')).toBeVisible();
   await expect(page.locator('.nb-db-detail-title')).toHaveValue('Zebra');
+  await expect(
+    page.locator('.nb-db-detail-navbtn[data-nav="prev"]')
+  ).toBeEnabled();
+  await expect(
+    page.locator('.nb-db-detail-navbtn[data-nav="next"]')
+  ).toBeDisabled();
   const docState = await getDoc(page);
   expect(
     (docState.blocks[0]?.props.database as {
@@ -566,6 +572,137 @@ test('expands saved collapsed groups in readonly views', async ({ page }) => {
   ).toEqual([{ key: 'Todo' }, { key: 'Done', collapsed: true }]);
 });
 
+test('edits raw numeric detail titles', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'detail-number-title',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'score',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'score',
+                name: 'Score',
+                type: 'number',
+                data: { format: 'percent' },
+              },
+            ],
+            rows: [
+              { id: 'r1', cells: { name: { text: 'One' }, score: { text: '0.1' } } },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'score', width: 200 },
+                  { id: 'name', width: 200 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  const title = page.locator('.nb-db-detail-title');
+  await title.focus();
+  await expect(title).toHaveValue('0.1');
+  await title.evaluate((element: HTMLInputElement) => element.blur());
+  await expect(title).toHaveValue('10%');
+  await title.click();
+  await page.keyboard.type('0.25');
+  await title.evaluate((element: HTMLInputElement) => element.blur());
+  await expect(title).toHaveValue('25%');
+  const doc = await getDoc(page);
+  expect(
+    (
+      doc.blocks[0]?.props.database as {
+        rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+      }
+    ).rows[0]?.cells.score?.text
+  ).toBe('0.25');
+});
+
+test('clears multi-select values when choosing Empty', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'detail-multi-empty',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              {
+                id: 'tags',
+                name: 'Tags',
+                type: 'multi-select',
+                options: ['A', 'B'],
+              },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: { name: { text: 'One' }, tags: { values: ['A'] } },
+              },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'tags', width: 200 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  await page
+    .locator('.nb-db-detail-field[data-column-id="tags"] select')
+    .selectOption(['']);
+  const doc = await getDoc(page);
+  expect(
+    (
+      doc.blocks[0]?.props.database as {
+        rows: Array<{ id: string; cells: Record<string, { values?: string[] }> }>;
+      }
+    ).rows[0]?.cells.tags?.values
+  ).toBeUndefined();
+});
+
 test('deletes a selected range while a cell editor is focused', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
@@ -574,15 +711,74 @@ test('deletes a selected range while a cell editor is focused', async ({ page })
     .locator('.nb-db-cell[data-row-id="r2"][data-column-id="name"]')
     .click({ modifiers: ['Shift'] });
   await expect(page.locator('.nb-db-cell.is-selected')).toHaveCount(2);
+  await page.locator('.nb-db-title-input').click();
+  await page.keyboard.press('Backspace');
+  let doc = await getDoc(page);
+  let rows = (
+    doc.blocks[0]?.props.database as {
+      rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+    }
+  ).rows;
+  expect(rows[0]?.cells.name?.text).toBe('One');
+  expect(rows[1]?.cells.name?.text).toBe('Two');
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').click();
+  await page
+    .locator('.nb-db-cell[data-row-id="r2"][data-column-id="name"]')
+    .click({ modifiers: ['Shift'] });
   await page.keyboard.press('Delete');
-  const doc = await getDoc(page);
-  const rows = (
+  doc = await getDoc(page);
+  rows = (
     doc.blocks[0]?.props.database as {
       rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
     }
   ).rows;
   expect(rows[0]?.cells.name?.text).toBeUndefined();
   expect(rows[1]?.cells.name?.text).toBeUndefined();
+});
+
+test('updates manual group order when dragging a row', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const view = (doc.blocks[0]?.props.database as { views: Array<Record<string, unknown>> })
+    .views[0]!;
+  view.groupBy = 'status';
+  view.groupProperties = [
+    { key: 'Todo', manuallyCardSort: ['r3', 'r1'] },
+    { key: 'Done' },
+  ];
+  await setDoc(page, doc);
+  const todoRows = page.locator(
+    '.nb-db-group[data-group="Todo"] .nb-db-cell[data-column-id="name"]'
+  );
+  await expect(todoRows).toHaveText(['Three', 'One']);
+  const grip = page.locator(
+    '.nb-db-group[data-group="Todo"] tr[data-row-id="r1"] .nb-db-row-grip'
+  );
+  const target = page.locator(
+    '.nb-db-group[data-group="Todo"] tr[data-row-id="r3"]'
+  );
+  await target.hover();
+  const start = await grip.boundingBox();
+  const end = await target.boundingBox();
+  if (!start || !end) throw new Error('Missing drag targets');
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  await expect(todoRows).toHaveText(['One', 'Three']);
+  const saved = await getDoc(page);
+  const groupProperties = (
+    saved.blocks[0]?.props.database as {
+      views: Array<{
+        groupProperties?: Array<{ key: string; manuallyCardSort?: string[] }>;
+      }>;
+    }
+  ).views[0]?.groupProperties;
+  expect(
+    groupProperties?.find(group => group.key === 'Todo')?.manuallyCardSort
+  ).toEqual(['r1', 'r3']);
 });
 
 test('preserves group order when collapsing a group', async ({ page }) => {

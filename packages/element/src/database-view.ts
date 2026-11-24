@@ -2519,8 +2519,6 @@ export class DatabaseView {
     if (!row) return;
     this.#detailRowId = rowId;
     const view = this.#activeView();
-    const rows = this.#rowsFor(view);
-    const index = rows.findIndex(item => item.id === rowId);
     const titleColumn = this.#titleColumn(view);
     const root = this.element.getRootNode() as ShadowRoot;
     const backdrop = document.createElement('div');
@@ -2534,26 +2532,27 @@ export class DatabaseView {
     bar.className = 'nb-db-detail-bar';
     const nav = document.createElement('div');
     nav.className = 'nb-db-detail-nav';
+    const navigate = (direction: -1 | 1): void => {
+      const rows = this.#rowsFor(this.#activeView());
+      const index = rows.findIndex(item => item.id === this.#detailRowId);
+      const nextRow = rows[index + direction];
+      if (nextRow) this.#openDetailPanel(nextRow.id);
+    };
     const prev = document.createElement('button');
     prev.type = 'button';
     prev.className = 'nb-db-detail-navbtn';
+    prev.dataset.nav = 'prev';
     prev.innerHTML = icon.arrowUp;
-    prev.disabled = index <= 0;
     prev.title = 'Previous record';
-    prev.addEventListener('click', () => {
-      const nextRow = rows[index - 1];
-      if (nextRow) this.#openDetailPanel(nextRow.id);
-    });
+    prev.addEventListener('click', () => navigate(-1));
     const next = document.createElement('button');
     next.type = 'button';
     next.className = 'nb-db-detail-navbtn';
+    next.dataset.nav = 'next';
     next.innerHTML = icon.arrowDown;
-    next.disabled = index < 0 || index >= rows.length - 1;
     next.title = 'Next record';
-    next.addEventListener('click', () => {
-      const nextRow = rows[index + 1];
-      if (nextRow) this.#openDetailPanel(nextRow.id);
-    });
+    next.addEventListener('click', () => navigate(1));
+    this.#syncDetailNav(prev, next, rowId);
     nav.append(prev, next);
     const close = document.createElement('button');
     close.type = 'button';
@@ -2589,11 +2588,16 @@ export class DatabaseView {
       );
     }, { signal: this.#detailEvents.signal });
     if (titleColumn?.type === 'number') {
-      title.addEventListener('focus', () => title.select(), {
-        signal: this.#detailEvents.signal,
-      });
+      title.addEventListener('focus', () => {
+        title.value =
+          this.#currentCell(row.id, titleColumn.id)?.text ?? '';
+        title.select();
+      }, { signal: this.#detailEvents.signal });
       title.addEventListener('blur', () => {
-        if (titleColumn) title.value = formatDatabaseNumber(title.value, titleColumn);
+        title.value = formatDatabaseNumber(
+          this.#currentCell(row.id, titleColumn.id)?.text ?? '',
+          titleColumn
+        );
       }, { signal: this.#detailEvents.signal });
     }
     panel.append(title);
@@ -2693,7 +2697,9 @@ export class DatabaseView {
       }
       select.multiple = column.type === 'multi-select';
       select.addEventListener('change', () => {
-        const values = Array.from(select.selectedOptions).map(item => item.value);
+        const values = Array.from(select.selectedOptions)
+          .map(item => item.value)
+          .filter(Boolean);
         const next: DatabaseCell =
           column.type === 'multi-select'
             ? { ...(values.length > 0 ? { values } : {}) }
@@ -2893,6 +2899,7 @@ export class DatabaseView {
   }
 
   #moveRowTo(rowId: string, targetId: string): void {
+    const view = this.#activeView();
     const rows = [...this.#data.rows];
     const from = rows.findIndex(row => row.id === rowId);
     const to = rows.findIndex(row => row.id === targetId);
@@ -2900,7 +2907,47 @@ export class DatabaseView {
     const [row] = rows.splice(from, 1);
     if (!row) return;
     rows.splice(to, 0, row);
-    this.#host.commit({ ...this.#data, rows });
+    let views = this.#data.views;
+    if (
+      view.type === 'table' &&
+      view.groupBy &&
+      databaseSorts(view).length === 0
+    ) {
+      const group = this.#groupsFor(view).find(item =>
+        item.rows.some(entry => entry.id === rowId)
+      );
+      if (group?.rows.some(entry => entry.id === targetId)) {
+        const ordered = [...group.rows];
+        const groupFrom = ordered.findIndex(entry => entry.id === rowId);
+        const groupTo = ordered.findIndex(entry => entry.id === targetId);
+        if (groupFrom >= 0 && groupTo >= 0 && groupFrom !== groupTo) {
+          const [moved] = ordered.splice(groupFrom, 1);
+          if (moved) ordered.splice(groupTo, 0, moved);
+          const order = ordered.map(entry => entry.id);
+          const settings = view.groupProperties ?? [];
+          const index = settings.findIndex(item => item.key === group.key);
+          const nextGroup = {
+            ...(settings[index] ?? {}),
+            key: group.key,
+            manuallyCardSort: order,
+          };
+          const groupProperties =
+            index >= 0
+              ? settings.map((item, itemIndex) =>
+                  itemIndex === index ? nextGroup : item
+                )
+              : [...settings, nextGroup];
+          views = this.#views().map(item =>
+            item.id === view.id ? { ...item, groupProperties } : item
+          );
+        }
+      }
+    }
+    this.#host.commit({
+      ...this.#data,
+      rows,
+      ...(views && views !== this.#data.views ? { views } : {}),
+    });
   }
 
   #commitColumnWidth(columnId: string, width: number): void {
@@ -3071,6 +3118,13 @@ export class DatabaseView {
     if (!detail || !rowId) return;
     const row = this.#data.rows.find(item => item.id === rowId);
     if (!row) return;
+    const prev = detail.querySelector<HTMLButtonElement>(
+      '.nb-db-detail-navbtn[data-nav="prev"]'
+    );
+    const next = detail.querySelector<HTMLButtonElement>(
+      '.nb-db-detail-navbtn[data-nav="next"]'
+    );
+    if (prev && next) this.#syncDetailNav(prev, next, rowId);
     const view = this.#activeView();
     const titleColumn = this.#titleColumn(view);
     const fields = detail.querySelector<HTMLElement>('.nb-db-detail-fields');
@@ -3163,12 +3217,22 @@ export class DatabaseView {
     }
   }
 
+  #syncDetailNav(
+    prev: HTMLButtonElement,
+    next: HTMLButtonElement,
+    rowId: string
+  ): void {
+    const rows = this.#rowsFor(this.#activeView());
+    const index = rows.findIndex(item => item.id === rowId);
+    prev.disabled = index <= 0;
+    next.disabled = index < 0 || index >= rows.length - 1;
+  }
+
   #syncDetailInput(
     input: HTMLInputElement,
     value: string,
     formatted: string
-  ): void {
-    const focused = input.matches(':focus');
+  ): void {    const focused = input.matches(':focus');
     const next = focused ? value : formatted;
     if (input.value === next) return;
     const start = input.selectionStart;
@@ -4397,13 +4461,16 @@ export class DatabaseView {
       (target instanceof HTMLElement &&
         (target.matches('[contenteditable="true"]') ||
           Boolean(target.closest('.nb-db-text[contenteditable="true"]'))));
+    const editingCell =
+      target instanceof HTMLElement && Boolean(target.closest('.nb-db-cell'));
     const rangeDelete =
       (event.key === 'Delete' || event.key === 'Backspace') &&
       !event.metaKey &&
       !event.ctrlKey &&
       this.#selectedRows.size === 0 &&
       this.#range !== null &&
-      this.#rangeCells.size > 1;
+      this.#rangeCells.size > 1 &&
+      (!editing || editingCell);
     if (editing && !rangeDelete) return;
     if (!editing && this.#selectedRows.size > 0) {
       if (event.key === 'Escape') {
