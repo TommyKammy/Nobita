@@ -356,6 +356,7 @@ export class DatabaseView {
     if (readonly === this.#readonly) return;
     this.#readonly = readonly;
     if (!readonly) this.#groupOverrides.clear();
+    if (readonly) this.#closeDetailPanel();
     this.element.dataset.readonly = String(readonly);
     this.render();
   }
@@ -1984,6 +1985,7 @@ export class DatabaseView {
   }
 
   #history(redo: boolean): void {
+    if (this.#readonly) return;
     if (redo) this.#host.redo();
     else this.#host.undo();
     this.#syncBoardValues(true);
@@ -2001,12 +2003,15 @@ export class DatabaseView {
       if (!row) continue;
       const title = card.querySelector<HTMLElement>('.nb-db-card-title');
       if (title && (force || activeElement !== title)) {
+        const raw = titleColumn
+          ? row.cells[titleColumn.id]?.text ?? ''
+          : '';
+        const editing = activeElement === title;
         const value = titleColumn
           ? titleColumn.type === 'number'
-            ? formatDatabaseNumber(
-                row.cells[titleColumn.id]?.text ?? '',
-                titleColumn
-              )
+            ? editing
+              ? raw
+              : formatDatabaseNumber(raw, titleColumn)
             : databaseCellDisplay(row.cells[titleColumn.id], titleColumn.type)
           : '';
         const nextText =

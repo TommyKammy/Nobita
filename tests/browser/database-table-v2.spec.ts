@@ -502,6 +502,13 @@ test('edits raw numeric board titles and formats on blur', async ({ page }) => {
   await title.click();
   await expect(title).toHaveText('1234');
   await page.keyboard.type('5');
+  await page.keyboard.press('Control+z');
+  await expect(title).toHaveText('1234');
+  await page.keyboard.press('Enter');
+  await expect(title).toHaveText('$1,234.00');
+  await title.click();
+  await expect(title).toHaveText('1234');
+  await page.keyboard.type('5');
   await page.keyboard.press('Enter');
   await expect(title).toHaveText('$12,345.00');
   const doc = await getDoc(page);
@@ -660,6 +667,21 @@ test('undoes detail edits from the detail panel', async ({ page }) => {
       }
     ).rows[0]?.cells.done?.checked
   ).toBeFalsy();
+});
+
+test('closes record detail when switching to readonly', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  await expect(page.locator('.nb-db-detail')).toBeVisible();
+  await page.evaluate(() => {
+    const element = document.querySelector('nobita-editor') as unknown as {
+      setReadonly(value: boolean): void;
+    };
+    element.setReadonly(true);
+  });
+  await expect(page.locator('.nb-db-detail')).toHaveCount(0);
 });
 
 test('expands saved collapsed groups in readonly views', async ({ page }) => {
