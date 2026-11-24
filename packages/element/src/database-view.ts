@@ -84,34 +84,41 @@ function parseTsv(source: string): string[][] {
   let row: string[] = [];
   let field = '';
   let quoted = false;
+  let fieldStarted = false;
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
     if (quoted) {
       if (char === '"' && text[index + 1] === '"') {
         field += '"';
+        fieldStarted = true;
         index += 1;
       } else if (char === '"') {
         quoted = false;
       } else {
         field += char;
+        fieldStarted = true;
       }
       continue;
     }
     if (char === '"' && field === '') {
       quoted = true;
+      fieldStarted = true;
     } else if (char === '\t') {
       row.push(field);
       field = '';
+      fieldStarted = false;
     } else if (char === '\n') {
       row.push(field);
       rows.push(row);
       row = [];
       field = '';
+      fieldStarted = false;
     } else {
       field += char;
+      fieldStarted = true;
     }
   }
-  if (field || row.length > 0) {
+  if (fieldStarted || row.length > 0) {
     row.push(field);
     rows.push(row);
   }
@@ -119,6 +126,7 @@ function parseTsv(source: string): string[][] {
 }
 
 function tsvField(value: string): string {
+  if (value === '') return '""';
   return /[\t\n\r"]/u.test(value)
     ? `"${value.replace(/"/gu, '""')}"`
     : value;
@@ -173,6 +181,7 @@ export class DatabaseView {
   #boardTitleEditing: { rowId: string; columnId: string } | null = null;
   #suppressClick = false;
   #boardBlurTimer: number | null = null;
+  #instanceId = createId('db');
 
   constructor(host: DatabaseHost, data: DatabaseData) {
     this.#host = host;
@@ -571,6 +580,9 @@ export class DatabaseView {
           event => {
             event.preventDefault();
             column.classList.remove('is-drop-target');
+            if (event.dataTransfer?.getData('text/nobita-db') !== this.#instanceId) {
+              return;
+            }
             const rowId = event.dataTransfer?.getData('text/nobita-row');
             if (rowId) this.#moveCardToGroup(rowId, view.groupBy!, group.key);
           },
@@ -617,6 +629,7 @@ export class DatabaseView {
       card.addEventListener(
         'dragstart',
         event => {
+          event.dataTransfer?.setData('text/nobita-db', this.#instanceId);
           event.dataTransfer?.setData('text/nobita-row', row.id);
           event.dataTransfer?.setData('text/plain', row.id);
         },
@@ -2114,12 +2127,26 @@ export class DatabaseView {
     actions.className = 'nb-db-pop-actions';
     actions.append(done);
     done.addEventListener('click', () => {
-      const previous = new Map(existing.map(person => [person.label, person]));
-      const people = input.value
+      const labels = input.value
         .split(',')
         .map(value => value.trim())
-        .filter(Boolean)
-        .map(label => previous.get(label) ?? { id: createId('p'), label });
+        .filter(Boolean);
+      const unchanged =
+        labels.length === existing.length &&
+        labels.every((label, index) => label === existing[index]?.label);
+      const used = new Set<string>();
+      const people = unchanged
+        ? existing
+        : labels.map(label => {
+            const match = existing.find(
+              person => person.label === label && !used.has(person.id)
+            );
+            if (match) {
+              used.add(match.id);
+              return match;
+            }
+            return { id: createId('p'), label };
+          });
       this.#commitCell(
         rowId,
         columnId,

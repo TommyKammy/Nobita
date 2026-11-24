@@ -50,6 +50,12 @@ const databaseBlock = {
                 name: { text: 'Three' },
                 status: { text: 'Todo' },
                 tags: { values: ['Legacy'] },
+                people: {
+                  people: [
+                    { id: 'u1', label: 'Alex' },
+                    { id: 'u2', label: 'Alex' },
+                  ],
+                },
               },
             },
           ],
@@ -134,6 +140,22 @@ test('renders table, board and new property types', async ({ page }) => {
   await expect(page.locator('.nb-db-card')).toHaveCount(3);
   await expect(page.locator('.nb-db-card', { hasText: 'One' })).toBeVisible();
 
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const column = root?.querySelector('.nb-db-board-column[data-group="Todo"]');
+    const data = new DataTransfer();
+    data.setData('text/nobita-row', 'r2');
+    column?.dispatchEvent(
+      new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: data,
+      })
+    );
+  });
+  let rejected = await databaseState(page);
+  expect(rejected.rows[1]?.cells.status?.text).toBe('Done');
+
   await page
     .locator('.nb-db-card', { hasText: 'Two' })
     .dragTo(page.locator('.nb-db-board-column[data-group="Todo"]'));
@@ -173,6 +195,15 @@ test('edits multi-select, files and people through pickers', async ({ page }) =>
   await page.locator('.nb-db-popover').getByRole('button', { name: 'Done', exact: true }).click();
   data = await databaseState(page);
   expect(data.rows[2]?.cells.tags?.values).toBeUndefined();
+
+  await page.locator('.nb-db-cell[data-row-id="r3"][data-column-id="people"] button').click();
+  await page.locator('.nb-db-popover').getByRole('button', { name: 'Done', exact: true }).click();
+  data = await databaseState(page);
+  expect(
+    (data.rows[2]?.cells.people?.people as Array<{ id: string; label: string }>).map(
+      person => person.id
+    )
+  ).toEqual(['u1', 'u2']);
 
   await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="files"] button').click();
   await page.getByRole('textbox', { name: 'File name' }).fill('Plan');
@@ -336,6 +367,80 @@ test('preserves literal quotes in unquoted TSV fields', async ({ page }) => {
   expect(data.rows[0]?.cells.status?.text).toBe('neighbor');
   expect(data.rows[1]?.cells.name?.text).toBe('He said "hello"');
   expect(data.rows[1]?.cells.status?.text).toBe('other');
+});
+
+test('preserves a trailing empty row when copying a single-column range', async ({ page }) => {
+  await openFixture(page);
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { setDoc(value: string): void };
+    }).__editor;
+    editor?.setDoc(
+      JSON.stringify({
+        version: 1,
+        id: 'trailing-row',
+        title: '',
+        blocks: [
+          {
+            id: 'db-trailing',
+            type: 'database',
+            text: [],
+            props: {
+              database: {
+                variant: 'database',
+                columns: [{ id: 'c', name: 'C', type: 'text' }],
+                rows: [
+                  { id: 'tr1', cells: { c: { text: 'replacement' } } },
+                  { id: 'tr2', cells: {} },
+                  { id: 'tr3', cells: { c: { text: 'stale' } } },
+                ],
+              },
+            },
+            children: [],
+          },
+        ],
+      })
+    );
+  });
+  await expect(page.locator('.nb-db-table')).toBeVisible();
+
+  await page.locator('.nb-db-cell[data-row-id="tr1"][data-column-id="c"]').click();
+  await page
+    .locator('.nb-db-cell[data-row-id="tr2"][data-column-id="c"]')
+    .click({ modifiers: ['Shift'] });
+  const copied = await page.evaluate(() => {
+    const data = new DataTransfer();
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db')
+      ?.dispatchEvent(
+        new ClipboardEvent('copy', {
+          bubbles: true,
+          clipboardData: data,
+        })
+      );
+    return data.getData('text/plain');
+  });
+  expect(copied).toBe('replacement\n""');
+
+  await page.locator('.nb-db-cell[data-row-id="tr2"][data-column-id="c"]').click();
+  await page.evaluate(text => {
+    const data = new DataTransfer();
+    data.setData('text/plain', text);
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db-cell[data-row-id="tr2"][data-column-id="c"]')
+      ?.dispatchEvent(
+        new ClipboardEvent('paste', {
+          bubbles: true,
+          clipboardData: data,
+        })
+      );
+  }, copied);
+
+  const data = await databaseState(page);
+  expect(data.rows[1]?.cells.c?.text).toBe('replacement');
+  expect(data.rows[2]?.cells.c).toBeUndefined();
 });
 
 test('does not activate picker buttons during Shift range selection', async ({ page }) => {
