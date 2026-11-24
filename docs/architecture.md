@@ -96,6 +96,12 @@ Cloudflare D1 deployment, the SQL schema and its row-size limits are documented
 in [storage.md](storage.md). The Worker example is in
 [`examples/cloudflare-d1`](../examples/cloudflare-d1).
 
+Page references keep that boundary: a `page` block stores only
+`{ pageId, pageTitle, pageIcon? }`. The host supplies routing through
+`onOpenPage` and optional cached metadata through `resolvePage`; the editor
+never loads or embeds the referenced document. This keeps one `Doc` small and
+avoids turning page navigation into a second document tree.
+
 ## Rendering
 
 Each block has a `BlockView` with a stable root element and child views in a
@@ -352,6 +358,7 @@ changing the document format.
   and column hide/move are not implemented yet. Date cells store ISO strings
   and are edited as text.
 - No synced blocks, comments, math or embeds. Mentions are represented as inline marks with a host-provided provider.
+- Page links are references to host-owned documents; there is no page registry, backlink index, page tree or in-editor router.
 - Images support URL insertion plus a host-provided `uploadImage` adapter for pasted/dropped files; Nobita does not host storage.
 - Code language and callout tone are editable from the block UI.
 - Very large documents need virtualized rendering.

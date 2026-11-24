@@ -30,6 +30,7 @@ export type {
   InlineMark,
   InlineRun,
   MentionRef,
+  PageInfo,
   MarkKey,
   Point,
   TextAlign,

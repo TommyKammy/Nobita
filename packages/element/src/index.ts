@@ -20,7 +20,7 @@ export {
   createEditor,
   defineNobitaEditor,
 } from './element.js';
-export type { NobitaChangeDetail } from './element.js';
+export type { NobitaChangeDetail, NobitaPageOpenDetail } from './element.js';
 
 /** Clipboard/HTML conversion helpers for hosts importing existing content. */
 export { htmlToBlocks, plainTextToBlocks, readClipboardPayload } from './clipboard.js';

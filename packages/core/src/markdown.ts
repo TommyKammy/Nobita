@@ -435,6 +435,16 @@ function serializeBlocks(blocks: readonly Block[], depth: number, lines: string[
         }
         break;
       }
+      case 'page': {
+        const title = escapeInline(
+          block.props.pageTitle ?? block.props.pageId ?? 'Untitled page'
+        );
+        const pageId = block.props.pageId;
+        lines.push(
+          pageId ? `${pad}[${title}](#page-${encodeURIComponent(pageId)})` : `${pad}${title}`
+        );
+        break;
+      }
       case 'callout':
         lines.push(indentLines(text, `${pad}> `));
         if (block.props.tone && block.props.tone !== 'info') {

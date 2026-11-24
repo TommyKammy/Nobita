@@ -1,4 +1,4 @@
-import type { Doc, EditorSelection } from '@nobita/core';
+import type { Doc, EditorSelection, PageInfo } from '@nobita/core';
 import { parseDoc } from '@nobita/core';
 import {
   NobitaEditor,
@@ -15,6 +15,10 @@ export interface NobitaChangeDetail {
   source: string;
 }
 
+export interface NobitaPageOpenDetail {
+  pageId: string;
+}
+
 /**
  * `<nobita-editor>` — a shadow-DOM web component wrapper around NobitaEditor.
  * Attributes: `readonly`, `theme` (light|dark|auto), `placeholder`,
@@ -28,6 +32,8 @@ export class NobitaEditorElement extends Base {
   #lastDoc: Doc | null = null;
   #mentionProvider: MentionProvider | undefined;
   #uploadImage: ImageUploadHandler | undefined;
+  #onOpenPage: ((pageId: string) => void) | undefined;
+  #resolvePage: ((pageId: string) => PageInfo | null) | undefined;
 
   constructor() {
     super();
@@ -65,6 +71,17 @@ export class NobitaEditorElement extends Base {
       },
       ...(this.#mentionProvider ? { mentionProvider: this.#mentionProvider } : {}),
       ...(this.#uploadImage ? { uploadImage: this.#uploadImage } : {}),
+      onOpenPage: pageId => {
+        this.#onOpenPage?.(pageId);
+        this.dispatchEvent(
+          new CustomEvent<NobitaPageOpenDetail>('nobita-page-open', {
+            detail: { pageId },
+            bubbles: true,
+            composed: true,
+          })
+        );
+      },
+      resolvePage: pageId => this.#resolvePage?.(pageId) ?? null,
     });
     this.#applyMinHeight();
     this.#pendingDoc = undefined;
@@ -135,6 +152,22 @@ export class NobitaEditorElement extends Base {
     this.#editor?.setUploadImage(value);
   }
 
+  get onOpenPage(): ((pageId: string) => void) | undefined {
+    return this.#onOpenPage;
+  }
+
+  set onOpenPage(value: ((pageId: string) => void) | undefined) {
+    this.#onOpenPage = value;
+  }
+
+  get resolvePage(): ((pageId: string) => PageInfo | null) | undefined {
+    return this.#resolvePage;
+  }
+
+  set resolvePage(value: ((pageId: string) => PageInfo | null) | undefined) {
+    this.#resolvePage = value;
+  }
+
   get value(): string {
     return this.#editor?.getJSON() ?? '';
   }
@@ -166,6 +199,14 @@ export class NobitaEditorElement extends Base {
 
   getJSON(): string {
     return this.#editor?.getJSON() ?? '';
+  }
+
+  insertPageLink(page: PageInfo, options: { afterBlockId?: string } = {}): string | null {
+    return this.#editor?.insertPageLink(page, options) ?? null;
+  }
+
+  refreshPageLinks(): void {
+    this.#editor?.refreshPageLinks();
   }
 
   setReadonly(readonly: boolean): void {

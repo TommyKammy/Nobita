@@ -41,6 +41,7 @@ Covered today:
 - image paste/drop through the upload adapter, including readonly and document-replacement guards
 - code language / callout tone pickers
 - block-link navigation, including the legacy clipboard fallback
+- page reference insertion, navigation, resolver refresh and missing-page fallback
 
 Add a test when changing toolbar, menus, selection, clipboard, drag, data views
 or mobile layout. Prefer `data-*` selectors over UI copy.

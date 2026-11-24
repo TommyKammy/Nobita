@@ -26,6 +26,7 @@ const BLOCK_TYPES: readonly BlockType[] = [
   'callout',
   'image',
   'database',
+  'page',
 ];
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -71,6 +72,15 @@ function parseProps(value: unknown): BlockProps {
   if (typeof value.alt === 'string') props.alt = value.alt;
   if (typeof value.caption === 'string') props.caption = value.caption;
   if (typeof value.collapsed === 'boolean') props.collapsed = value.collapsed;
+  if (typeof value.pageId === 'string' && value.pageId.length > 0) {
+    props.pageId = value.pageId.slice(0, 200);
+  }
+  if (typeof value.pageTitle === 'string' && value.pageTitle.length > 0) {
+    props.pageTitle = value.pageTitle.slice(0, 200);
+  }
+  if (typeof value.pageIcon === 'string' && value.pageIcon.length > 0) {
+    props.pageIcon = value.pageIcon.slice(0, 40);
+  }
   return props;
 }
 
@@ -236,6 +246,21 @@ export function blocksToHtml(blocks: readonly Block[]): string {
             : `<div data-block-id="${block.id}"></div>`
         );
         break;
+      case 'page': {
+        const pageId = block.props.pageId ?? '';
+        const pageTitle = block.props.pageTitle ?? 'Untitled page';
+        const icon = block.props.pageIcon
+          ? `<span aria-hidden="true">${escapeHtml(block.props.pageIcon)}</span> `
+          : '';
+        out.push(
+          `<a class="nb-page-link" data-block-id="${block.id}" data-page-id="${escapeHtml(
+            pageId
+          )}" data-page-title="${escapeHtml(pageTitle)}" href="#page-${encodeURIComponent(
+            pageId
+          )}">${icon}${escapeHtml(pageTitle)}</a>`
+        );
+        break;
+      }
       default:
         out.push(`<p data-block-id="${block.id}"${align}>${inner}${children}</p>`);
         break;
@@ -334,6 +359,11 @@ export function blocksToPlainText(blocks: readonly Block[], indent = 0): string 
         }
         break;
       }
+      case 'page':
+        lines.push(
+          `${pad}[page: ${block.props.pageTitle ?? block.props.pageId ?? 'Untitled page'}]`
+        );
+        break;
       default:
         if (text) lines.push(`${pad}${text}`);
         break;

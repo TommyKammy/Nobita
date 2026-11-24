@@ -1,4 +1,4 @@
-import type { CalloutTone, DatabaseData } from '@nobita/core';
+import type { CalloutTone, DatabaseData, PageInfo } from '@nobita/core';
 import type { BlockView } from './block-view.js';
 
 /** Surface the block view needs from the editor. Implemented by NobitaEditor. */
@@ -11,6 +11,8 @@ export interface BlockHost {
   setImage(blockId: string, patch: { src?: string; alt?: string; caption?: string }): void;
   setCodeLanguage(blockId: string, language: string): void;
   setCalloutTone(blockId: string, tone: CalloutTone): void;
+  pageInfo(pageId: string): PageInfo | null;
+  openPage(pageId: string): void;
   openBlockMenu(blockId: string, anchor: HTMLElement): void;
   addBlockAfter(blockId: string): void;
   beginDrag(blockId: string, event: PointerEvent, handle: HTMLElement): void;

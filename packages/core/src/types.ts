@@ -10,7 +10,8 @@ export type BlockType =
   | 'divider'
   | 'callout'
   | 'image'
-  | 'database';
+  | 'database'
+  | 'page';
 
 export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
@@ -187,6 +188,9 @@ export interface BlockProps {
   caption?: string;
   collapsed?: boolean;
   database?: DatabaseData;
+  pageId?: string;
+  pageTitle?: string;
+  pageIcon?: string;
 }
 
 export interface Block {
@@ -196,6 +200,12 @@ export interface Block {
   text: InlineRun[];
   props: BlockProps;
   children: Block[];
+}
+
+export interface PageInfo {
+  id: string;
+  title: string;
+  icon?: string;
 }
 
 export interface Doc {
@@ -237,7 +247,10 @@ export interface DocChange {
 export const DOC_VERSION = 1 as const;
 
 export const isTextualBlock = (block: Block): boolean =>
-  block.type !== 'divider' && block.type !== 'image' && block.type !== 'database';
+  block.type !== 'divider' &&
+  block.type !== 'image' &&
+  block.type !== 'database' &&
+  block.type !== 'page';
 
 export const isListBlock = (block: Block): boolean =>
   block.type === 'bulleted' || block.type === 'numbered' || block.type === 'todo';

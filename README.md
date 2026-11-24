@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **57.9 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
+- **59.1 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -26,7 +26,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 
 | Area | Included |
 | --- | --- |
-| Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, table/database |
+| Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, table/database, page links |
 | Inline | Bold, italic, underline, strikethrough, inline code, links, mentions, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo |
 | Data views | Table and board views, filters, grouping, column resize, cell range copy/paste and TSV import; typed columns (text, number, select, multi-select, date, checkbox, URL, files, people), row menus, sort, Markdown table round-trip, HTML table paste/export |
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 57.9 KB bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 59.1 KB bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -236,11 +236,13 @@ See [docs/public-api.md](docs/public-api.md) for the stable import surface, edit
 | `setReadonly(value)` / `setTheme(theme)` | Runtime configuration |
 | `insertMarkdown(markdown)` | Insert blocks at the caret |
 | `getBlockLink(blockId)` | Return the stable `#block-…` link for a block |
+| `insertPageLink(page, { afterBlockId? })` | Insert a reference to a host-owned page |
+| `refreshPageLinks()` | Re-read optional page metadata after a rename |
 | `setMentionProvider(provider)` | Replace the mention directory at runtime |
 | `setUploadImage(handler)` | Replace the image upload adapter at runtime |
 | `destroy()` | Remove listeners and DOM |
 
-Options: `doc`, `readonly`, `theme` (`light` / `dark` / `auto`), `placeholder`, `autofocus`, `spellcheck`, `historyLimit`, `onChange(doc, { source })`, `onSelectionChange(selection)`, `mentionProvider`, `uploadImage`.
+Options: `doc`, `readonly`, `theme` (`light` / `dark` / `auto`), `placeholder`, `autofocus`, `spellcheck`, `historyLimit`, `onChange(doc, { source })`, `onSelectionChange(selection)`, `mentionProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
 
 ### Mentions, links and images
 
@@ -269,14 +271,32 @@ editor.uploadImage = async file => {
 
 Typing `@` opens the picker; mention references stay atomic while typing and deleting. `getBlockLink(blockId)` returns `#block-<id>` for links the host can copy; clicking one inside the same document focuses the block. Image paste and drop only run when `uploadImage` is set, and the adapter owns storage, authentication and URL lifetime.
 
+### Page links
+
+Pages stay separate `Doc`s. The editor stores a small reference block and never loads or embeds page content:
+
+```ts
+const page = await createPage({ title: 'Roadmap' });
+editor.insertPageLink(page, { afterBlockId: currentBlockId });
+
+editor.onOpenPage = pageId => router.open(`/pages/${pageId}`);
+editor.resolvePage = pageId => pageCache.get(pageId) ?? null;
+
+// After a host-side rename:
+pageCache.set('p1', { id: 'p1', title: 'Product roadmap' });
+editor.refreshPageLinks();
+```
+
+`insertPageLink` stores `{ pageId, pageTitle, pageIcon? }` so the card works offline and exports to JSON/HTML. `resolvePage` is a synchronous, cached override for live titles; `onOpenPage` owns routing and loading. Page trees, backlinks and breadcrumbs remain host concerns.
+
 The placeholder behaves like AFFiNE: it appears only on the **focused empty paragraph** (or heading, which shows “Heading 1/2/3/4/5/6”), and disappears as soon as text exists or focus leaves the body. It is not shown while the page title is focused. The default is `Type '/' for commands`; set `placeholder` to override the paragraph text.
 
 ### `<nobita-editor>`
 
 Attributes: `readonly`, `theme`, `placeholder`, `min-height`, `doc` (JSON string).
-Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `uploadImage`.
-Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`, `setReadonly()`, `setTheme()`.
-Events: `nobita-change` (`{ doc, source }`), `nobita-selection` (`{ selection }`), `nobita-ready`.
+Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
+Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`, `insertPageLink()`, `refreshPageLinks()`, `setReadonly()`, `setTheme()`.
+Events: `nobita-change` (`{ doc, source }`), `nobita-selection` (`{ selection }`), `nobita-page-open` (`{ pageId }`), `nobita-ready`.
 
 Use `doc` as a property for normal use. Set `doc` **before** the element connects, or use the property after mount; the element keeps the last document across disconnect/reconnect.
 
@@ -335,8 +355,8 @@ Bundle sizes:
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 210.5 KB | **57.9 KB** |
-| Demo app (editor + UI + seed data) | 240.8 KB | 67.8 KB |
+| Editor ESM (`nobita.js`) | 215.9 KB | **59.1 KB** |
+| Demo app (editor + UI + seed data) | 246.2 KB | 69.1 KB |
 
 The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.
 
@@ -368,7 +388,7 @@ A command-by-command comparison with AFFiNE, including recommended P0/P1 additio
 
 ## Roadmap
 
-- Nested pages inside the editor.
+- Page workspace: navigation, backlinks and page trees.
 - Collaboration adapter (Yjs/Automerge) behind an explicit interface.
 - Virtualized rendering for 10k+ block documents.
 - Vue/Svelte wrappers (the web component already works in both).
