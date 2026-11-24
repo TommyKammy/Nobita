@@ -77,6 +77,8 @@ Stable exports include:
   `blocksToHtml`
 - Editing commands: `setBlockType`, `setBlockAlign`, `toggleChecked`,
   `setCodeLanguage`, `insertBlockAfter`, etc.
+- Data views: `DatabaseView`, `DatabaseFilter`, `databaseView`,
+  `filteredDatabaseRows`, `groupedDatabaseRows`
 - Store: `EditorStore`
 - Validation/URL helpers: `safeHref`, `safeImageSrc`
 

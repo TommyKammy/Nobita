@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **48.0 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
+- **55.5 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -29,7 +29,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, table/database |
 | Inline | Bold, italic, underline, strikethrough, inline code, links, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo |
-| Data views | Rows, typed columns (text, number, select, date, checkbox, URL), add/rename/delete, row menus, sort, Markdown table round-trip, HTML table paste/export |
+| Data views | Table and board views, filters, grouping, column resize, cell range copy/paste and TSV import; typed columns (text, number, select, multi-select, date, checkbox, URL, files, people), row menus, sort, Markdown table round-trip, HTML table paste/export |
 | Menus | Slash menu with fuzzy search and block actions (move/copy), block handle menu, selection toolbar with Turn into / Align / format / Color, link popover |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
@@ -37,7 +37,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Persistence | JSON in / JSON out, `onChange`, `setDoc`, readonly mode, theming; optional `@nobita/storage` adapters for localStorage, SQLite/D1 and HTTP |
 | A11y | Keyboard menus, labels, focus-visible states, `aria-pressed` toolbar |
 
-Not in the box: board/kanban views, filters/groups, synced blocks, comments, math, embeds, collaboration, image uploads (URLs only), and virtualization for very large documents. See [Roadmap](#roadmap).
+Not in the box: multiple named saved views, synced blocks, comments, math, embeds, collaboration, image uploads (URLs only), and virtualization for very large documents. See [Roadmap](#roadmap).
 
 ## Quick start
 
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 48.0 KB bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 55.5 KB bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -185,7 +185,9 @@ A **Table** and a **Database** are the same `database` block with a different de
         { "id": "c1", "name": "Task", "type": "text" },
         { "id": "c2", "name": "Status", "type": "select", "options": ["Todo", "Done"] },
         { "id": "c3", "name": "Due", "type": "date" },
-        { "id": "c4", "name": "Done", "type": "checkbox" }
+        { "id": "c4", "name": "Done", "type": "checkbox" },
+        { "id": "c5", "name": "Tags", "type": "multi-select", "options": ["Docs", "Release"] },
+        { "id": "c6", "name": "Owner", "type": "people" }
       ],
       "rows": [
         {
@@ -194,17 +196,25 @@ A **Table** and a **Database** are the same `database` block with a different de
             "c1": { "text": "Ship it" },
             "c2": { "text": "Done" },
             "c3": { "text": "2026-12-01" },
-            "c4": { "checked": true }
+            "c4": { "checked": true },
+            "c5": { "values": ["Docs", "Release"] },
+            "c6": { "people": [{ "id": "u1", "label": "Ada" }] }
           }
         }
-      ]
+      ],
+      "view": {
+        "type": "board",
+        "groupBy": "c2",
+        "filters": [{ "columnId": "c2", "operator": "is", "value": "Todo" }],
+        "sort": { "columnId": "c3", "direction": "asc" }
+      }
     }
   },
   "children": []
 }
 ```
 
-Column types are `text`, `number`, `select`, `date`, `checkbox` and `url`. Empty cells are omitted, so documents stay compact. Markdown exports render a standard pipe table; pasting a Markdown or HTML table creates a table block. `data.sort` stores the view's sort without reordering the underlying rows.
+Column types are `text`, `number`, `select`, `multi-select`, `date`, `checkbox`, `url`, `files` and `people`. Columns can persist a `width`; empty cells are omitted, so documents stay compact. `view` stores the table/board mode, filters, grouping and sort without reordering the underlying rows. Markdown exports render a standard pipe table; pasting a Markdown, HTML or TSV table creates/updates cells.
 
 ## API
 
@@ -295,8 +305,8 @@ Bundle sizes:
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 169.6 KB | **48.0 KB** |
-| Demo app (editor + UI + seed data) | 199.3 KB | 57.9 KB |
+| Editor ESM (`nobita.js`) | 201.1 KB | **55.5 KB** |
+| Demo app (editor + UI + seed data) | 231.3 KB | 65.5 KB |
 
 The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.
 
@@ -328,9 +338,6 @@ A command-by-command comparison with AFFiNE, including recommended P0/P1 additio
 
 ## Roadmap
 
-- Board/kanban data views, filters and grouping.
-- More property types (multi-select, people, files) and column resize.
-- Cell range selection, multi-cell copy/paste and TSV import.
 - Block links, mentions, and nested pages inside the editor.
 - Collaboration adapter (Yjs/Automerge) behind an explicit interface.
 - Virtualized rendering for 10k+ block documents.

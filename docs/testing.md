@@ -33,9 +33,13 @@ Covered today:
 - Turn into and slash menu
 - cross-block deletion
 - readonly and 375px viewport layout
+- table/board switching, board card movement and filters
+- multi-select, files and people pickers
+- column resize
+- cell-range selection, TSV paste and copy
 
-Add a test when changing toolbar, menus, selection, clipboard, drag or mobile
-layout. Prefer `data-*` selectors over UI copy.
+Add a test when changing toolbar, menus, selection, clipboard, drag, data views
+or mobile layout. Prefer `data-*` selectors over UI copy.
 
 ## Size report
 

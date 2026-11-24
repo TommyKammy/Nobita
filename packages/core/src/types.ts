@@ -18,7 +18,16 @@ export type CalloutTone = 'info' | 'success' | 'warning' | 'danger';
 
 export type TextAlign = 'left' | 'center' | 'right';
 
-export type DatabaseColumnType = 'text' | 'number' | 'select' | 'date' | 'checkbox' | 'url';
+export type DatabaseColumnType =
+  | 'text'
+  | 'number'
+  | 'select'
+  | 'date'
+  | 'checkbox'
+  | 'url'
+  | 'multi-select'
+  | 'files'
+  | 'people';
 
 export type DatabaseVariant = 'table' | 'database';
 
@@ -26,13 +35,35 @@ export interface DatabaseColumn {
   id: string;
   name: string;
   type: DatabaseColumnType;
-  /** Available values for a select column. */
+  /** Available values for a select or multi-select column. */
   options?: string[];
+  /** Persisted table width in CSS pixels. */
+  width?: number;
+}
+
+export interface DatabaseFile {
+  id?: string;
+  name: string;
+  url: string;
+  mime?: string;
+  size?: number;
+}
+
+export interface DatabasePerson {
+  id: string;
+  label: string;
+  avatarUrl?: string;
 }
 
 export interface DatabaseCell {
   text?: string;
   checked?: boolean;
+  /** Values for a multi-select column. */
+  values?: string[];
+  /** File references for a files column. */
+  files?: DatabaseFile[];
+  /** Person references for a people column. */
+  people?: DatabasePerson[];
 }
 
 export interface DatabaseRow {
@@ -46,11 +77,36 @@ export interface DatabaseSort {
   direction: 'asc' | 'desc';
 }
 
+export type DatabaseViewType = 'table' | 'board';
+
+export type DatabaseFilterOperator =
+  | 'contains'
+  | 'is'
+  | 'isNot'
+  | 'isEmpty'
+  | 'isNotEmpty';
+
+export interface DatabaseFilter {
+  columnId: string;
+  operator: DatabaseFilterOperator;
+  value?: string;
+}
+
+export interface DatabaseView {
+  type: DatabaseViewType;
+  filters: DatabaseFilter[];
+  groupBy?: string | null;
+  sort?: DatabaseSort | null;
+}
+
 export interface DatabaseData {
   variant: DatabaseVariant;
   columns: DatabaseColumn[];
   rows: DatabaseRow[];
+  /** Legacy global sort retained for older documents. */
   sort?: DatabaseSort | null;
+  /** Saved table or board view. Omitted documents use a computed default. */
+  view?: DatabaseView | null;
 }
 
 /**

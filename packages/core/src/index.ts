@@ -9,9 +9,15 @@ export type {
   DatabaseColumn,
   DatabaseColumnType,
   DatabaseData,
+  DatabaseFile,
+  DatabaseFilter,
+  DatabaseFilterOperator,
+  DatabasePerson,
   DatabaseRow,
   DatabaseSort,
   DatabaseVariant,
+  DatabaseView,
+  DatabaseViewType,
   Doc,
   DocChange,
   EditorSelection,
@@ -39,6 +45,7 @@ export {
 
 export {
   DATABASE_COLUMN_TYPES,
+  DATABASE_FILTER_OPERATORS,
   cloneDatabaseData,
   createDatabaseColumn,
   createDatabaseData,
@@ -46,12 +53,15 @@ export {
   databaseCellDisplay,
   databaseCellText,
   databaseRowNumber,
+  databaseView,
   duplicateDatabaseData,
+  filteredDatabaseRows,
+  groupedDatabaseRows,
   isDatabaseColumnType,
   normalizeDatabaseData,
   sortedDatabaseRows,
 } from './database.js';
-export type { CreateDatabaseOptions } from './database.js';
+export type { CreateDatabaseOptions, DatabaseGroup } from './database.js';
 
 export type {
   DocSummary,
