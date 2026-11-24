@@ -282,6 +282,49 @@ test('parses quoted spreadsheet fields before applying TSV', async ({ page }) =>
   expect(data.rows[0]?.cells.status?.text).toBe('neighbor');
 });
 
+test('preserves literal quotes in unquoted TSV fields', async ({ page }) => {
+  await openFixture(page);
+  await setDatabase(page);
+
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/plain', '5" bolt\tneighbor\nHe said "hello"\tother');
+    const event = new ClipboardEvent('paste', {
+      bubbles: true,
+      clipboardData: data,
+    });
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('.nb-db-cell[data-row-id="r1"][data-column-id="name"]')
+      ?.dispatchEvent(event);
+  });
+
+  const data = await databaseState(page);
+  expect(data.rows[0]?.cells.name?.text).toBe('5" bolt');
+  expect(data.rows[0]?.cells.status?.text).toBe('neighbor');
+  expect(data.rows[1]?.cells.name?.text).toBe('He said "hello"');
+  expect(data.rows[1]?.cells.status?.text).toBe('other');
+});
+
+test('does not activate picker buttons during Shift range selection', async ({ page }) => {
+  await openFixture(page);
+  await setDatabase(page);
+
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-text').click();
+  await page
+    .locator('.nb-db-cell[data-row-id="r2"][data-column-id="done"] button')
+    .click({ modifiers: ['Shift'] });
+  await expect(page.locator('.nb-db-popover')).toHaveCount(0);
+  expect(
+    await page.locator('.nb-db-cell[data-row-id="r2"][data-column-id="done"] button').getAttribute('aria-checked')
+  ).toBe('false');
+
+  await page
+    .locator('.nb-db-cell[data-row-id="r2"][data-column-id="status"] button')
+    .click({ modifiers: ['Shift'] });
+  await expect(page.locator('.nb-db-popover')).toHaveCount(0);
+});
+
 test('initializes checkbox filters to the displayed value', async ({ page }) => {
   await openFixture(page);
   await setDatabase(page);
@@ -427,6 +470,7 @@ test('imports TSV and copies a selected cell range', async ({ page }) => {
   let data = await databaseState(page);
   expect(data.rows[0]?.cells.name?.text).toBe('A');
   expect(data.rows[0]?.cells.status?.text).toBe('B');
+  await expect(page.locator('.nb-db-cell.is-selected')).toHaveCount(0);
   expect(data.rows[1]?.cells.name?.text).toBe('C');
   expect(data.rows[1]?.cells.status?.text).toBe('D');
 

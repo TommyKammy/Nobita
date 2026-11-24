@@ -97,7 +97,7 @@ function parseTsv(source: string): string[][] {
       }
       continue;
     }
-    if (char === '"') {
+    if (char === '"' && field === '') {
       quoted = true;
     } else if (char === '\t') {
       row.push(field);
@@ -171,6 +171,7 @@ export class DatabaseView {
   #rangeCells = new Set<string>();
   #visibleKey = '';
   #boardTitleEditing: { rowId: string; columnId: string } | null = null;
+  #suppressClick = false;
 
   constructor(host: DatabaseHost, data: DatabaseData) {
     this.#host = host;
@@ -183,6 +184,7 @@ export class DatabaseView {
     this.element.addEventListener('copy', this.#onCopy, true);
     this.element.addEventListener('cut', this.#onCut, true);
     this.element.addEventListener('paste', this.#onPaste, true);
+    this.element.addEventListener('click', this.#onClickCapture, true);
     this.render();
   }
 
@@ -1664,6 +1666,7 @@ export class DatabaseView {
     const previous = this.#active;
     this.#active = { rowId, columnId };
     if (!event.shiftKey) {
+      this.#suppressClick = false;
       if (this.#range) {
         this.#clearRange();
         this.#renderRange();
@@ -1673,6 +1676,7 @@ export class DatabaseView {
     const startRowId = previous?.rowId ?? rowId;
     const startColumnId = previous?.columnId ?? columnId;
     this.#range = { startRowId, startColumnId, endRowId: rowId, endColumnId: columnId };
+    this.#suppressClick = true;
     this.#renderRange();
     event.preventDefault();
   }
@@ -1726,6 +1730,10 @@ export class DatabaseView {
   #clearRange(): void {
     this.#range = null;
     this.#rangeCells.clear();
+    for (const nodes of this.#cells.values()) {
+      nodes.td.classList.remove('is-selected');
+      nodes.td.setAttribute('aria-selected', 'false');
+    }
   }
 
   #rangeText(): string {
@@ -1817,6 +1825,14 @@ export class DatabaseView {
     }
     this.#clearRange();
   }
+
+  #onClickCapture = (event: MouseEvent): void => {
+    if (!this.#suppressClick) return;
+    this.#suppressClick = false;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+  };
 
   #onCopy = (event: ClipboardEvent): void => {
     if (this.#rangeCells.size <= 1) return;
