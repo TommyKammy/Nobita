@@ -2715,6 +2715,7 @@ export class DatabaseView {
       const select = document.createElement('select');
       select.className = 'nb-db-detail-input';
       select.disabled = this.#readonly;
+      select.multiple = column.type === 'multi-select';
       const empty = document.createElement('option');
       empty.value = '';
       empty.textContent = 'Empty';
@@ -2729,7 +2730,6 @@ export class DatabaseView {
         item.selected = selected.has(option);
         select.append(item);
       }
-      select.multiple = column.type === 'multi-select';
       select.addEventListener('change', () => {
         const values = Array.from(select.selectedOptions)
           .map(item => item.value)

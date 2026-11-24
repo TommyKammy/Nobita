@@ -787,7 +787,7 @@ test('clears multi-select values when choosing Empty', async ({ page }) => {
             rows: [
               {
                 id: 'r1',
-                cells: { name: { text: 'One' }, tags: { values: ['A'] } },
+                cells: { name: { text: 'One' }, tags: { values: ['A', 'B'] } },
               },
             ],
             views: [
@@ -811,9 +811,18 @@ test('clears multi-select values when choosing Empty', async ({ page }) => {
   });
   await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
   await page.locator('.nb-db-row-expand').first().click();
-  await page
-    .locator('.nb-db-detail-field[data-column-id="tags"] select')
-    .selectOption(['']);
+  const tags = page.locator(
+    '.nb-db-detail-field[data-column-id="tags"] select'
+  );
+  await expect(tags.locator('option[value="A"]')).toHaveJSProperty(
+    'selected',
+    true
+  );
+  await expect(tags.locator('option[value="B"]')).toHaveJSProperty(
+    'selected',
+    true
+  );
+  await tags.selectOption(['']);
   const doc = await getDoc(page);
   expect(
     (
