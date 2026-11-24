@@ -912,6 +912,14 @@ export class NobitaEditor implements BlockHost {
     this.store.redo();
   }
 
+  undoTable(): void {
+    this.store.undo();
+  }
+
+  redoTable(): void {
+    this.store.redo();
+  }
+
   focusAfterBlock(blockId: string): void {
     const next = this.#nextTextBlock(blockId);
     if (next) {
@@ -1443,6 +1451,10 @@ export class NobitaEditor implements BlockHost {
     this.#slash = null;
     if (block.type === 'database') {
       view.focusDatabase();
+      return;
+    }
+    if (block.type === 'table') {
+      view.focusTable();
       return;
     }
     if (block.type === 'image') {

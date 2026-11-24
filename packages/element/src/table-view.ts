@@ -25,6 +25,8 @@ import { icon } from './icons.js';
 export interface TableHost {
   readonly readonly: boolean;
   commit(data: TableData, options?: { mergeKey?: string }): void;
+  undo(): void;
+  redo(): void;
 }
 
 const DEFAULT_COLUMN_WIDTH = 120;
@@ -38,6 +40,17 @@ const TABLE_COLORS = PALETTE_COLORS.map(color => ({
 
 function cellKey(rowId: string, columnId: string): string {
   return `${rowId}\u0000${columnId}`;
+}
+
+function tsvCell(value: string): string {
+  return /[\t\n\r"]/u.test(value) ? `"${value.replace(/"/gu, '""')}"` : value;
+}
+
+interface TableAreaBounds {
+  rowStart: number;
+  rowEnd: number;
+  columnStart: number;
+  columnEnd: number;
 }
 
 function readCellText(element: HTMLElement): string {
@@ -104,6 +117,19 @@ export class SimpleTableView {
   #hoverRowId: string | null = null;
   #hoverColumnId: string | null = null;
   #selected: { type: 'row' | 'column'; id: string } | null = null;
+  #area: {
+    anchorRowId: string;
+    anchorColumnId: string;
+    focusRowId: string;
+    focusColumnId: string;
+  } | null = null;
+  #drag: {
+    anchorRowId: string;
+    anchorColumnId: string;
+    moved: boolean;
+  } | null = null;
+  #selectionOverlay: HTMLElement | null = null;
+  #suppressCellClick = false;
   #suppressAddClick = false;
   #addTip: HTMLElement | null = null;
 
@@ -120,14 +146,21 @@ export class SimpleTableView {
       this.#hoverColumnId = null;
       this.#syncHover();
     });
+    this.element.addEventListener('copy', this.#onCopy, true);
+    this.element.addEventListener('cut', this.#onCut, true);
+    this.element.addEventListener('click', this.#onClickCapture, true);
     this.render();
   }
 
   update(data: TableData): void {
     if (data === this.#data) return;
     this.#data = data;
-    if (this.#structuralKey() !== this.#structureKey) this.render();
-    else this.#syncValues();
+    if (this.#structuralKey() !== this.#structureKey) {
+      this.render();
+    } else {
+      this.#syncValues();
+      this.#syncSelection();
+    }
   }
 
   setReadonly(readonly: boolean): void {
@@ -145,6 +178,7 @@ export class SimpleTableView {
   focusCell(rowId: string, columnId: string, at: 'start' | 'end' = 'end'): void {
     const cell = this.#cells.get(cellKey(rowId, columnId));
     if (!cell) return;
+    this.#clearAreaSelection();
     cell.focus();
     placeCaret(cell, at);
   }
@@ -174,6 +208,7 @@ export class SimpleTableView {
     this.#closePopover();
     this.#cells.clear();
     this.#colElements = [];
+    this.#selectionOverlay = null;
     this.#structureKey = this.#structuralKey();
     this.element.dataset.readonly = String(this.#readonly);
     this.element.replaceChildren();
@@ -219,8 +254,14 @@ export class SimpleTableView {
         cell.addEventListener(
           'input',
           () => {
+            this.#clearAreaSelection();
             this.#commitCell(row.id, column.id, readCellText(cell));
           },
+          { signal: this.#events.signal }
+        );
+        cell.addEventListener(
+          'pointerdown',
+          event => this.#beginCellRange(event, row.id, column.id),
           { signal: this.#events.signal }
         );
         cell.addEventListener(
@@ -283,6 +324,15 @@ export class SimpleTableView {
     });
     table.append(body);
     canvas.append(table);
+
+    const selection = document.createElement('div');
+    selection.className = 'nb-table-selection';
+    selection.dataset.visible = 'false';
+    canvas.append(selection);
+    this.#selectionOverlay = selection;
+    window.addEventListener('resize', () => this.#syncSelection(), {
+      signal: this.#events.signal,
+    });
 
     if (!this.#readonly) {
       const addColumn = document.createElement('button');
@@ -388,7 +438,46 @@ export class SimpleTableView {
     }
   }
 
+  #areaBounds(): TableAreaBounds | null {
+    const area = this.#area;
+    if (!area) return null;
+    const anchorRow = this.#data.rows.findIndex(row => row.id === area.anchorRowId);
+    const anchorColumn = this.#data.columns.findIndex(
+      column => column.id === area.anchorColumnId
+    );
+    const focusRow = this.#data.rows.findIndex(row => row.id === area.focusRowId);
+    const focusColumn = this.#data.columns.findIndex(
+      column => column.id === area.focusColumnId
+    );
+    if (anchorRow < 0 || anchorColumn < 0 || focusRow < 0 || focusColumn < 0) {
+      this.#area = null;
+      return null;
+    }
+    return {
+      rowStart: Math.min(anchorRow, focusRow),
+      rowEnd: Math.max(anchorRow, focusRow),
+      columnStart: Math.min(anchorColumn, focusColumn),
+      columnEnd: Math.max(anchorColumn, focusColumn),
+    };
+  }
+
   #syncSelection(): void {
+    const bounds = this.#areaBounds();
+    const areaCells = new Set<string>();
+    if (bounds) {
+      for (let rowIndex = bounds.rowStart; rowIndex <= bounds.rowEnd; rowIndex += 1) {
+        const row = this.#data.rows[rowIndex];
+        if (!row) continue;
+        for (
+          let columnIndex = bounds.columnStart;
+          columnIndex <= bounds.columnEnd;
+          columnIndex += 1
+        ) {
+          const column = this.#data.columns[columnIndex];
+          if (column) areaCells.add(cellKey(row.id, column.id));
+        }
+      }
+    }
     for (const [key, cell] of this.#cells) {
       const td = cell.closest<HTMLElement>('td');
       if (!td) continue;
@@ -396,11 +485,197 @@ export class SimpleTableView {
       const rowSelected = this.#selected?.type === 'row' && rowId === this.#selected.id;
       const columnSelected =
         this.#selected?.type === 'column' && columnId === this.#selected.id;
+      const areaSelected = areaCells.has(key);
       td.classList.toggle('is-row-selected', Boolean(rowSelected));
       td.classList.toggle('is-column-selected', Boolean(columnSelected));
-      td.setAttribute('aria-selected', String(rowSelected || columnSelected));
+      td.classList.toggle('is-area-selected', areaSelected);
+      td.setAttribute(
+        'aria-selected',
+        String(rowSelected || columnSelected || areaSelected)
+      );
     }
+    this.#positionSelectionOverlay(bounds);
   }
+
+  #positionSelectionOverlay(bounds: TableAreaBounds | null): void {
+    const overlay = this.#selectionOverlay;
+    if (!overlay) return;
+    if (!bounds) {
+      overlay.dataset.visible = 'false';
+      return;
+    }
+    const firstRow = this.#data.rows[bounds.rowStart];
+    const lastRow = this.#data.rows[bounds.rowEnd];
+    const firstColumn = this.#data.columns[bounds.columnStart];
+    const lastColumn = this.#data.columns[bounds.columnEnd];
+    if (!firstRow || !lastRow || !firstColumn || !lastColumn) {
+      overlay.dataset.visible = 'false';
+      return;
+    }
+    const firstCell = this.#cells
+      .get(cellKey(firstRow.id, firstColumn.id))
+      ?.closest<HTMLElement>('td');
+    const lastCell = this.#cells
+      .get(cellKey(lastRow.id, lastColumn.id))
+      ?.closest<HTMLElement>('td');
+    const canvas = overlay.parentElement;
+    if (!firstCell || !lastCell || !canvas) {
+      overlay.dataset.visible = 'false';
+      return;
+    }
+    const canvasRect = canvas.getBoundingClientRect();
+    const firstRect = firstCell.getBoundingClientRect();
+    const lastRect = lastCell.getBoundingClientRect();
+    const left = Math.min(firstRect.left, lastRect.left) - canvasRect.left;
+    const top = Math.min(firstRect.top, lastRect.top) - canvasRect.top;
+    const right = Math.max(firstRect.right, lastRect.right) - canvasRect.left;
+    const bottom = Math.max(firstRect.bottom, lastRect.bottom) - canvasRect.top;
+    overlay.style.left = `${left}px`;
+    overlay.style.top = `${top}px`;
+    overlay.style.width = `${Math.max(0, right - left)}px`;
+    overlay.style.height = `${Math.max(0, bottom - top)}px`;
+    overlay.dataset.visible = 'true';
+  }
+
+  #clearAreaSelection(): void {
+    if (!this.#area) return;
+    this.#area = null;
+    this.#syncSelection();
+  }
+
+  #beginCellRange(event: PointerEvent, rowId: string, columnId: string): void {
+    if (this.#readonly || event.button !== 0 || !event.isPrimary) return;
+    this.#clearAreaSelection();
+    const drag = {
+      anchorRowId: rowId,
+      anchorColumnId: columnId,
+      moved: false,
+    };
+    this.#drag = drag;
+    const root = this.element.getRootNode() as ShadowRoot;
+    const move = (moveEvent: PointerEvent): void => {
+      if (this.#drag !== drag) return;
+      const target = this.#cellFromEvent(moveEvent);
+      if (!target) return;
+      const targetRowId = target.dataset.rowId;
+      const targetColumnId = target.dataset.columnId;
+      if (!targetRowId || !targetColumnId) return;
+      if (
+        !drag.moved &&
+        targetRowId === drag.anchorRowId &&
+        targetColumnId === drag.anchorColumnId
+      ) {
+        return;
+      }
+      drag.moved = true;
+      this.element.classList.add('is-selecting');
+      this.#area = {
+        anchorRowId: drag.anchorRowId,
+        anchorColumnId: drag.anchorColumnId,
+        focusRowId: targetRowId,
+        focusColumnId: targetColumnId,
+      };
+      nativeSelection(root)?.removeAllRanges();
+      moveEvent.preventDefault();
+      this.#syncSelection();
+    };
+    const finish = (): void => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      if (this.#drag !== drag) return;
+      this.#drag = null;
+      this.element.classList.remove('is-selecting');
+      if (drag.moved) {
+        this.#suppressCellClick = true;
+        window.setTimeout(() => {
+          this.#suppressCellClick = false;
+        }, 0);
+      } else {
+        this.#area = null;
+      }
+      this.#syncSelection();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+  }
+
+  #cellFromEvent(event: Event): HTMLElement | null {
+    for (const node of event.composedPath()) {
+      if (node instanceof HTMLElement && node.classList.contains('nb-table-cell')) {
+        return node;
+      }
+    }
+    return null;
+  }
+
+  #onClickCapture = (event: MouseEvent): void => {
+    if (!this.#suppressCellClick) return;
+    this.#suppressCellClick = false;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+  };
+
+  #rangeText(): string | null {
+    const bounds = this.#areaBounds();
+    if (!bounds) return null;
+    const lines: string[] = [];
+    for (let rowIndex = bounds.rowStart; rowIndex <= bounds.rowEnd; rowIndex += 1) {
+      const row = this.#data.rows[rowIndex];
+      if (!row) continue;
+      const cells: string[] = [];
+      for (
+        let columnIndex = bounds.columnStart;
+        columnIndex <= bounds.columnEnd;
+        columnIndex += 1
+      ) {
+        const column = this.#data.columns[columnIndex];
+        if (column) cells.push(tsvCell(tableCellText(row, column.id)));
+      }
+      lines.push(cells.join('\t'));
+    }
+    return lines.join('\n');
+  }
+
+  #clearSelectedCells(): void {
+    const bounds = this.#areaBounds();
+    if (!bounds) return;
+    this.#area = null;
+    let next = this.#data;
+    for (let rowIndex = bounds.rowStart; rowIndex <= bounds.rowEnd; rowIndex += 1) {
+      const row = this.#data.rows[rowIndex];
+      if (!row) continue;
+      for (
+        let columnIndex = bounds.columnStart;
+        columnIndex <= bounds.columnEnd;
+        columnIndex += 1
+      ) {
+        const column = this.#data.columns[columnIndex];
+        if (column) next = setTableCellText(next, row.id, column.id, '');
+      }
+    }
+    if (next !== this.#data) this.#host.commit(next);
+    this.#syncSelection();
+  }
+
+  #onCopy = (event: ClipboardEvent): void => {
+    if (this.#readonly) return;
+    const text = this.#rangeText();
+    if (text === null) return;
+    event.clipboardData?.setData('text/plain', text);
+    event.preventDefault();
+  };
+
+  #onCut = (event: ClipboardEvent): void => {
+    if (this.#readonly) return;
+    const text = this.#rangeText();
+    if (text === null) return;
+    event.clipboardData?.setData('text/plain', text);
+    event.preventDefault();
+    this.#clearSelectedCells();
+  };
 
   #commitCell(rowId: string, columnId: string, text: string): void {
     const next = setTableCellText(this.#data, rowId, columnId, text);
@@ -551,6 +826,7 @@ export class SimpleTableView {
         Math.min(MAX_COLUMN_WIDTH, Math.round(startWidth + moveEvent.clientX - startX))
       );
       col.style.width = `${width}px`;
+      this.#syncSelection();
     };
     const end = (): void => {
       window.removeEventListener('pointermove', move);
@@ -568,6 +844,40 @@ export class SimpleTableView {
 
   #onCellKeyDown(event: KeyboardEvent, rowId: string, columnId: string): void {
     if (event.isComposing) return;
+    const mod = event.metaKey || event.ctrlKey;
+    if (mod && event.key.toLowerCase() === 'z') {
+      event.preventDefault();
+      if (event.shiftKey) this.#host.redo();
+      else this.#host.undo();
+      return;
+    }
+    if (mod && event.key.toLowerCase() === 'y') {
+      event.preventDefault();
+      this.#host.redo();
+      return;
+    }
+    if (this.#area) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.#clearAreaSelection();
+        return;
+      }
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault();
+        this.#clearSelectedCells();
+        return;
+      }
+      if (
+        !mod &&
+        (event.key.startsWith('Arrow') ||
+          event.key === 'Home' ||
+          event.key === 'End' ||
+          event.key === 'PageUp' ||
+          event.key === 'PageDown')
+      ) {
+        this.#clearAreaSelection();
+      }
+    }
     if (event.key === 'Tab') {
       event.preventDefault();
       const rowIndex = this.#data.rows.findIndex(row => row.id === rowId);
@@ -672,6 +982,7 @@ export class SimpleTableView {
     const row = this.#data.rows.find(item => item.id === rowId);
     if (!row) return;
     const index = this.#data.rows.findIndex(item => item.id === rowId);
+    this.#clearAreaSelection();
     this.#selected = { type: 'row', id: rowId };
     this.#syncSelection();
     this.#syncHover();
@@ -723,6 +1034,7 @@ export class SimpleTableView {
     const column = this.#data.columns.find(item => item.id === columnId);
     if (!column) return;
     const index = this.#data.columns.findIndex(item => item.id === columnId);
+    this.#clearAreaSelection();
     this.#selected = { type: 'column', id: columnId };
     this.#syncSelection();
     this.#syncHover();

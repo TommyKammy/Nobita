@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createBlock, createDoc, duplicateBlockTree } from '../src/doc.js';
-import { blocksToMarkdown } from '../src/markdown.js';
+import { blocksToMarkdown, markdownToBlocks } from '../src/markdown.js';
 import { blocksToHtml, cloneDoc, parseDoc } from '../src/serialize.js';
 import {
   clearTableColumn,
@@ -143,6 +143,37 @@ describe('simple table', () => {
     });
     expect(markdown).toContain('| Name | Score |');
     expect(markdown).toContain('| Ada | 10 |');
+  });
+
+  it('round-trips multiline and literal HTML-like table cells through Markdown', () => {
+    const table = createTableData({ rows: 2, columns: 2 });
+    const c1 = table.columns[0]!;
+    const r1 = table.rows[0]!;
+    const multiline = setTableCellText(table, r1.id, c1.id, 'first\nsecond');
+    const block = createBlock('table', { id: 't', props: { table: multiline } });
+    const markdown = blocksToMarkdown(createDoc({ blocks: [block] }), { title: false });
+    expect(markdown).toContain('first<br>second');
+    const imported = markdownToBlocks(markdown, { extractTitle: false }).blocks.find(
+      item => item.type === 'table'
+    );
+    expect(
+      imported?.props.table?.rows[0]?.cells[imported.props.table.columns[0]!.id]?.text
+    ).toBe('first\nsecond');
+
+    const literal = setTableCellText(table, r1.id, c1.id, 'a <br> b');
+    const literalBlock = createBlock('table', { id: 't', props: { table: literal } });
+    const literalMarkdown = blocksToMarkdown(createDoc({ blocks: [literalBlock] }), {
+      title: false,
+    });
+    expect(literalMarkdown).toContain('a \\<br\\> b');
+    const literalImport = markdownToBlocks(literalMarkdown, {
+      extractTitle: false,
+    }).blocks.find(item => item.type === 'table');
+    expect(
+      literalImport?.props.table?.rows[0]?.cells[
+        literalImport.props.table.columns[0]!.id
+      ]?.text
+    ).toBe('a <br> b');
   });
 
   it('duplicates, moves, clears and colors rows and columns', () => {

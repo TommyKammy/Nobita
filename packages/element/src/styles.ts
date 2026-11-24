@@ -550,6 +550,17 @@ input, select, textarea { font: inherit; color: inherit; }
     color-mix(in srgb, var(--nb-cell-bg) 28%, var(--nb-surface))
   );
 }
+.nb-table-selection {
+  position: absolute;
+  z-index: 2;
+  display: none;
+  border: 2px solid var(--nb-accent);
+  border-radius: 2px;
+  background: var(--nb-accent-soft);
+  pointer-events: none;
+}
+.nb-table-selection[data-visible="true"] { display: block; }
+.nb-table.is-selecting .nb-table-cell { user-select: none; }
 .nb-table-cell-wrap.is-row-selected {
   box-shadow: inset 0 2px 0 var(--nb-accent), inset 0 -2px 0 var(--nb-accent);
 }

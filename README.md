@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **70.9 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
+- **72.1 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 70.9 KB bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 72.1 KB bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -174,7 +174,7 @@ A document is deliberately simple, stable JSON:
 
 **Table** and **Database** are separate blocks.
 
-- A `table` block is a simple editable grid (`props.table`). It follows AFFiNE's table model: row/column handles sit on the first cell edges, selection and menus are integrated into the grid, hover plus controls add rows/columns, and row/column background colors are available. It has no properties or views.
+- A `table` block is a simple editable grid (`props.table`). It follows AFFiNE's table model: row/column handles sit on the first cell edges, drag selection covers multiple cells (copy, cut and clear), menus are integrated into the grid, hover plus controls add rows/columns, and row/column background colors are available. It has no properties or views.
 - A `database` block is the typed data view (`props.database`). It has typed columns, row records and one or more named views.
 
 ```json
@@ -366,8 +366,8 @@ Bundle sizes:
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 269.6 KB | **70.9 KB** |
-| Demo app (editor + UI + seed data) | 301.2 KB | 81.1 KB |
+| Editor ESM (`nobita.js`) | 274.7 KB | **72.1 KB** |
+| Demo app (editor + UI + seed data) | 306.4 KB | 82.3 KB |
 
 The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.
 

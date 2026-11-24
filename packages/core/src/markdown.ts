@@ -143,6 +143,19 @@ function splitTableRow(line: string): string[] {
     .map(cell => cell.trim().replaceAll(placeholder, '|'));
 }
 
+const TABLE_LT = '\u0000LT\u0000';
+const TABLE_GT = '\u0000GT\u0000';
+
+function decodeTableText(value: string): string {
+  const protectedText = value
+    .replace(/\\</gu, TABLE_LT)
+    .replace(/\\>/gu, TABLE_GT)
+    .replace(/<br\s*\/?>/giu, '\n');
+  return plainText(parseInlineMarkdown(protectedText))
+    .replaceAll(TABLE_LT, '<')
+    .replaceAll(TABLE_GT, '>');
+}
+
 function isTableSeparator(line: string): boolean {
   const cells = splitTableRow(line);
   return cells.length > 0 && cells.every(cell => /^:?-{3,}:?$/u.test(cell));
@@ -228,7 +241,7 @@ export function markdownToBlocks(
       const tableRows = [createTableRow()];
       headerCells.forEach((value, columnIndex) => {
         const column = columns[columnIndex];
-        if (column && value) tableRows[0]!.cells[column.id] = { text: plainText(parseInlineMarkdown(value)) };
+        if (column && value) tableRows[0]!.cells[column.id] = { text: decodeTableText(value) };
       });
       index += 2;
       while (index < lines.length) {
@@ -237,7 +250,7 @@ export function markdownToBlocks(
         const cells = splitTableRow(line);
         const row = createTableRow();
         columns.forEach((column, columnIndex) => {
-          const value = plainText(parseInlineMarkdown(cells[columnIndex] ?? ''));
+          const value = decodeTableText(cells[columnIndex] ?? '');
           if (value) row.cells[column.id] = { text: value };
         });
         tableRows.push(row);
@@ -344,7 +357,11 @@ export function markdownToBlocks(
 const SERIALIZE_ESCAPABLE = new Set(['\\', '`', '*', '_', '[', ']']);
 
 function escapeTableText(text: string): string {
-  return escapeInline(text).replace(/\|/gu, '\\|').replace(/\n/gu, '<br>');
+  return escapeInline(text)
+    .replace(/\|/gu, '\\|')
+    .replace(/</gu, '\\<')
+    .replace(/>/gu, '\\>')
+    .replace(/\n/gu, '<br>');
 }
 
 function escapeInline(text: string): string {

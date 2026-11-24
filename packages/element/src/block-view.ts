@@ -248,6 +248,8 @@ export class BlockView {
             return host.readonly;
           },
           commit: (data, options) => host.updateTable(blockId, data, options),
+          undo: () => host.undoTable(),
+          redo: () => host.redoTable(),
         },
         block.props.table ?? createTableData()
       );
