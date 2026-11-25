@@ -17,6 +17,7 @@ import { readRunsFromDom, renderInlineRuns } from './inline-dom.js';
 import {
   TYPE_ICON,
   applyFilesLabel,
+  applyImageLabel,
   applyPeopleLabel,
   attachNumberInput,
   btn,
@@ -24,6 +25,7 @@ import {
   el,
   formatDatabaseNumber,
   iconBtn,
+  parseProgressValue,
   readCellRuns,
   renderTextCellContent,
   runsSignature,
@@ -56,6 +58,7 @@ export interface DatabaseDetailContext {
   openAddPropertyMenu(anchor: HTMLElement): void;
   openFilesPopover(columnId: string, rowId: string, anchor: HTMLElement): void;
   openPeoplePopover(columnId: string, rowId: string, anchor: HTMLElement): void;
+  openImagePopover(columnId: string, rowId: string, anchor: HTMLElement): void;
   richText: DatabaseRichTextController;
 }
 
@@ -475,6 +478,54 @@ export class DatabaseDetailController {
       return field;
     }
 
+    if (column.type === 'progress') {
+      const val = parseProgressValue(cell?.text);
+      const wrap = el('div', 'nb-db-detail-progress');
+      const range = el('input', 'nb-db-detail-range');
+      range.type = 'range';
+      range.min = '0';
+      range.max = '100';
+      range.step = '1';
+      range.disabled = readonly;
+      range.setAttribute('aria-label', column.name);
+      range.value = String(val ?? 0);
+      const valEl = el(
+        'span',
+        'nb-db-detail-progress-val',
+        val === null ? '—' : `${val}%`
+      );
+      range.addEventListener(
+        'input',
+        () => {
+          valEl.textContent = `${range.value}%`;
+          this.#ctx.commitCell(
+            row.id,
+            column.id,
+            { text: range.value },
+            `db:${row.id}:${column.id}`
+          );
+        },
+        { signal: this.#detailEvents.signal }
+      );
+      wrap.append(range, valEl);
+      field.append(wrap);
+      return field;
+    }
+
+    if (column.type === 'image') {
+      const button = btn('nb-db-detail-picker nb-db-detail-image', {
+        disabled: readonly,
+      });
+      applyImageLabel(button, cell?.text, column.name);
+      button.addEventListener(
+        'click',
+        () => this.#ctx.openImagePopover(column.id, row.id, button),
+        { signal: this.#detailEvents.signal }
+      );
+      field.append(button);
+      return field;
+    }
+
     if (column.type === 'files' || column.type === 'people') {
       const button = btn('nb-db-select nb-db-multi nb-db-detail-picker', {
         disabled: readonly,
@@ -656,6 +707,17 @@ export class DatabaseDetailController {
         check.setAttribute('aria-checked', String(Boolean(cell?.checked)));
         continue;
       }
+      if (column.type === 'progress') {
+        const range = field.querySelector<HTMLInputElement>('.nb-db-detail-range');
+        const valEl = field.querySelector<HTMLElement>('.nb-db-detail-progress-val');
+        const val = parseProgressValue(cell?.text);
+        if (range) {
+          const nextVal = String(val ?? 0);
+          if (range.value !== nextVal) range.value = nextVal;
+        }
+        if (valEl) valEl.textContent = val === null ? '—' : `${val}%`;
+        continue;
+      }
       const picker = field.querySelector<HTMLButtonElement>(
         'button.nb-db-detail-picker'
       );
@@ -664,6 +726,8 @@ export class DatabaseDetailController {
           applyFilesLabel(picker, cell?.files ?? [], column.name);
         } else if (column.type === 'people') {
           applyPeopleLabel(picker, cell?.people ?? [], column.name);
+        } else if (column.type === 'image') {
+          applyImageLabel(picker, cell?.text, column.name);
         }
         continue;
       }

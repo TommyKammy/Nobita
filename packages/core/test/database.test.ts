@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cloneDatabaseData,
   createDatabaseColumn,
   createDatabaseData,
   createDatabaseRow,
@@ -816,5 +817,214 @@ describe('database P1 queries', () => {
     expect(
       databaseCellText({ text: '', runs: [{ text: 'Runs' }] }, 'text')
     ).toBe('');
+  });
+
+  it('normalizes, clamps, displays, sorts, filters, groups, and aggregates progress columns', () => {
+    const normalized = normalizeDatabaseData({
+      variant: 'database',
+      columns: [
+        { id: 'title', name: 'Task', type: 'text' },
+        { id: 'pct', name: 'Progress', type: 'progress' },
+      ],
+      rows: [
+        { id: 'r1', cells: { title: { text: 'Neg' }, pct: { text: '-10' } } },
+        { id: 'r2', cells: { title: { text: 'Over' }, pct: { text: '150' } } },
+        { id: 'r3', cells: { title: { text: 'Round' }, pct: { text: '42.6%' } } },
+        { id: 'r4', cells: { title: { text: 'Zero' }, pct: { text: '0' } } },
+        { id: 'r5', cells: { title: { text: 'Bad' }, pct: { text: 'invalid' } } },
+        { id: 'r6', cells: { title: { text: 'Quarter' }, pct: { text: '25' } } },
+        { id: 'r7', cells: { title: { text: 'ThreeQuarter' }, pct: { text: '75' } } },
+      ],
+      views: [
+        {
+          id: 'v1',
+          name: 'Board',
+          type: 'board',
+          groupBy: 'pct',
+          sorts: [{ columnId: 'pct', direction: 'asc' }],
+        },
+      ],
+      activeViewId: 'v1',
+    });
+
+    const pctColumn = normalized.columns[1]!;
+    expect(normalized.rows[0]?.cells.pct).toEqual({ text: '0' });
+    expect(normalized.rows[1]?.cells.pct).toEqual({ text: '100' });
+    expect(normalized.rows[2]?.cells.pct).toEqual({ text: '43' });
+    expect(normalized.rows[3]?.cells.pct).toEqual({ text: '0' });
+    expect(normalized.rows[4]?.cells.pct).toBeUndefined();
+
+    expect(databaseCellDisplay({ text: '0' }, 'progress')).toBe('0%');
+    expect(databaseCellDisplay({ text: '75' }, 'progress')).toBe('75%');
+    expect(databaseCellDisplay({ text: '75%' }, 'progress')).toBe('75%');
+    expect(databaseCellText({ text: '75%' }, 'progress')).toBe('75');
+
+    // Numeric sorting: 0, 0, 25, 43, 75, 100, then empty
+    const sorted = sortedDatabaseRows(normalized);
+    expect(sorted.map(row => row.id)).toEqual(['r1', 'r4', 'r6', 'r3', 'r7', 'r2', 'r5']);
+
+    // Numeric filtering with both '50' and '50%' and empty/non-empty
+    const filterGte50 = filteredDatabaseRows(normalized, {
+      type: 'table',
+      filters: [{ columnId: 'pct', operator: 'greaterThanOrEqual', value: '50' }],
+    });
+    expect(filterGte50.map(row => row.id)).toEqual(['r2', 'r7']);
+
+    const filterGte50Pct = filteredDatabaseRows(normalized, {
+      type: 'table',
+      filters: [{ columnId: 'pct', operator: 'greaterThanOrEqual', value: '50%' }],
+    });
+    expect(filterGte50Pct.map(row => row.id)).toEqual(['r2', 'r7']);
+
+    const filterEmpty = filteredDatabaseRows(normalized, {
+      type: 'table',
+      filters: [{ columnId: 'pct', operator: 'isEmpty' }],
+    });
+    expect(filterEmpty.map(row => row.id)).toEqual(['r5']);
+
+    const filterNotEmpty = filteredDatabaseRows(normalized, {
+      type: 'table',
+      filters: [{ columnId: 'pct', operator: 'isNotEmpty' }],
+    });
+    expect(filterNotEmpty).toHaveLength(6);
+
+    // Numeric stats with % suffix and plain count stats
+    const statRows = [
+      createDatabaseRow({ pct: { text: '0' } }),
+      createDatabaseRow({ pct: { text: '25' } }),
+      createDatabaseRow({ pct: { text: '100' } }),
+      createDatabaseRow({}),
+    ];
+    expect(databaseStatValue(statRows, pctColumn, 'sum')).toBe('125%');
+    expect(databaseStatValue(statRows, pctColumn, 'min')).toBe('0%');
+    expect(databaseStatValue(statRows, pctColumn, 'max')).toBe('100%');
+    expect(databaseStatValue(statRows, pctColumn, 'range')).toBe('100%');
+    expect(databaseStatValue(statRows.slice(0, 3).filter((_, i) => i !== 1), pctColumn, 'average')).toBe('50%');
+    expect(databaseStatValue(statRows, pctColumn, 'countEmpty')).toBe('1');
+    expect(databaseStatValue(statRows, pctColumn, 'countNotEmpty')).toBe('3');
+
+    // Natural numeric group ordering: 0%, 25%, 43%, 75%, 100%, then empty
+    const groups = groupedDatabaseRows(normalized);
+    expect(groups.map(group => group.label)).toEqual([
+      '0%',
+      '25%',
+      '43%',
+      '75%',
+      '100%',
+      'No value',
+    ]);
+  });
+
+  it('normalizes and filters image columns and validates/clones/remaps coverColumnId', () => {
+    const normalized = normalizeDatabaseData({
+      variant: 'database',
+      columns: [
+        { id: 'title', name: 'Name', type: 'text' },
+        { id: 'cover', name: 'Cover', type: 'image' },
+      ],
+      rows: [
+        { id: 'r1', cells: { title: { text: 'HTTPS' }, cover: { text: 'https://example.com/a.png' } } },
+        { id: 'r2', cells: { title: { text: 'Rel' }, cover: { text: '/images/relative.png' } } },
+        { id: 'r3', cells: { title: { text: 'Data' }, cover: { text: 'data:image/png;base64,AAAA' } } },
+        { id: 'r4', cells: { title: { text: 'XSS' }, cover: { text: 'javascript:alert(1)' } } },
+      ],
+      view: {
+        id: 'v-legacy',
+        name: 'Board',
+        type: 'board',
+        filters: [],
+        coverColumnId: 'cover',
+      },
+      views: [
+        { id: 'v1', name: 'Valid Cover', type: 'board', filters: [], coverColumnId: 'cover' },
+        { id: 'v2', name: 'Text Cover', type: 'board', filters: [], coverColumnId: 'title' },
+        { id: 'v3', name: 'Missing Cover', type: 'board', filters: [], coverColumnId: 'missing' },
+      ],
+      activeViewId: 'v1',
+    });
+
+    expect(normalized.rows[0]?.cells.cover).toEqual({ text: 'https://example.com/a.png' });
+    expect(normalized.rows[1]?.cells.cover).toEqual({ text: '/images/relative.png' });
+    expect(normalized.rows[2]?.cells.cover).toEqual({ text: 'data:image/png;base64,AAAA' });
+    expect(normalized.rows[3]?.cells.cover).toBeUndefined();
+
+    // coverColumnId validation
+    expect(normalized.view?.coverColumnId).toBe('cover');
+    expect(normalized.views?.[0]?.coverColumnId).toBe('cover');
+    expect(normalized.views?.[1]?.coverColumnId).toBeUndefined();
+    expect(normalized.views?.[2]?.coverColumnId).toBeUndefined();
+
+    // Image filtering: isEmpty, isNotEmpty, contains
+    const notEmpty = filteredDatabaseRows(normalized, {
+      type: 'table',
+      filters: [{ columnId: 'cover', operator: 'isNotEmpty' }],
+    });
+    expect(notEmpty.map(row => row.id)).toEqual(['r1', 'r2', 'r3']);
+
+    const empty = filteredDatabaseRows(normalized, {
+      type: 'table',
+      filters: [{ columnId: 'cover', operator: 'isEmpty' }],
+    });
+    expect(empty.map(row => row.id)).toEqual(['r4']);
+
+    const contains = filteredDatabaseRows(normalized, {
+      type: 'table',
+      filters: [{ columnId: 'cover', operator: 'contains', value: 'relative.png' }],
+    });
+    expect(contains.map(row => row.id)).toEqual(['r2']);
+
+    // cloneDatabaseData preserves coverColumnId
+    const cloned = cloneDatabaseData(normalized);
+    expect(cloned.view?.coverColumnId).toBe('cover');
+    expect(cloned.views?.[0]?.coverColumnId).toBe('cover');
+
+    // duplicateDatabaseData remaps coverColumnId to the new image column id
+    const duplicated = duplicateDatabaseData(normalized);
+    const newImageColId = duplicated.columns.find(column => column.type === 'image')?.id;
+    expect(newImageColId).toBeDefined();
+    expect(newImageColId).not.toBe('cover');
+    expect(duplicated.view?.coverColumnId).toBe(newImageColId);
+    expect(duplicated.views?.[0]?.coverColumnId).toBe(newImageColId);
+  });
+
+  it('exports progress and image database columns to HTML and Markdown safely', () => {
+    const data: DatabaseData = {
+      variant: 'database',
+      columns: [
+        { id: 'c1', name: 'Name', type: 'text' },
+        { id: 'c2', name: 'Progress', type: 'progress' },
+        { id: 'c3', name: 'Cover', type: 'image' },
+      ],
+      rows: [
+        {
+          id: 'r1',
+          cells: {
+            c1: { text: 'Alpha' },
+            c2: { text: '75' },
+            c3: { text: 'https://example.com/a(1).png' },
+          },
+        },
+        {
+          id: 'r2',
+          cells: {
+            c1: { text: 'Beta' },
+            c2: { text: '0' },
+            c3: { text: 'javascript:alert(1)' },
+          },
+        },
+      ],
+    };
+    const block = createBlock('database', { props: { database: data } });
+
+    const html = blocksToHtml([block]);
+    expect(html).toContain('<td>75%</td>');
+    expect(html).toContain('<td>0%</td>');
+    expect(html).toContain('<td><img src="https://example.com/a(1).png" alt="" loading="lazy"></td>');
+    expect(html).not.toContain('javascript:alert(1)');
+    expect(html).toContain('<td>Beta</td><td>0%</td><td></td>');
+
+    const md = blocksToMarkdown(createDoc({ blocks: [block] }), { title: false });
+    expect(md).toContain('| Alpha | 75% | ![image](https://example.com/a%281%29.png) |');
+    expect(md).toContain('| Beta | 0% |  |');
   });
 });

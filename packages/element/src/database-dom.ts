@@ -4,6 +4,7 @@ import {
   normalizeMark,
   normalizeRuns,
   plainText,
+  safeImageSrc,
 } from '@nobita/core';
 import type {
   BooleanMarkKey,
@@ -33,10 +34,12 @@ import {
 export type CellKind =
   | 'text'
   | 'number'
+  | 'progress'
   | 'date'
   | 'checkbox'
   | 'select'
   | 'multi-select'
+  | 'image'
   | 'files'
   | 'people';
 
@@ -45,16 +48,19 @@ export interface CellNodes {
   text?: HTMLElement;
   input?: HTMLInputElement;
   button?: HTMLButtonElement;
+  progress?: HTMLElement;
 }
 
 export const COLUMN_TYPES: readonly { type: DatabaseColumnType; label: string }[] = [
   { type: 'text', label: 'Text' },
   { type: 'number', label: 'Number' },
+  { type: 'progress', label: 'Progress' },
   { type: 'select', label: 'Select' },
   { type: 'multi-select', label: 'Multi-select' },
   { type: 'date', label: 'Date' },
   { type: 'checkbox', label: 'Checkbox' },
   { type: 'url', label: 'URL' },
+  { type: 'image', label: 'Image' },
   { type: 'files', label: 'Files' },
   { type: 'people', label: 'People' },
 ];
@@ -62,11 +68,13 @@ export const COLUMN_TYPES: readonly { type: DatabaseColumnType; label: string }[
 export const TYPE_ICON: Record<DatabaseColumnType, string> = {
   text: icon.text,
   number: icon.hash,
+  progress: icon.progress,
   select: icon.tag,
   'multi-select': icon.tag,
   date: icon.calendar,
   checkbox: icon.checkboxSquare,
   url: icon.link,
+  image: icon.image,
   files: icon.file,
   people: icon.user,
 };
@@ -191,7 +199,7 @@ export function selectEl(
 export function filterOperators(type: DatabaseColumnType): DatabaseFilterOperator[] {
   const empty: DatabaseFilterOperator[] = ['isEmpty', 'isNotEmpty'];
   if (type === 'checkbox') return ['isChecked', 'isUnchecked', 'is', 'isNot'];
-  if (type === 'number') {
+  if (type === 'number' || type === 'progress') {
     return [
       'equal',
       'notEqual',
@@ -207,6 +215,7 @@ export function filterOperators(type: DatabaseColumnType): DatabaseFilterOperato
   if (type === 'multi-select') {
     return ['containsAny', 'containsAll', 'doesNotContainAny', 'doesNotContainAll', ...empty];
   }
+  if (type === 'image') return ['contains', 'doesNotContain', 'is', 'isNot', ...empty];
   if (type === 'files' || type === 'people') return empty;
   return ['contains', 'doesNotContain', 'startsWith', 'endsWith', 'is', 'isNot', ...empty];
 }
@@ -531,6 +540,67 @@ export function applyMultiLabel(
   }
 }
 
+export function parseProgressValue(value: string | undefined): number | null {
+  if (!value) return null;
+  let trimmed = value.trim();
+  if (trimmed.endsWith('%')) trimmed = trimmed.slice(0, -1).trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+export function applyProgressState(
+  control: HTMLElement,
+  rawValue: string | undefined,
+  columnName: string
+): void {
+  const val = parseProgressValue(rawValue);
+  control.setAttribute('aria-label', columnName);
+  control.setAttribute('aria-valuemin', '0');
+  control.setAttribute('aria-valuemax', '100');
+  const fill = control.querySelector<HTMLElement>('.nb-db-progress-fill');
+  const label = control.querySelector<HTMLElement>('.nb-db-progress-label');
+  if (val === null) {
+    control.removeAttribute('aria-valuenow');
+    control.setAttribute('aria-valuetext', 'Empty');
+    control.dataset.value = '';
+    control.classList.add('is-empty');
+    if (fill) fill.style.width = '0%';
+    if (label) label.textContent = '';
+    return;
+  }
+  control.setAttribute('aria-valuenow', String(val));
+  control.setAttribute('aria-valuetext', `${val}%`);
+  control.dataset.value = String(val);
+  control.classList.remove('is-empty');
+  if (fill) fill.style.width = `${val}%`;
+  if (label) label.textContent = `${val}%`;
+}
+
+export function applyImageLabel(
+  button: HTMLButtonElement,
+  rawSrc: string | undefined,
+  columnName?: string
+): void {
+  const src = safeImageSrc(rawSrc);
+  button.replaceChildren();
+  button.classList.toggle('is-empty', !src);
+  if (columnName) {
+    button.setAttribute('aria-label', src ? `${columnName}: image` : columnName);
+  }
+  if (src) {
+    const img = el('img', 'nb-db-thumb');
+    img.src = src;
+    img.alt = '';
+    img.loading = 'lazy';
+    img.draggable = false;
+    button.append(img);
+    return;
+  }
+  button.append(el('span', 'nb-db-image-empty', 'Add image…'));
+}
+
 export function applyFilesLabel(
   button: HTMLButtonElement,
   files: DatabaseFile[],
@@ -591,6 +661,14 @@ export function convertCell(
       .filter(Boolean);
     return values.length > 0 ? { values } : {};
   }
+  if (targetType === 'progress') {
+    const n = parseProgressValue(value);
+    return n === null ? {} : { text: String(n) };
+  }
+  if (targetType === 'image') {
+    const src = safeImageSrc(value);
+    return src ? { text: src } : {};
+  }
   return value ? { text: value } : {};
 }
 
@@ -611,6 +689,12 @@ export function cellForGroupValue(
     return next;
   }
   delete next.runs;
+  if (column.type === 'progress') {
+    const n = parseProgressValue(groupKey);
+    if (n !== null) next.text = String(n);
+    else delete next.text;
+    return next;
+  }
   if (groupKey) next.text = groupKey;
   else delete next.text;
   return next;
@@ -628,7 +712,10 @@ export function defaultFilterForColumn(column: DatabaseColumn): DatabaseFilter {
       value: column.options?.[0] ?? '',
     };
   }
-  if (column.type === 'number') return { columnId: column.id, operator: 'equal', value: '' };
+  if (column.type === 'number' || column.type === 'progress') {
+    return { columnId: column.id, operator: 'equal', value: '' };
+  }
+  if (column.type === 'image') return { columnId: column.id, operator: 'isNotEmpty' };
   if (column.type === 'date') return { columnId: column.id, operator: 'is', value: '' };
   return { columnId: column.id, operator: 'contains', value: '' };
 }
@@ -675,8 +762,9 @@ export function removeColumnFromView(
           : { iconColumnId: view.header.iconColumnId }),
       }
     : undefined;
+  const { coverColumnId: existingCover, ...baseView } = view;
   return {
-    ...view,
+    ...baseView,
     filters,
     ...(filter ? { filter } : {}),
     ...(groupBy ? { groupBy } : groupRemoved ? { groupProperties: [] } : {}),
@@ -687,6 +775,7 @@ export function removeColumnFromView(
     ...(hiddenColumns.length > 0 ? { hiddenColumns } : {}),
     ...(Object.keys(stats).length > 0 ? { stats } : {}),
     ...(header && Object.keys(header).length > 0 ? { header } : {}),
+    ...(existingCover && existingCover !== columnId ? { coverColumnId: existingCover } : {}),
   };
 }
 

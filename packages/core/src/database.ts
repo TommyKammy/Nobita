@@ -26,11 +26,13 @@ import { safeHref, safeImageSrc } from './url.js';
 export const DATABASE_COLUMN_TYPES: readonly DatabaseColumnType[] = [
   'text',
   'number',
+  'progress',
   'select',
   'multi-select',
   'date',
   'checkbox',
   'url',
+  'image',
   'files',
   'people',
 ];
@@ -236,13 +238,32 @@ function parsePeople(value: unknown): DatabasePerson[] | undefined {
   return people.length > 0 ? people : undefined;
 }
 
-function parseCell(value: unknown): DatabaseCell {
+function parseProgressNumber(raw: string): number | null {
+  let trimmed = raw.trim();
+  if (trimmed.endsWith('%')) {
+    trimmed = trimmed.slice(0, -1).trim();
+  }
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function parseCell(value: unknown, type?: DatabaseColumnType): DatabaseCell {
   if (!isRecord(value)) return {};
   const runs = parseInlineRuns(value.runs);
   const plain = runs.length > 0 ? plainText(runs) : '';
   const text =
     plain ||
     (typeof value.text === 'string' ? value.text.replace(/\r\n?/gu, '\n') : '');
+  if (type === 'progress') {
+    const progress = parseProgressNumber(text);
+    return progress === null ? {} : { text: String(progress) };
+  }
+  if (type === 'image') {
+    const safe = safeImageSrc(text);
+    return safe ? { text: safe } : {};
+  }
   const checked = value.checked === true;
   const values = parseStringList(value.values);
   const files = parseFiles(value.files);
@@ -306,7 +327,7 @@ function parseRow(
   const cells: Record<string, DatabaseCell> = {};
   const rawCells = isRecord(value.cells) ? value.cells : {};
   for (const column of columns) {
-    const cell = parseCell(rawCells[column.id]);
+    const cell = parseCell(rawCells[column.id], column.type);
     if (Object.keys(cell).length > 0) cells[column.id] = cell;
   }
   const pageContent = isRecord(value.page)
@@ -536,6 +557,11 @@ function parseView(
       ? { iconColumnId: headerValue.iconColumnId }
       : {}),
   };
+  const coverColumnId =
+    typeof value.coverColumnId === 'string' &&
+    columns.some(column => column.id === value.coverColumnId && column.type === 'image')
+      ? value.coverColumnId
+      : undefined;
   return {
     id:
       typeof value.id === 'string' && value.id.length > 0 ? value.id : createId('v'),
@@ -558,6 +584,7 @@ function parseView(
     ...(hiddenColumns.length > 0 ? { hiddenColumns } : {}),
     ...(Object.keys(stats).length > 0 ? { stats } : {}),
     ...(Object.keys(header).length > 0 ? { header } : {}),
+    ...(coverColumnId ? { coverColumnId } : {}),
   };
 }
 
@@ -685,6 +712,7 @@ function cloneView(view: DatabaseView): DatabaseView {
     ...(view.hiddenColumns ? { hiddenColumns: [...view.hiddenColumns] } : {}),
     ...(view.stats ? { stats: { ...view.stats } } : {}),
     ...(view.header ? { header: { ...view.header } } : {}),
+    ...(view.coverColumnId ? { coverColumnId: view.coverColumnId } : {}),
   };
 }
 
@@ -758,6 +786,7 @@ function remapView(
           ...(iconHeaderId ? { iconColumnId: iconHeaderId } : {}),
         }
       : undefined;
+  const coverColumnId = view.coverColumnId ? columnMap.get(view.coverColumnId) : undefined;
   return {
     ...(id ? { id } : view.id ? { id: view.id } : {}),
     ...(view.name ? { name: view.name } : {}),
@@ -773,6 +802,7 @@ function remapView(
     ...(hiddenColumns.length > 0 ? { hiddenColumns } : {}),
     ...(Object.keys(stats).length > 0 ? { stats } : {}),
     ...(header && Object.keys(header).length > 0 ? { header } : {}),
+    ...(coverColumnId ? { coverColumnId } : {}),
   };
 }
 
@@ -863,6 +893,11 @@ export function databaseCellText(cell: DatabaseCell | undefined, type: DatabaseC
   if (type === 'multi-select') return (cell.values ?? []).join(', ');
   if (type === 'files') return (cell.files ?? []).map(file => file.name).join(', ');
   if (type === 'people') return (cell.people ?? []).map(person => person.label).join(', ');
+  if (type === 'progress') {
+    const progress = parseProgressNumber(rawCellText(cell));
+    return progress === null ? '' : String(progress);
+  }
+  if (type === 'image') return safeImageSrc(rawCellText(cell)) ?? '';
   return rawCellText(cell);
 }
 
@@ -872,11 +907,16 @@ export function databaseCellDisplay(cell: DatabaseCell | undefined, type: Databa
   if (type === 'multi-select') return (cell.values ?? []).join(' · ');
   if (type === 'files') return (cell.files ?? []).map(file => file.name).join(' · ');
   if (type === 'people') return (cell.people ?? []).map(person => person.label).join(' · ');
+  if (type === 'progress') {
+    const progress = parseProgressNumber(rawCellText(cell));
+    return progress === null ? '' : `${progress}%`;
+  }
+  if (type === 'image') return safeImageSrc(rawCellText(cell)) ?? '';
   return rawCellText(cell);
 }
 
 function comparable(value: string, type: DatabaseColumnType): string | number {
-  if (type === 'number') {
+  if (type === 'number' || type === 'progress') {
     const number = Number.parseFloat(value);
     return Number.isFinite(number) ? number : Number.NaN;
   }
@@ -1052,6 +1092,8 @@ function isEmptyCell(cell: DatabaseCell | undefined, column: DatabaseColumn): bo
   if (column.type === 'multi-select') return !cell.values?.length;
   if (column.type === 'files') return !cell.files?.length;
   if (column.type === 'people') return !cell.people?.length;
+  if (column.type === 'progress') return parseProgressNumber(rawCellText(cell)) === null;
+  if (column.type === 'image') return !safeImageSrc(rawCellText(cell));
   return !rawCellText(cell);
 }
 
@@ -1090,9 +1132,14 @@ function matchesFilter(
       }
       return true;
     }
-    case 'number': {
+    case 'number':
+    case 'progress': {
       const left = Number.parseFloat(current);
-      const right = Number.parseFloat(expected);
+      const normalizedExpected =
+        column.type === 'progress' && expected.endsWith('%')
+          ? expected.slice(0, -1).trim()
+          : expected;
+      const right = Number.parseFloat(normalizedExpected);
       if (!Number.isFinite(left) || !Number.isFinite(right)) {
         return filter.operator === 'notEqual' ? true : false;
       }
@@ -1276,7 +1323,12 @@ export function databaseStatValue(
     return '';
   }
   if (numbers.length === 0) return '';
-  if (type === 'sum') return formatStatNumber(numbers.reduce((sum, value) => sum + value, 0));
+  const suffix = column.type === 'progress' ? '%' : '';
+  const format = (value: number): string => {
+    const formatted = formatStatNumber(value);
+    return formatted ? `${formatted}${suffix}` : '';
+  };
+  if (type === 'sum') return format(numbers.reduce((sum, value) => sum + value, 0));
   if (type === 'min' || type === 'max' || type === 'range') {
     let min = numbers[0] ?? 0;
     let max = min;
@@ -1285,12 +1337,12 @@ export function databaseStatValue(
       if (n < min) min = n;
       if (n > max) max = n;
     }
-    if (type === 'min') return formatStatNumber(min);
-    if (type === 'max') return formatStatNumber(max);
-    return formatStatNumber(max - min);
+    if (type === 'min') return format(min);
+    if (type === 'max') return format(max);
+    return format(max - min);
   }
   if (type === 'average') {
-    return formatStatNumber(numbers.reduce((sum, value) => sum + value, 0) / numbers.length);
+    return format(numbers.reduce((sum, value) => sum + value, 0) / numbers.length);
   }
   const sorted = numbers.slice().sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
@@ -1298,7 +1350,7 @@ export function databaseStatValue(
     sorted.length % 2 === 0
       ? ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2
       : (sorted[middle] ?? 0);
-  return formatStatNumber(median);
+  return format(median);
 }
 
 export interface DatabaseGroup {
@@ -1442,7 +1494,7 @@ export function groupedDatabaseRows(
   }
   return applyGroupSettings(
     [...values.entries()]
-      .sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
+      .sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : TEXT_COLLATOR.compare(a, b)))
       .map(([key, groupRows]) => ({
         key,
         label: key || 'No value',

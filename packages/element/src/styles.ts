@@ -2032,6 +2032,7 @@ input, select, textarea { font: inherit; color: inherit; }
   position: absolute;
   top: 8px;
   right: 8px;
+  z-index: 1;
   display: flex;
   gap: 4px;
   opacity: 0;
@@ -2549,6 +2550,27 @@ select[multiple].nb-db-detail-input {
 }
 .nb-db-filter-add:hover { background: var(--nb-hover); color: var(--nb-text); }
 .nb-db-filter-empty { padding: 8px 4px; color: var(--nb-text-tertiary); font-size: 12px; }
+.nb-db-progress { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 4px; cursor: pointer; border-radius: 4px; outline: none; }
+.nb-db-progress:focus-visible { box-shadow: inset 0 0 0 1.5px var(--nb-accent); }
+.nb-db[data-readonly="true"] .nb-db-progress { cursor: default; }
+.nb-db-progress-track { flex: 1 1 auto; min-width: 48px; height: 6px; border-radius: 999px; background: var(--nb-border); overflow: hidden; }
+.nb-db-progress-fill { height: 100%; border-radius: inherit; background: var(--nb-accent); transition: width 60ms ease; }
+.nb-db-progress-label { flex: 0 0 auto; min-width: 32px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--nb-text-secondary); }
+.nb-db-image-cell { padding: 2px 6px; }
+.nb-db-thumb { height: 22px; max-width: 56px; border-radius: 3px; object-fit: cover; display: block; }
+.nb-db-img-preview { margin-bottom: 8px; border-radius: 6px; overflow: hidden; background: var(--nb-bg-subtle); border: 1px solid var(--nb-border); }
+.nb-db-img-preview img { display: block; width: 100%; max-height: 140px; object-fit: cover; }
+.nb-db-detail-progress { display: flex; align-items: center; gap: 10px; width: 100%; }
+.nb-db-detail-range { flex: 1 1 auto; accent-color: var(--nb-accent); }
+.nb-db-detail-progress-val { min-width: 34px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--nb-text-secondary); }
+.nb-db-detail-image .nb-db-thumb { height: 28px; max-width: 80px; }
+.nb-db-card-cover { margin: -8px -8px 8px; border-radius: 7px 7px 0 0; overflow: hidden; background: var(--nb-bg-subtle); border-bottom: 1px solid var(--nb-border); }
+.nb-db-card-cover img { display: block; width: 100%; height: 112px; object-fit: cover; }
+.nb-db-card-thumb { width: 14px; height: 14px; border-radius: 2px; object-fit: cover; flex: 0 0 auto; }
+.nb-db-mini-bar { width: 32px; height: 4px; border-radius: 999px; background: var(--nb-border); overflow: hidden; display: inline-flex; }
+.nb-db-mini-bar > span { display: block; height: 100%; background: var(--nb-accent); }
+.nb-db-cover-setting { margin-bottom: 8px; }
+.nb-db-cover-hint { font-size: 11px; color: var(--nb-text-tertiary); margin-top: 2px; }
 
 :is(.nb-db, .nb-db-detail, .nb-db-popover, .nb-db-inline-toolbar)
   :is(button, [role="button"], select, a[href], input:not(.nb-db-input), [tabindex]:not(.nb-db)):focus-visible,

@@ -3,6 +3,7 @@ import {
   databaseCellDisplay,
   databaseSorts,
   groupedDatabaseRows,
+  safeImageSrc,
 } from '@nobita/core';
 import type {
   DatabaseCell,
@@ -21,6 +22,7 @@ import {
   formatDatabaseNumber,
   iconBtn,
   mergeOrder,
+  parseProgressValue,
   seedGroupSettings,
   withText,
 } from './database-dom.js';
@@ -189,6 +191,30 @@ export class DatabaseBoardController {
     }
   }
 
+  #coverSrc(row: DatabaseRow, view: DatabaseViewConfig): string | null {
+    const coverId = view.coverColumnId;
+    if (!coverId) return null;
+    if (
+      !this.#ctx
+        .getData()
+        .columns.some(column => column.id === coverId && column.type === 'image')
+    ) {
+      return null;
+    }
+    return safeImageSrc(row.cells[coverId]?.text);
+  }
+
+  #renderCover(src: string): HTMLElement {
+    const cover = el('div', 'nb-db-card-cover');
+    const img = document.createElement('img');
+    img.src = src;
+    img.alt = '';
+    img.loading = 'lazy';
+    img.draggable = false;
+    cover.append(img);
+    return cover;
+  }
+
   #renderCard(
     row: DatabaseRow,
     titleColumn: DatabaseColumn | undefined,
@@ -275,6 +301,11 @@ export class DatabaseBoardController {
       if (target.closest('.nb-db-card-title, .nb-db-card-ops')) return;
       this.#ctx.openDetailPanel(row.id);
     }, { signal });
+    const coverSrc = this.#coverSrc(row, view);
+    if (coverSrc) {
+      card.classList.add('has-cover');
+      card.append(this.#renderCover(coverSrc));
+    }
     const title = el('div', 'nb-db-card-title');
     const cell = titleColumn ? row.cells[titleColumn.id] : undefined;
     const value = titleColumn
@@ -431,6 +462,34 @@ export class DatabaseBoardController {
     const fields = el('div', 'nb-db-card-fields');
     for (const column of columns) {
       if (column.id === titleColumn?.id || column.id === view.groupBy) continue;
+      if (column.id === view.coverColumnId && column.type === 'image') continue;
+      if (column.type === 'progress') {
+        const pct = parseProgressValue(row.cells[column.id]?.text);
+        if (pct === null) continue;
+        const field = el('span', 'nb-db-card-field nb-db-card-progress');
+        field.title = `${column.name}: ${pct}%`;
+        const bar = el('span', 'nb-db-mini-bar');
+        const fill = document.createElement('span');
+        fill.style.width = `${pct}%`;
+        bar.append(fill);
+        field.append(bar, el('span', undefined, `${pct}%`));
+        fields.append(field);
+        continue;
+      }
+      if (column.type === 'image') {
+        const src = safeImageSrc(row.cells[column.id]?.text);
+        if (!src) continue;
+        const field = el('span', 'nb-db-card-field nb-db-card-image');
+        field.title = column.name;
+        const thumb = el('img', 'nb-db-card-thumb');
+        thumb.src = src;
+        thumb.alt = '';
+        thumb.loading = 'lazy';
+        thumb.draggable = false;
+        field.append(thumb, el('span', undefined, column.name));
+        fields.append(field);
+        continue;
+      }
       const display =
         column.type === 'number'
           ? formatDatabaseNumber(row.cells[column.id]?.text ?? '', column)
@@ -465,6 +524,20 @@ export class DatabaseBoardController {
       const row = rowById.get(rowId);
       if (!row) continue;
       if (!force && prevColumnsSame && prevRowById?.get(rowId) === row) continue;
+      const nextCover = this.#coverSrc(row, view);
+      const existingCover = card.querySelector<HTMLElement>('.nb-db-card-cover');
+      if (nextCover) {
+        if (existingCover) {
+          const img = existingCover.querySelector<HTMLImageElement>('img');
+          if (img && img.getAttribute('src') !== nextCover) img.src = nextCover;
+        } else {
+          card.prepend(this.#renderCover(nextCover));
+          card.classList.add('has-cover');
+        }
+      } else if (existingCover) {
+        existingCover.remove();
+        card.classList.remove('has-cover');
+      }
       const title = card.querySelector<HTMLElement>('.nb-db-card-title');
       if (
         title &&

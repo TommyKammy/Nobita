@@ -97,6 +97,8 @@ export const icon = {
   filter: wrap('<path d="M3.5 5.5h13M6 10h8M8.5 14.5h3"/>'),
   search: wrap('<circle cx="8.8" cy="8.8" r="5.3"/><path d="m12.8 12.8 4.2 4.2"/>'),
   expand: wrap('<path d="M3.5 7V3.5H7M13 3.5h3.5V7M16.5 13v3.5H13M7 16.5H3.5V13"/>'),
+  progress: wrap('<rect x="2.5" y="7" width="15" height="6" rx="3"/><rect x="4" y="8.5" width="7.5" height="3" rx="1.5" fill="currentColor" stroke="none"/>'),
+  image: wrap('<rect x="2.5" y="4" width="15" height="12" rx="2"/><circle cx="7.2" cy="8.2" r="1.2" fill="currentColor" stroke="none"/><path d="m4.5 14 3.5-3.5 2.5 2.5 2.2-2.2 2.8 3.2"/>'),
 } as const;
 
 export function blockIcon(type: BlockType, level?: HeadingLevel): string {

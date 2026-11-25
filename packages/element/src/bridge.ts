@@ -4,6 +4,9 @@ import type { BlockView } from './block-view.js';
 /** Surface the block view needs from the editor. Implemented by NobitaEditor. */
 export interface BlockHost {
   readonly readonly: boolean;
+  readonly uploadImage?:
+    | ((file: File) => string | { src: string } | Promise<string | { src: string }>)
+    | undefined;
   registerView(view: BlockView): void;
   unregisterView(blockId: string): void;
   focusBlock(blockId: string, offset?: number): void;

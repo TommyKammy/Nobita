@@ -23,10 +23,12 @@ export type TextAlign = 'left' | 'center' | 'right';
 export type DatabaseColumnType =
   | 'text'
   | 'number'
+  | 'progress'
   | 'select'
   | 'date'
   | 'checkbox'
   | 'url'
+  | 'image'
   | 'multi-select'
   | 'files'
   | 'people';
@@ -209,6 +211,8 @@ export interface DatabaseView {
     titleColumnId?: string;
     iconColumnId?: string;
   };
+  /** Optional image column displayed as board card covers. */
+  coverColumnId?: string | null;
 }
 
 export interface DatabaseData {

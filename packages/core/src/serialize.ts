@@ -307,6 +307,10 @@ function databaseToHtml(data: NonNullable<Block['props']['database']>): string {
           if (column.type === 'checkbox') {
             return `<td><input type="checkbox" disabled${cell?.checked ? ' checked' : ''}></td>`;
           }
+          if (column.type === 'image') {
+            const src = safeImageSrc(cell?.text);
+            return src ? `<td><img src="${escapeHtml(src)}" alt="" loading="lazy"></td>` : '<td></td>';
+          }
           if (column.type === 'text' && cell?.runs && cell.runs.length > 0) {
             return `<td>${runsToInlineHtml(cell.runs)}</td>`;
           }
