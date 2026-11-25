@@ -107,9 +107,10 @@ Stable exports include:
   `blocksToHtml`
 - Editing commands: `setBlockType`, `setBlockAlign`, `toggleChecked`,
   `setCodeLanguage`, `setCalloutTone`, `insertBlockAfter`, etc.
-- Data views: `DatabaseView`, `DatabaseViewColumn`, `DatabaseFilter`,
-  `DatabaseFilterGroup`, `DatabaseFilterNode`, `DatabaseGroupProperty`,
-  `DatabaseStatType`, `databaseView`, `databaseViews`, `databaseSorts`,
+- Data views: `DatabaseView`, `DatabaseViewColumn`, `DatabaseCell`,
+  `DatabaseRow`, `DatabaseRowPage`, `DatabaseFilter`, `DatabaseFilterGroup`,
+  `DatabaseFilterNode`, `DatabaseGroupProperty`, `DatabaseStatType`,
+  `databaseView`, `databaseViews`, `databaseSorts`,
   `databaseFilterGroup`, `databaseTitleColumn`, `databaseVisibleColumns`,
   `databaseViewColumnStates`, `filteredDatabaseRows`, `searchDatabaseRows`,
   `groupedDatabaseRows`, `databaseStatValue`
@@ -119,7 +120,7 @@ Stable exports include:
   `clearTableRow`, `clearTableColumn`, `setTableCellText`, `setTableColumnWidth`,
   `setTableRowColor`, `setTableColumnColor`
 - Store: `EditorStore`
-- Validation/URL helpers: `safeHref`, `safeImageSrc`
+- Validation/URL helpers: `parseInlineRuns`, `safeHref`, `safeImageSrc`
 
 The package is DOM-free and can run in Node.js. `Doc.version` currently is `1`;
 document migrations must keep that boundary explicit.

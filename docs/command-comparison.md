@@ -2,7 +2,7 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **86.8 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **90.7 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
 > `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
@@ -47,7 +47,7 @@ The P0/P1 passes have already closed alignment, dates, Heading 4–6,
 2. **Block selection** (Escape, Shift+Arrow, Cmd+A stages) is absent. Nobita can
    select text across blocks, but non-text blocks (image, database, divider, page)
    cannot be selected as blocks.
-3. **Database search**, nested typed filters, multi-sort, multiple views, per-view columns, footer statistics and row detail are implemented; calendar view remains.
+3. **Database search**, nested typed filters, multi-sort, multiple views, per-view columns, footer statistics, rich-text cells and row pages are implemented; calendar view remains intentionally out of scope.
 4. **Database drag selection**, drag fill, row selection/deletion and TSV copy/paste are implemented.
 5. **Page workspace / `[[` / comments** are app-level features that should
    not be pulled into the editor core casually. Mentions and page references
@@ -183,8 +183,8 @@ table/board views.
 | AFFiNE | Nobita | Notes |
 | --- | --- | --- |
 | Table view | ✅ | Database view; simple tables are a separate `table` block |
-| Kanban view | ✅ | Board view with select/checkbox grouping and card drag |
-| Calendar view | ❌ | Needs date property + calendar grid |
+| Kanban view | ✅ | Board view with card add/open/reorder, group actions and select/checkbox grouping |
+| Calendar view | ❌ | Intentionally out of scope |
 | Todo/data view | ❌ | Feature-flagged in AFFiNE |
 | Multiple views per database | ✅ | Named table/board views |
 | Add / rename / duplicate / delete view | ✅ | View bar and menu |
@@ -291,8 +291,8 @@ the editor core just for parity:
   YouTube/GitHub/Figma/Loom/iframe embeds.
 - **Math:** LaTeX rendering and inline equations.
 - **Navigation graph:** linked docs, backlinks, synced docs.
-- **Full data-view framework:** row pages, calendar view, rich-text/progress/image
-  properties and formulas/relations.
+- **Full data-view framework:** calendar view, progress/image properties and
+  formulas/relations (rich-text cells and row pages are implemented).
 - **AI features.**
 
 ## 9. Priorities
@@ -327,8 +327,8 @@ the editor core just for parity:
      Delete selected, batch duplicate/copy.
    - Makes image/database/table/divider selectable and unlocks table-from-selection.
    - Est. 4–6 KB plus careful tests.
-2. **Database calendar view and rich-text cells.**
-   - The table-first database rebuild now covers view settings, nested filters, per-view columns and row detail.
+2. **Database calendar view.**
+   - Rich-text cells, editable row pages and board add/reorder/group actions are now implemented. Calendar remains intentionally out of scope.
 3. **Create Table from selected blocks** (toolbar/block selection).
    - Convert blocks into database rows; requires block selection first.
    - Est. 2–3 KB.
@@ -338,8 +338,8 @@ the editor core just for parity:
 
 ### P2 — large or scope expansion
 
-- Calendar database view.
-- Row detail pages (the current row detail panel is data-only) and rich-text title/property cells.
+- Calendar database view (intentionally out of scope).
+- Progress/image properties, formulas/relations and AFFiNE card covers.
 - Page workspace navigation, `[[`, backlinks.
 - Comments and collaboration.
 - Attachments/PDF, managed image hosting, bookmark previews, embeds.
@@ -357,6 +357,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 86.8 KB gzip. Phase 1 data views added about 7.5 KB gzip,
+The current editor is 90.7 KB gzip. Phase 1 data views added about 7.5 KB gzip,
 Phase 2 references/input added about 2.4 KB, page links about 1.3 KB, table/database P1 about 27.0 KB and the
-database UI alignment/hover/toolbar pass about 0.6 KB; remaining items are incremental on top of the existing view model.
+database UI alignment/hover/toolbar pass about 0.6 KB and the P2 rich-text/row-page/board pass about 3.9 KB; remaining items are incremental on top of the existing view model.

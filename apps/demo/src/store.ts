@@ -2,6 +2,7 @@ import {
   createBlock,
   createDatabaseColumn,
   createDatabaseRow,
+  createDatabaseView,
   createDoc,
   createTableData,
   parseDoc,
@@ -10,6 +11,7 @@ import {
   duplicateBlockTree,
   type Block,
   type CalloutTone,
+  type DatabaseView,
   type Doc,
   type HeadingLevel,
 } from '@nobita/core';
@@ -58,8 +60,21 @@ const divider = (): Block => createBlock('divider');
 const database = (
   _variant: 'table' | 'database',
   columns: ReturnType<typeof createDatabaseColumn>[],
-  rows: ReturnType<typeof createDatabaseRow>[]
-): Block => createBlock('database', { props: { database: { variant: 'database', columns, rows } } });
+  rows: ReturnType<typeof createDatabaseRow>[],
+  views?: DatabaseView[],
+  activeViewId?: string
+): Block =>
+  createBlock('database', {
+    props: {
+      database: {
+        variant: 'database',
+        columns,
+        rows,
+        ...(views ? { views } : {}),
+        ...(activeViewId ? { activeViewId } : {}),
+      },
+    },
+  });
 
 const simpleTable = (rows: string[][]): Block => {
   const table = createTableData({ rows: rows.length, columns: rows[0]?.length ?? 1 });
@@ -265,6 +280,54 @@ const editor = createEditor(document.querySelector('#editor'), {
   const owner = { ...createDatabaseColumn('Owner'), width: 120 };
   const due = { ...createDatabaseColumn('Due', 'date'), width: 120 };
   const done = { ...createDatabaseColumn('Done', 'checkbox'), width: 86 };
+  const columns = [
+    { id: task.id, width: 186 },
+    { id: status.id, width: 130 },
+    { id: owner.id, width: 120 },
+    { id: due.id, width: 120 },
+    { id: done.id, width: 86 },
+  ];
+  const tableView = createDatabaseView('table', 'Table');
+  tableView.columns = columns;
+  const boardView = createDatabaseView('board', 'Board');
+  boardView.groupBy = status.id;
+  boardView.columns = columns;
+
+  const rows = [
+    createDatabaseRow({
+      [task.id]: { text: 'Ship the data view' },
+      [status.id]: { text: 'In progress' },
+      [owner.id]: { text: 'Ada' },
+      [due.id]: { text: '2026-12-01' },
+    }),
+    createDatabaseRow({
+      [task.id]: { text: 'Write markdown round-trip' },
+      [status.id]: { text: 'Done' },
+      [owner.id]: { text: 'Lin' },
+      [due.id]: { text: '2026-11-28' },
+      [done.id]: { checked: true },
+    }),
+    createDatabaseRow({
+      [task.id]: { text: 'Board view' },
+      [status.id]: { text: 'Todo' },
+      [owner.id]: { text: 'You' },
+    }),
+    createDatabaseRow({
+      [task.id]: { text: 'Filter and group' },
+      [status.id]: { text: 'Todo' },
+      [owner.id]: { text: 'Unassigned' },
+    }),
+  ];
+  rows[0]!.cells[task.id] = {
+    text: 'Ship the data view',
+    runs: parseInlineMarkdown('**Ship** the data view'),
+  };
+  rows[0]!.page = {
+    content: [
+      { text: 'Launch checklist\n', marks: { bold: true } },
+      { text: 'Review the table, then open the board view.' },
+    ],
+  };
 
   pages['data-views'] = page(
     'data-views',
@@ -276,31 +339,13 @@ const editor = createEditor(document.querySelector('#editor'), {
         'Tables and databases are one compact data-view block. Cells are typed, rows are plain data, and everything exports cleanly to JSON, Markdown and HTML.'
       ),
       heading(2, 'Roadmap database'),
-      database('database', [task, status, owner, due, done], [
-        createDatabaseRow({
-          [task.id]: { text: 'Ship the data view' },
-          [status.id]: { text: 'In progress' },
-          [owner.id]: { text: 'Ada' },
-          [due.id]: { text: '2026-12-01' },
-        }),
-        createDatabaseRow({
-          [task.id]: { text: 'Write markdown round-trip' },
-          [status.id]: { text: 'Done' },
-          [owner.id]: { text: 'Lin' },
-          [due.id]: { text: '2026-11-28' },
-          [done.id]: { checked: true },
-        }),
-        createDatabaseRow({
-          [task.id]: { text: 'Board view' },
-          [status.id]: { text: 'Todo' },
-          [owner.id]: { text: 'You' },
-        }),
-        createDatabaseRow({
-          [task.id]: { text: 'Filter and group' },
-          [status.id]: { text: 'Todo' },
-          [owner.id]: { text: 'Unassigned' },
-        }),
-      ]),
+      database(
+        'database',
+        [task, status, owner, due, done],
+        rows,
+        [tableView, boardView],
+        tableView.id
+      ),
       heading(2, 'Simple table'),
       simpleTable([
         ['Slash menu', '/', 'Insert any block'],

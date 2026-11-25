@@ -1,10 +1,11 @@
 import type { Block } from '@nobita/core';
-import { createDatabaseData, createTableData, safeHref, safeImageSrc } from '@nobita/core';
+import { createDatabaseData, createTableData, safeImageSrc } from '@nobita/core';
 import type { BlockHost } from './bridge.js';
 import { DatabaseView, type DatabaseHost } from './database-view.js';
 import { SimpleTableView } from './table-view.js';
 import { domPointToOffset, nativeSelection } from './dom.js';
 import { icon } from './icons.js';
+import { renderInlineRuns } from './inline-dom.js';
 
 const CODE_LANGUAGES = [
   'text',
@@ -342,61 +343,7 @@ export class BlockView {
   #renderRuns(): void {
     const text = this.#text;
     if (!text) return;
-    if (this.block.text.length === 0) {
-      text.replaceChildren();
-      return;
-    }
-    const fragment = document.createDocumentFragment();
-    for (const run of this.block.text) {
-      const span = document.createElement('span');
-      span.textContent = run.text;
-      const marks = run.marks;
-      if (marks) {
-        const classes: string[] = [];
-        const tokens: string[] = [];
-        if (marks.bold) {
-          classes.push('nb-m-bold');
-          tokens.push('bold');
-        }
-        if (marks.italic) {
-          classes.push('nb-m-italic');
-          tokens.push('italic');
-        }
-        if (marks.underline) {
-          classes.push('nb-m-underline');
-          tokens.push('underline');
-        }
-        if (marks.strike) {
-          classes.push('nb-m-strike');
-          tokens.push('strike');
-        }
-        if (marks.code) {
-          classes.push('nb-m-code');
-          tokens.push('code');
-        }
-        if (marks.link) {
-          const safe = safeHref(marks.link);
-          if (safe) {
-            classes.push('nb-m-link');
-            span.dataset.link = safe;
-            span.title = safe;
-          }
-        }
-        if (marks.highlight) span.dataset.highlight = marks.highlight;
-        if (marks.color) span.dataset.textColor = marks.color;
-        if (marks.mention) {
-          classes.push('nb-m-mention');
-          span.dataset.mentionId = marks.mention.id;
-          span.dataset.mentionLabel = marks.mention.label;
-          if (marks.mention.kind) span.dataset.mentionKind = marks.mention.kind;
-          span.contentEditable = 'false';
-        }
-        if (classes.length > 0) span.className = classes.join(' ');
-        if (tokens.length > 0) span.dataset.mark = tokens.join(' ');
-      }
-      fragment.append(span);
-    }
-    text.replaceChildren(fragment);
+    renderInlineRuns(text, this.block.text);
   }
 
   #openPage(): void {

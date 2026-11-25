@@ -166,6 +166,7 @@ export type { MergeResult, SplitResult } from './doc.js';
 export {
   MARK_KEYS,
   applyMarkPatch,
+  cloneRuns,
   deleteTextRange,
   insertTextAt,
   markKey,
@@ -175,6 +176,7 @@ export {
   marksEqual,
   normalizeMark,
   normalizeRuns,
+  parseInlineRuns,
   plainText,
   runsFromText,
   runsLength,

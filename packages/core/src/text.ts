@@ -60,6 +60,41 @@ export function marksEqual(a: InlineMark | undefined, b: InlineMark | undefined)
   return markKey(a) === markKey(b);
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Validate and normalize runs from plain JSON. */
+export function parseInlineRuns(value: unknown): InlineRun[] {
+  if (!Array.isArray(value)) return [];
+  const runs: InlineRun[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const text =
+      typeof item.text === 'string'
+        ? item.text.replace(/\r\n?/gu, '\n')
+        : '';
+    if (!text) continue;
+    const marks = normalizeMark(item.marks as InlineMark);
+    runs.push(marks ? { text, marks } : { text });
+  }
+  return normalizeRuns(runs);
+}
+
+/** Deep-clone runs, including nested mention metadata. */
+export function cloneRuns(runs: readonly InlineRun[]): InlineRun[] {
+  return runs.map(run => ({
+    ...run,
+    ...(run.marks
+      ? {
+          marks: {
+            ...run.marks,
+            ...(run.marks.mention ? { mention: { ...run.marks.mention } } : {}),
+          },
+        }
+      : {}),
+  }));
+}
+
 /** Merge adjacent runs with equal marks and drop empty runs. */
 export function normalizeRuns(runs: readonly InlineRun[]): InlineRun[] {
   const out: InlineRun[] = [];

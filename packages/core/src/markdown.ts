@@ -224,8 +224,12 @@ function databaseTableToLines(data: NonNullable<Block['props']['database']>): st
   const lines = [header, separator];
   for (const row of sortedDatabaseRows(data)) {
     const cells = data.columns.map(column => {
-      if (column.type === 'checkbox') return row.cells[column.id]?.checked ? '[x]' : '[ ]';
-      return escapeCell(databaseCellText(row.cells[column.id], column.type));
+      const cell = row.cells[column.id];
+      if (column.type === 'checkbox') return cell?.checked ? '[x]' : '[ ]';
+      if (column.type === 'text' && cell?.runs && cell.runs.length > 0) {
+        return escapeCell(inlineToMarkdown(cell.runs));
+      }
+      return escapeCell(databaseCellText(cell, column.type));
     });
     lines.push(`| ${cells.join(' | ')} |`);
   }
