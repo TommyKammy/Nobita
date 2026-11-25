@@ -360,6 +360,33 @@ test('preserves multi-select membership when reordering inside a group', async (
   expect(values).toEqual(['Todo', 'Done']);
 });
 
+test('appends a card dropped into empty space in its own group', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+  await showBoard(page);
+
+  const todo = page.locator('.nb-db-board-column[data-group="Todo"]');
+  const box = await todo.boundingBox();
+  if (!box) throw new Error('Missing Todo column');
+  await todo
+    .locator('.nb-db-card[data-row-id="r1"]')
+    .dragTo(todo, {
+      targetPosition: { x: 20, y: box.height - 8 },
+    });
+  const doc = await getDoc(page);
+  const view = (doc.blocks[0]?.props.database as {
+    views: Array<{
+      id: string;
+      groupProperties?: Array<{ key: string; manuallyCardSort?: string[] }>;
+    }>;
+  }).views.find(item => item.id === 'v-board');
+  expect(
+    view?.groupProperties?.find(group => group.key === 'Todo')?.manuallyCardSort
+  ).toEqual(['r2', 'r1']);
+});
+
 test('reorders board cards within and across groups', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);

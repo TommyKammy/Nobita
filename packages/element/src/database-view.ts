@@ -3673,13 +3673,7 @@ export class DatabaseView {
     const sorts = databaseSorts(view).length > 0;
     const sameGroup = sourceGroup.key === targetGroupKey;
     if (sameGroup && sorts) return;
-    if (
-      sameGroup &&
-      (!targetRowId || targetRowId === rowId) &&
-      !sorts
-    ) {
-      return;
-    }
+    if (sameGroup && targetRowId === rowId) return;
 
     let targetOrder = (
       groups.find(group => group.key === targetGroupKey)?.rows ?? []
