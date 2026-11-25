@@ -1145,7 +1145,8 @@ export class NobitaEditor implements BlockHost {
 
     body.addEventListener(
       'compositionstart',
-      () => {
+      event => {
+        if (this.#isNestedField(event.target)) return;
         this.#composing = true;
         this.#compositionBlockId = this.#activeBlockId(null);
         this.#syncPlaceholders();
@@ -1155,7 +1156,8 @@ export class NobitaEditor implements BlockHost {
 
     body.addEventListener(
       'compositionend',
-      () => {
+      event => {
+        if (this.#isNestedField(event.target)) return;
         this.#composing = false;
         const blockId = this.#compositionBlockId ?? this.#activeBlockId(null);
         this.#compositionBlockId = null;
