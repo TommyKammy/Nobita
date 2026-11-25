@@ -337,8 +337,10 @@ test('does not use board title paste for table grid import', async ({ page }) =>
   });
 
   const data = await databaseState(page);
+  expect(data.columns).toHaveLength(1);
   expect(data.rows).toHaveLength(2);
-  expect(data.rows[0]?.cells.name?.text).toBe('One');
+  expect(data.rows[0]?.cells.name?.text).not.toBe('A');
+  expect(data.rows[0]?.cells.name?.text).toContain('A\tB');
 });
 
 test('parses quoted spreadsheet fields before applying TSV', async ({ page }) => {

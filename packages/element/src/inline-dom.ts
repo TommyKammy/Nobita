@@ -70,6 +70,196 @@ const isBlockElement = (node: Node): boolean => {
   return tag === 'DIV' || tag === 'P' || tag === 'LI';
 };
 
+const stripZeroWidth = (text: string): string => text.replace(/\u200B|\uFEFF/gu, '');
+
+function rawOffsetForCleanOffset(raw: string, cleanOffset: number): number {
+  if (cleanOffset <= 0) return 0;
+  let seen = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i]!;
+    if (ch === '\u200B' || ch === '\uFEFF') continue;
+    seen += 1;
+    if (seen === cleanOffset) return i + 1;
+  }
+  return raw.length;
+}
+
+/**
+ * Convert a DOM point inside `root` to an offset in the plain text produced by
+ * `readRunsFromDom(root)`, accounting for block-generated newlines and stripped zero-width chars.
+ */
+export function domPointToRunsOffset(
+  root: HTMLElement,
+  node: Node,
+  offset: number
+): number {
+  let total = 0;
+  let endsWithNewline = false;
+  let result = 0;
+  let found = false;
+
+  const addText = (text: string): void => {
+    const clean = stripZeroWidth(text);
+    if (!clean) return;
+    total += clean.length;
+    endsWithNewline = clean.endsWith('\n');
+  };
+
+  const addNewline = (): void => {
+    total += 1;
+    endsWithNewline = true;
+  };
+
+  const visit = (current: Node): void => {
+    if (found) return;
+    if (current.nodeType === Node.TEXT_NODE) {
+      const data = (current as Text).data;
+      if (current === node) {
+        const clamped = Math.max(0, Math.min(offset, data.length));
+        result = total + stripZeroWidth(data.slice(0, clamped)).length;
+        found = true;
+        return;
+      }
+      addText(data);
+      return;
+    }
+    if (current.nodeType !== Node.ELEMENT_NODE) return;
+    const element = current as Element;
+    if (element.tagName === 'BR') {
+      if (current === node) {
+        result = total;
+        found = true;
+        return;
+      }
+      addNewline();
+      return;
+    }
+    if (current !== root && isBlockElement(element) && total > 0 && !endsWithNewline) {
+      addNewline();
+    }
+    const children = Array.from(element.childNodes);
+    const limit =
+      current === node
+        ? Math.max(0, Math.min(offset, children.length))
+        : children.length;
+    for (let index = 0; index < limit; index += 1) {
+      const child = children[index];
+      if (!child) continue;
+      if (current === root && child.nodeName === 'BR' && child === root.lastChild) {
+        continue;
+      }
+      visit(child);
+      if (found) return;
+    }
+    if (current === node) {
+      result = total;
+      found = true;
+    }
+  };
+
+  visit(root);
+  return found ? result : total;
+}
+
+/**
+ * Convert an offset in `readRunsFromDom(root)` plain text back to a DOM point inside `root`.
+ */
+export function runsOffsetToDomPoint(
+  root: HTMLElement,
+  offset: number
+): { node: Node; offset: number } {
+  const target = Math.max(0, offset);
+  let total = 0;
+  let endsWithNewline = false;
+  let lastText: Text | null = null;
+
+  const visit = (node: Node): { node: Node; offset: number } | null => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const textNode = node as Text;
+      const clean = stripZeroWidth(textNode.data);
+      const end = total + clean.length;
+      if (target <= end) {
+        const localClean = Math.max(0, target - total);
+        return {
+          node: textNode,
+          offset: rawOffsetForCleanOffset(textNode.data, localClean),
+        };
+      }
+      total = end;
+      if (clean.length > 0) endsWithNewline = clean.endsWith('\n');
+      lastText = textNode;
+      return null;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return null;
+    const element = node as Element;
+    if (element.tagName === 'BR') {
+      const parent = element.parentNode ?? root;
+      const index = Array.from(parent.childNodes).indexOf(element as ChildNode);
+      if (target <= total) return { node: parent, offset: Math.max(0, index) };
+      if (target <= total + 1) return { node: parent, offset: Math.max(0, index + 1) };
+      total += 1;
+      endsWithNewline = true;
+      lastText = null;
+      return null;
+    }
+    if (
+      element !== root &&
+      element.getAttribute('contenteditable') === 'false'
+    ) {
+      const length = domPointToRunsOffset(
+        element as HTMLElement,
+        element,
+        element.childNodes.length
+      );
+      const end = total + length;
+      const parent = element.parentNode ?? root;
+      const index = Array.from(parent.childNodes).indexOf(element as ChildNode);
+      if (target <= total) return { node: parent, offset: Math.max(0, index) };
+      if (target <= end) return { node: parent, offset: Math.max(0, index + 1) };
+      total = end;
+      if (length > 0) endsWithNewline = false;
+      lastText = null;
+      return null;
+    }
+    if (element !== root && isBlockElement(element) && total > 0 && !endsWithNewline) {
+      if (target <= total) {
+        if (lastText) return { node: lastText, offset: lastText.data.length };
+        const parent = element.parentNode ?? root;
+        const index = Array.from(parent.childNodes).indexOf(element as ChildNode);
+        return { node: parent, offset: Math.max(0, index) };
+      }
+      total += 1;
+      endsWithNewline = true;
+      lastText = null;
+    }
+    for (const child of Array.from(element.childNodes)) {
+      if (element === root && child.nodeName === 'BR' && child === root.lastChild) {
+        continue;
+      }
+      const point = visit(child);
+      if (point) return point;
+    }
+    if (
+      element !== root &&
+      isBlockElement(element) &&
+      target <= total &&
+      element.childNodes.length === 0
+    ) {
+      return { node: element, offset: 0 };
+    }
+    return null;
+  };
+
+  const point = visit(root);
+  if (point) return point;
+  const last = lastText as Text | null;
+  if (last) return { node: last, offset: last.data.length };
+  if (root.lastChild?.nodeName === 'BR' && target <= total) {
+    return { node: root, offset: Math.max(0, root.childNodes.length - 1) };
+  }
+  return { node: root, offset: root.childNodes.length };
+}
+
 /**
  * Reconstruct runs from whatever the browser produced. Used for composition,
  * autocorrect, spellcheck replacements and other inputs we deliberately do not
@@ -121,7 +311,13 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
       return;
     }
     const nextMarks = marksFromElement(element, marks);
-    if (isBlockElement(element) && buffer && !buffer.endsWith('\n')) append('\n', undefined);
+    const cleanBuffer = stripZeroWidth(buffer);
+    const lastChar = cleanBuffer
+      ? cleanBuffer[cleanBuffer.length - 1]
+      : runs[runs.length - 1]?.text.slice(-1);
+    if (isBlockElement(element) && lastChar && lastChar !== '\n') {
+      append('\n', undefined);
+    }
     for (const child of Array.from(element.childNodes)) walk(child, nextMarks);
     const mentionId =
       element.getAttribute('data-nb-mention-id') ??

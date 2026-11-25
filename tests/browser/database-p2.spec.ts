@@ -330,6 +330,217 @@ test('toggles pending formatting off at a collapsed caret', async ({ page }) => 
   expect(saved?.runs).toBeUndefined();
 });
 
+test('switches back to plain text after typing formatted text with a collapsed caret', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+  const cell = page.locator(
+    '.nb-db-cell[data-row-id="r2"][data-column-id="name"] .nb-db-rich-text'
+  );
+  await cell.fill('');
+  await cell.press('End');
+  await page.keyboard.press('Control+b');
+  await page.keyboard.type('Bold');
+  await page.keyboard.press('Control+b');
+  await page.keyboard.type('Plain');
+  await expect(cell).toHaveText('BoldPlain');
+  const doc = await getDoc(page);
+  const saved = (doc.blocks[0]?.props.database as {
+    rows: Array<{
+      id: string;
+      cells: Record<
+        string,
+        { text?: string; runs?: Array<{ text: string; marks?: Record<string, unknown> }> }
+      >;
+    }>;
+  }).rows.find(row => row.id === 'r2')?.cells.name;
+  expect(saved?.text).toBe('BoldPlain');
+  expect(saved?.runs).toEqual([
+    { text: 'Bold', marks: { bold: true } },
+    { text: 'Plain' },
+  ]);
+});
+
+test('sanitizes pasted content and keeps detail text single-line', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  const row = page.locator('.nb-db-table tbody tr[data-row-id="r2"]');
+  await row.hover();
+  await row.locator('.nb-db-row-expand').click();
+
+  const detailText = page.locator(
+    '.nb-db-detail-field[data-column-id="owner"] .nb-db-detail-text'
+  );
+  await detailText.click();
+  await detailText.press('End');
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector('.nb-db-detail-text');
+    const data = new DataTransfer();
+    data.setData('text/html', '<b>X</b><script>alert(1)</script>');
+    data.setData('text/plain', '\nX');
+    target?.dispatchEvent(
+      new ClipboardEvent('paste', { bubbles: true, clipboardData: data })
+    );
+  });
+  await expect(detailText).toHaveText('Lin X');
+  await page.keyboard.press('Enter');
+  await expect(detailText).not.toBeFocused();
+
+  const pageBody = page.locator('.nb-db-page-text');
+  await pageBody.click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector('.nb-db-page-text');
+    const data = new DataTransfer();
+    data.setData('text/html', '<strong>Html</strong>');
+    data.setData('text/plain', 'Line 1\r\nLine 2');
+    target?.dispatchEvent(
+      new ClipboardEvent('paste', { bubbles: true, clipboardData: data })
+    );
+  });
+  await expect(pageBody).toContainText('Line 1\nLine 2');
+  await expect(pageBody.locator('strong, script')).toHaveCount(0);
+
+  await page.keyboard.press('Escape');
+  await showBoard(page);
+  const title = page.locator('.nb-db-card[data-row-id="r2"] .nb-db-card-title');
+  await title.click();
+  await title.press('End');
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector(
+      '.nb-db-card[data-row-id="r2"] .nb-db-card-title'
+    );
+    const data = new DataTransfer();
+    data.setData('text/html', '<b>Card</b>');
+    data.setData('text/plain', '!\nNext');
+    target?.dispatchEvent(
+      new ClipboardEvent('paste', { bubbles: true, clipboardData: data })
+    );
+  });
+  await expect(title).toHaveText('Two! Next');
+  await expect(title.locator('b')).toHaveCount(0);
+});
+
+test('keeps search input mounted and defers filtering during IME composition', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+
+  await page.locator('.nb-db-search-toggle').click();
+  const search = page.locator('.nb-db-search');
+  await expect(search).toBeFocused();
+
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const input = root?.querySelector<HTMLInputElement>('.nb-db-search');
+    if (!input) throw new Error('Missing search input');
+    (window as unknown as { __searchInput?: HTMLInputElement }).__searchInput = input;
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    input.value = 'Two';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+  });
+  await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(3);
+
+  await page.evaluate(() => {
+    const input = (window as unknown as { __searchInput?: HTMLInputElement })
+      .__searchInput;
+    input?.dispatchEvent(
+      new CompositionEvent('compositionend', { bubbles: true, data: 'Two' })
+    );
+  });
+  await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(1);
+  const sameNode = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const current = root?.querySelector<HTMLInputElement>('.nb-db-search');
+    return (
+      current ===
+      (window as unknown as { __searchInput?: HTMLInputElement }).__searchInput
+    );
+  });
+  expect(sameNode).toBe(true);
+});
+
+test('defers rich-text cell commits during IME composition', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+
+  const cell = page.locator(
+    '.nb-db-cell[data-row-id="r2"][data-column-id="name"] .nb-db-rich-text'
+  );
+  await cell.click();
+  await cell.press('End');
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector<HTMLElement>(
+      '.nb-db-cell[data-row-id="r2"][data-column-id="name"] .nb-db-rich-text'
+    );
+    if (!target) throw new Error('Missing cell');
+    target.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    target.textContent = 'Twoあ';
+    target.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+  });
+
+  let doc = await getDoc(page);
+  let text = (doc.blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  }).rows.find(row => row.id === 'r2')?.cells.name?.text;
+  expect(text).toBe('Two');
+
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector<HTMLElement>(
+      '.nb-db-cell[data-row-id="r2"][data-column-id="name"] .nb-db-rich-text'
+    );
+    target?.dispatchEvent(
+      new CompositionEvent('compositionend', { bubbles: true, data: 'あ' })
+    );
+  });
+
+  doc = await getDoc(page);
+  text = (doc.blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  }).rows.find(row => row.id === 'r2')?.cells.name?.text;
+  expect(text).toBe('Twoあ');
+});
+
+test('preserves unrelated multi-select tags when dragging across board groups', async ({
+  page,
+}) => {
+  const doc = multiGroupDoc();
+  const database = doc.blocks[0]!.props.database as unknown as {
+    columns: Array<{ id: string; options?: string[] }>;
+    rows: Array<{ id: string; cells: Record<string, { values?: string[] }> }>;
+  };
+  database.columns.find(col => col.id === 'tags')!.options = [
+    'Todo',
+    'Urgent',
+    'Done',
+  ];
+  database.rows[0]!.cells.tags = { values: ['Todo', 'Urgent'] };
+
+  await openFixture(page);
+  await setDoc(page, doc);
+  await showBoard(page);
+
+  const todo = page.locator('.nb-db-board-column[data-group="Todo"]');
+  const done = page.locator('.nb-db-board-column[data-group="Done"]');
+  await todo
+    .locator('.nb-db-card[data-row-id="r1"]')
+    .dragTo(done.locator('.nb-db-card[data-row-id="r2"]'), {
+      targetPosition: { x: 20, y: 4 },
+    });
+
+  const nextDoc = await getDoc(page);
+  const values = (nextDoc.blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { values?: string[] }> }>;
+  }).rows.find(row => row.id === 'r1')?.cells.tags?.values;
+  expect(values).toEqual(['Urgent', 'Done']);
+});
+
 test('persists an editable row page body', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
@@ -478,4 +689,458 @@ test('reorders board cards within and across groups', async ({ page }) => {
   expect(
     view?.groupProperties?.find(group => group.key === 'Todo')?.manuallyCardSort
   ).toEqual(['r2', 'r3', 'r1']);
+});
+
+test('toggles bold off across multiple runs with mixed marks', async ({ page }) => {
+  const doc = p2Doc();
+  const database = doc.blocks[0]!.props.database as unknown as {
+    rows: Array<{ id: string; cells: Record<string, unknown> }>;
+  };
+  database.rows[0]!.cells.name = {
+    text: 'Hello world',
+    runs: [
+      { text: 'Hello ', marks: { bold: true, italic: true } },
+      { text: 'world', marks: { bold: true } },
+    ],
+  };
+
+  await openFixture(page);
+  await setDoc(page, doc);
+
+  const cell = page.locator(
+    '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+  );
+  await cell.click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const text = root?.querySelector(
+      '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+    );
+    if (!text) throw new Error('Missing rich text cell');
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const selection = root!.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+
+  await page.locator('.nb-db-inline-tool[data-tag="strong"]').click();
+
+  const nextDoc = await getDoc(page);
+  const saved = (nextDoc.blocks[0]?.props.database as {
+    rows: Array<{
+      id: string;
+      cells: Record<string, { text?: string; runs?: Array<{ text: string; marks?: Record<string, unknown> }> }>;
+    }>;
+  }).rows.find(row => row.id === 'r1')?.cells.name;
+  expect(saved?.text).toBe('Hello world');
+  expect(saved?.runs).toEqual([
+    { text: 'Hello ', marks: { italic: true } },
+    { text: 'world' },
+  ]);
+});
+
+test('removes bold only on a partial slice inside mixed-mark runs', async ({
+  page,
+}) => {
+  const doc = p2Doc();
+  const database = doc.blocks[0]!.props.database as unknown as {
+    rows: Array<{ id: string; cells: Record<string, unknown> }>;
+  };
+  database.rows[0]!.cells.name = {
+    text: 'Hello world',
+    runs: [
+      { text: 'Hello ', marks: { bold: true } },
+      { text: 'world', marks: { bold: true, italic: true } },
+    ],
+  };
+
+  await openFixture(page);
+  await setDoc(page, doc);
+
+  const cell = page.locator(
+    '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+  );
+  await cell.click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const text = root?.querySelector(
+      '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+    );
+    if (!text) throw new Error('Missing rich text cell');
+    const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+    walker.nextNode();
+    const second = walker.nextNode();
+    if (!second) throw new Error('Missing second text node');
+    const range = document.createRange();
+    range.setStart(second, 0);
+    range.setEnd(second, 2);
+    const selection = root!.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+
+  await page.locator('.nb-db-inline-tool[data-tag="strong"]').click();
+
+  const nextDoc = await getDoc(page);
+  const saved = (nextDoc.blocks[0]?.props.database as {
+    rows: Array<{
+      id: string;
+      cells: Record<string, { text?: string; runs?: Array<{ text: string; marks?: Record<string, unknown> }> }>;
+    }>;
+  }).rows.find(row => row.id === 'r1')?.cells.name;
+  expect(saved?.text).toBe('Hello world');
+  expect(saved?.runs).toEqual([
+    { text: 'Hello ', marks: { bold: true } },
+    { text: 'wo', marks: { italic: true } },
+    { text: 'rld', marks: { bold: true, italic: true } },
+  ]);
+});
+
+test('preserves cell DOM mid-composition in a sorted table and re-sorts on compositionend', async ({
+  page,
+}) => {
+  const doc = p2Doc();
+  const database = doc.blocks[0]!.props.database as unknown as {
+    views: Array<{ id: string; sorts?: Array<{ columnId: string; direction: string }> }>;
+  };
+  database.views.find(view => view.id === 'v-table')!.sorts = [
+    { columnId: 'name', direction: 'asc' },
+  ];
+
+  await openFixture(page);
+  await setDoc(page, doc);
+
+  const cell = page.locator(
+    '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+  );
+  await cell.click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector<HTMLElement>(
+      '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+    );
+    if (!target) throw new Error('Missing sorted cell');
+    (window as unknown as { __sortedCell?: HTMLElement }).__sortedCell = target;
+    target.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    target.textContent = 'ZZZ';
+    target.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+  });
+
+  const sameBeforeEnd = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const current = root?.querySelector<HTMLElement>(
+      '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+    );
+    return (
+      current ===
+      (window as unknown as { __sortedCell?: HTMLElement }).__sortedCell
+    );
+  });
+  expect(sameBeforeEnd).toBe(true);
+
+  let nextDoc = await getDoc(page);
+  let r1Text = (nextDoc.blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  }).rows.find(row => row.id === 'r1')?.cells.name?.text;
+  expect(r1Text).toBe('One');
+
+  await page.evaluate(() => {
+    const target = (window as unknown as { __sortedCell?: HTMLElement })
+      .__sortedCell;
+    target?.dispatchEvent(
+      new CompositionEvent('compositionend', { bubbles: true, data: 'ZZZ' })
+    );
+  });
+
+  nextDoc = await getDoc(page);
+  r1Text = (nextDoc.blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  }).rows.find(row => row.id === 'r1')?.cells.name?.text;
+  expect(r1Text).toBe('ZZZ');
+
+  const rowOrder = await page
+    .locator('.nb-db-table tbody tr[data-row-id]')
+    .evaluateAll(rows => rows.map(row => row.getAttribute('data-row-id')));
+  expect(rowOrder).toEqual(['r3', 'r2', 'r1']);
+});
+
+test('keeps board card drop indicator when dragleave targets a child element', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+  await showBoard(page);
+
+  const card = page.locator('.nb-db-card[data-row-id="r1"]');
+  const box = await card.boundingBox();
+  if (!box) throw new Error('Missing card box');
+
+  await page.evaluate(
+    ({ x, y }) => {
+      const root = document.querySelector('nobita-editor')?.shadowRoot;
+      const target = root?.querySelector<HTMLElement>(
+        '.nb-db-card[data-row-id="r1"]'
+      );
+      if (!target) throw new Error('Missing card');
+      target.dispatchEvent(
+        new DragEvent('dragover', {
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: y,
+        })
+      );
+    },
+    { x: box.x + box.width / 2, y: box.y + 4 }
+  );
+  await expect(card).toHaveClass(/is-drop-before/);
+
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector<HTMLElement>(
+      '.nb-db-card[data-row-id="r1"]'
+    );
+    const child = target?.querySelector<HTMLElement>('.nb-db-card-title') ?? null;
+    target?.dispatchEvent(
+      new DragEvent('dragleave', {
+        bubbles: true,
+        relatedTarget: child,
+      })
+    );
+  });
+  await expect(card).toHaveClass(/is-drop-before/);
+
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector<HTMLElement>(
+      '.nb-db-card[data-row-id="r1"]'
+    );
+    target?.dispatchEvent(
+      new DragEvent('dragleave', {
+        bubbles: true,
+        relatedTarget: null,
+      })
+    );
+  });
+  await expect(card).not.toHaveClass(/is-drop-before/);
+});
+
+test('tracks horizontal scroll for the fill handle via requestAnimationFrame', async ({
+  page,
+}) => {
+  const doc = p2Doc();
+  const database = doc.blocks[0]!.props.database as unknown as {
+    columns: Array<{ id: string; name: string; type: string }>;
+    views: Array<{
+      id: string;
+      columns: Array<{ id: string; width: number }>;
+    }>;
+  };
+  const tableView = database.views.find(view => view.id === 'v-table')!;
+  for (let i = 1; i <= 6; i += 1) {
+    const id = `extra${i}`;
+    database.columns.push({ id, name: `Extra ${i}`, type: 'text' });
+    tableView.columns.push({ id, width: 220 });
+  }
+
+  await openFixture(page);
+  await setDoc(page, doc);
+
+  const cell = page.locator(
+    '.nb-db-cell[data-row-id="r1"][data-column-id="status"]'
+  );
+  await cell.click();
+  const handle = page.locator('.nb-db-fill-handle');
+  await expect(handle).toHaveAttribute('data-visible', 'true');
+
+  const beforeLeft = await handle.evaluate(el =>
+    Number.parseFloat((el as HTMLElement).style.left)
+  );
+
+  const result = await page.evaluate(
+    () =>
+      new Promise<{ afterLeft: number; expectedLeft: number }>(resolve => {
+        const root = document.querySelector('nobita-editor')?.shadowRoot;
+        const scroll = root?.querySelector<HTMLElement>('.nb-db-scroll');
+        const td = root?.querySelector<HTMLElement>(
+          '.nb-db-cell[data-row-id="r1"][data-column-id="status"]'
+        );
+        const fill = root?.querySelector<HTMLElement>('.nb-db-fill-handle');
+        if (!scroll || !td || !fill) throw new Error('Missing scroll/cell/handle');
+        scroll.scrollLeft = 100;
+        scroll.dispatchEvent(new Event('scroll'));
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            resolve({
+              afterLeft: Number.parseFloat(fill.style.left),
+              expectedLeft: Math.round(td.getBoundingClientRect().right - 1),
+            });
+          });
+        });
+      })
+  );
+
+  expect(result.afterLeft).toBeLessThan(beforeLeft);
+  expect(result.afterLeft).toBe(result.expectedLeft);
+});
+
+test('aligns block-generated newline offsets for formatting and pasting in row page body', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+
+  const row = page.locator('.nb-db-table tbody tr[data-row-id="r1"]');
+  await row.hover();
+  await row.locator('.nb-db-row-expand').click();
+
+  const pageBody = page.locator('.nb-db-page-text');
+  await pageBody.click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const body = root?.querySelector<HTMLElement>('.nb-db-page-text');
+    if (!body) throw new Error('Missing page body');
+    body.innerHTML = 'abc<div>def</div>';
+    const defText = body.querySelector('div')?.firstChild;
+    if (!defText) throw new Error('Missing def text node');
+    const range = document.createRange();
+    range.setStart(defText, 0);
+    range.setEnd(defText, 3);
+    const selection = root!.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+
+  await page.locator('.nb-db-inline-tool[data-tag="strong"]').click();
+
+  let doc = await getDoc(page);
+  let saved = (doc.blocks[0]?.props.database as {
+    rows: Array<{
+      id: string;
+      page?: { content: Array<{ text: string; marks?: Record<string, unknown> }> };
+    }>;
+  }).rows.find(item => item.id === 'r1')?.page?.content;
+  expect(saved).toEqual([
+    { text: 'abc\n' },
+    { text: 'def', marks: { bold: true } },
+  ]);
+
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const body = root?.querySelector<HTMLElement>('.nb-db-page-text');
+    if (!body) throw new Error('Missing page body');
+    body.innerHTML = 'abc<div>def</div>';
+    const div = body.querySelector('div');
+    if (!div) throw new Error('Missing block div');
+    const range = document.createRange();
+    range.setStart(div, 0);
+    range.collapse(true);
+    const selection = root!.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const data = new DataTransfer();
+    data.setData('text/plain', 'X');
+    body.dispatchEvent(
+      new ClipboardEvent('paste', { bubbles: true, clipboardData: data })
+    );
+  });
+
+  doc = await getDoc(page);
+  saved = (doc.blocks[0]?.props.database as {
+    rows: Array<{
+      id: string;
+      page?: { content: Array<{ text: string; marks?: Record<string, unknown> }> };
+    }>;
+  }).rows.find(item => item.id === 'r1')?.page?.content;
+  expect(saved?.map(run => run.text).join('')).toBe('abc\nXdef');
+});
+
+test('ignores Enter keydown during IME composition across database text hosts', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+
+  // Table cell
+  const cell = page.locator(
+    '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+  );
+  await cell.click();
+  const cellResult = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector<HTMLElement>(
+      '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+    );
+    if (!target) throw new Error('Missing table cell');
+    target.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    const event = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+      isComposing: true,
+    });
+    target.dispatchEvent(event);
+    return {
+      defaultPrevented: event.defaultPrevented,
+      stillFocused: root?.activeElement === target,
+    };
+  });
+  expect(cellResult).toEqual({ defaultPrevented: false, stillFocused: true });
+
+  // Detail text field
+  const row = page.locator('.nb-db-table tbody tr[data-row-id="r1"]');
+  await row.hover();
+  await row.locator('.nb-db-row-expand').click();
+  const detailText = page.locator(
+    '.nb-db-detail-field[data-column-id="owner"] .nb-db-detail-text'
+  );
+  await detailText.click();
+  const detailResult = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector<HTMLElement>('.nb-db-detail-text');
+    if (!target) throw new Error('Missing detail text');
+    target.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    const event = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+      isComposing: true,
+    });
+    target.dispatchEvent(event);
+    return {
+      defaultPrevented: event.defaultPrevented,
+      stillFocused: root?.activeElement === target,
+    };
+  });
+  expect(detailResult).toEqual({ defaultPrevented: false, stillFocused: true });
+
+  // Board card title
+  await page.keyboard.press('Escape');
+  await showBoard(page);
+  const title = page.locator('.nb-db-card[data-row-id="r1"] .nb-db-card-title');
+  await title.click();
+  const boardResult = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector<HTMLElement>(
+      '.nb-db-card[data-row-id="r1"] .nb-db-card-title'
+    );
+    if (!target) throw new Error('Missing board card title');
+    target.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    const event = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+      isComposing: true,
+    });
+    target.dispatchEvent(event);
+    return {
+      defaultPrevented: event.defaultPrevented,
+      stillFocused: root?.activeElement === target,
+    };
+  });
+  expect(boardResult).toEqual({ defaultPrevented: false, stillFocused: true });
 });
