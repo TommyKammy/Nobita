@@ -474,4 +474,62 @@ describe('simple table', () => {
       ],
     });
   });
+
+  it('distinguishes real newlines from literal <br> inside code-marked table cells in Markdown', () => {
+    const table = createTableData({ rows: 2, columns: 2 });
+    const [c1, c2] = table.columns;
+    const [r1, r2] = table.rows;
+    let edited = setTableCellRuns(table, r1!.id, c1!.id, [
+      { text: 'one\ntwo', marks: { code: true } },
+    ]);
+    edited = setTableCellRuns(edited, r1!.id, c2!.id, [
+      { text: 'one<br>two', marks: { code: true } },
+    ]);
+    edited = setTableCellRuns(edited, r2!.id, c1!.id, [
+      { text: 'top\nbottom', marks: { bold: true, code: true } },
+    ]);
+    edited = setTableCellRuns(edited, r2!.id, c2!.id, [
+      { text: 'trail\n', marks: { code: true } },
+    ]);
+
+    const block = createBlock('table', { id: 't', props: { table: edited } });
+    const markdown = blocksToMarkdown(createDoc({ blocks: [block] }), { title: false });
+    expect(markdown).toContain('| `one`<br>`two` | `one<br>two` |');
+    expect(markdown).toContain('| **`top`**<br>**`bottom`** | `trail`<br> |');
+
+    const imported = markdownToBlocks(markdown, { extractTitle: false }).blocks.find(
+      item => item.type === 'table'
+    );
+    const impTable = imported?.props.table!;
+    const [ic1, ic2] = impTable.columns;
+    const [ir1, ir2] = impTable.rows;
+
+    expect(ir1?.cells[ic1!.id]).toEqual({
+      text: 'one\ntwo',
+      runs: [
+        { text: 'one', marks: { code: true } },
+        { text: '\n' },
+        { text: 'two', marks: { code: true } },
+      ],
+    });
+    expect(ir1?.cells[ic2!.id]).toEqual({
+      text: 'one<br>two',
+      runs: [{ text: 'one<br>two', marks: { code: true } }],
+    });
+    expect(ir2?.cells[ic1!.id]).toEqual({
+      text: 'top\nbottom',
+      runs: [
+        { text: 'top', marks: { bold: true, code: true } },
+        { text: '\n' },
+        { text: 'bottom', marks: { bold: true, code: true } },
+      ],
+    });
+    expect(ir2?.cells[ic2!.id]).toEqual({
+      text: 'trail\n',
+      runs: [
+        { text: 'trail', marks: { code: true } },
+        { text: '\n' },
+      ],
+    });
+  });
 });

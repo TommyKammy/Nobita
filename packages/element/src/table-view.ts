@@ -67,11 +67,17 @@ interface TableAreaBounds {
 
 function writeCellText(element: HTMLElement, value: string): void {
   element.replaceChildren();
+  if (!value) return;
   const lines = value.split('\n');
   lines.forEach((line, index) => {
     if (index > 0) element.append(document.createElement('br'));
     if (line) element.append(document.createTextNode(line));
   });
+  // `readRunsFromDom` ignores a trailing root `<br>` as a browser placeholder,
+  // so an explicit trailing newline needs a sentinel `<br>` after it.
+  if (value.endsWith('\n')) {
+    element.append(document.createElement('br'));
+  }
 }
 
 function dots(vertical = false): HTMLElement {

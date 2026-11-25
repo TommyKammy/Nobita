@@ -1008,3 +1008,53 @@ test('blocks handles, shortcuts, and paste in readonly simple tables', async ({ 
       .rows[0]?.cells.c1
   ).toEqual({ text: 'A' });
 });
+
+test('preserves trailing newlines when editing earlier text in a plain table cell', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'table-trailing-newline',
+    title: '',
+    blocks: [
+      {
+        id: 't1',
+        type: 'table',
+        text: [],
+        props: {
+          table: {
+            columns: [{ id: 'c1' }, { id: 'c2' }],
+            rows: [{ id: 'r1', cells: { c1: { text: 'hello\n' } } }],
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+
+  const cellSelector = '.nb-table-cell[data-row-id="r1"][data-column-id="c1"]';
+  const cell = page.locator(cellSelector);
+  await cell.click();
+  await page.evaluate(sel => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const el = root?.querySelector<HTMLElement>(sel);
+    const textNode = el?.firstChild;
+    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
+      throw new Error('Missing leading text node');
+    }
+    const range = document.createRange();
+    range.setStart(textNode, 2);
+    range.collapse(true);
+    const selection = root!.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }, cellSelector);
+  await page.keyboard.type('X');
+
+  const doc = await getDoc(page);
+  expect(
+    (doc.blocks[0]?.props.table as { rows: Array<{ cells: Record<string, { text?: string; runs?: unknown[] }> }> })
+      .rows[0]?.cells.c1
+  ).toEqual({ text: 'heXllo\n' });
+});

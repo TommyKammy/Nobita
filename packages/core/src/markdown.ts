@@ -493,13 +493,30 @@ function runsToMarkdown(runs: readonly InlineRun[]): string {
   return serializeRunsToMarkdown(runs, escapeInline, escapeInline, false);
 }
 
+function expandTableCodeNewlines(runs: readonly InlineRun[]): InlineRun[] {
+  const out: InlineRun[] = [];
+  for (const run of runs) {
+    const marks = run.marks;
+    if (!marks?.code || !run.text.includes('\n')) {
+      out.push(run);
+      continue;
+    }
+    const parts = run.text.split('\n');
+    parts.forEach((part, index) => {
+      if (index > 0) out.push({ text: '\n' });
+      if (part) out.push({ text: part, marks });
+    });
+  }
+  return out;
+}
+
 function serializeTableCell(cell: TableCell | undefined): string {
   if (!cell) return '';
   if (cell.runs && cell.runs.length > 0) {
     return serializeRunsToMarkdown(
-      cell.runs,
+      expandTableCodeNewlines(cell.runs),
       escapeTableText,
-      text => text.replace(/\|/gu, '\\|').replace(/\n/gu, '<br>'),
+      text => text.replace(/\|/gu, '\\|'),
       true
     );
   }
