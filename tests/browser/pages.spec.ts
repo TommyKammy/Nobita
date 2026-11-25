@@ -972,3 +972,79 @@ test('strips marks.page from pending bold formatting in table cells and refreshe
   expect(typed?.marks?.bold).toBe(true);
   expect(typed?.marks?.page).toBeUndefined();
 });
+
+test('preserves focus and selection in another paragraph when delayed [[Title]] lookup resolves', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'wiki-async-selection',
+    title: '',
+    blocks: [
+      { id: 'b1', type: 'paragraph', text: [], props: {}, children: [] },
+      { id: 'b2', type: 'paragraph', text: [{ text: 'Second paragraph' }], props: {}, children: [] },
+    ],
+  });
+  await page.evaluate(() => {
+    const resolvers: Array<() => void> = [];
+    (window as unknown as { __flushPageSearch: () => void }).__flushPageSearch = () => {
+      while (resolvers.length > 0) resolvers.shift()?.();
+    };
+    const editor = (window as unknown as {
+      __editor?: {
+        setPageProvider(provider: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    editor?.setPageProvider({
+      search: (query: string) =>
+        new Promise(resolve => {
+          resolvers.push(() => {
+            const all = [{ id: 'p-road', title: 'Roadmap', icon: '🗺️' }];
+            const q = query.trim().toLowerCase();
+            resolve(all.filter(item => !q || item.title.toLowerCase().includes(q)));
+          });
+        }),
+    });
+    editor?.focus('b1', 0);
+  });
+
+  await page.keyboard.type('[[Roadmap]]');
+
+  // Move focus to the second paragraph and select "Second" before the async lookup finishes.
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { focus(blockId: string, offset?: number): void };
+    }).__editor;
+    editor?.focus('b2', 0);
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const textEl = root?.querySelector('[data-block-id="b2"] .nb-text');
+    const textNode = textEl?.firstChild?.firstChild;
+    const sel =
+      (root as ShadowRoot & { getSelection?: () => Selection | null })?.getSelection?.() ??
+      window.getSelection();
+    if (textNode && sel) {
+      const range = document.createRange();
+      range.setStart(textNode, 0);
+      range.setEnd(textNode, 6);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
+
+  // Resolve the pending lookup for b1.
+  await page.evaluate(() => {
+    (window as unknown as { __flushPageSearch?: () => void }).__flushPageSearch?.();
+  });
+
+  await expect
+    .poll(async () => blockById(await getDoc(page), 'b1')?.runs[0]?.marks?.page?.id)
+    .toBe('p-road');
+
+  // Selection in b2 must remain intact — typing replaces "Second" in b2, not b1.
+  await page.keyboard.type('Updated');
+  const doc = await getDoc(page);
+  expect(blockById(doc, 'b1')?.text).toBe('Roadmap');
+  expect(blockById(doc, 'b2')?.text).toBe('Updated paragraph');
+});

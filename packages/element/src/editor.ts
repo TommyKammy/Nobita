@@ -3442,7 +3442,8 @@ export class NobitaEditor implements BlockHost {
     ) {
       return;
     }
-    const selectionBefore = this.#currentSelection();
+    const selectionBefore =
+      this.#selectedBlockIds.size === 0 ? this.#currentSelection() : null;
     const pageId = exact.id.trim();
     if (!pageId) return;
     const pageTitle = exact.title.trim() || 'Untitled page';
@@ -3457,23 +3458,26 @@ export class NobitaEditor implements BlockHost {
     });
     const next = replaceBlockText(this.store.doc, snapshot.blockId, nextRuns);
     const delta = pageTitle.length - (snapshot.end - snapshot.start);
-    let caret: Point = {
-      blockId: snapshot.blockId,
-      offset: snapshot.start + pageTitle.length,
+    const adjustPoint = (point: Point): Point => {
+      if (point.blockId !== snapshot.blockId || point.offset <= snapshot.start) {
+        return point;
+      }
+      if (point.offset >= snapshot.end) {
+        return { blockId: point.blockId, offset: Math.max(0, point.offset + delta) };
+      }
+      return { blockId: point.blockId, offset: snapshot.start + pageTitle.length };
     };
-    if (
-      selectionBefore &&
-      this.#isCollapsed(selectionBefore) &&
-      selectionBefore.focus.blockId === snapshot.blockId &&
-      selectionBefore.focus.offset >= snapshot.end
-    ) {
-      caret = {
-        blockId: snapshot.blockId,
-        offset: Math.max(0, selectionBefore.focus.offset + delta),
-      };
-    }
-    this.#commit(next, { anchor: caret, focus: caret });
-    this.#focusBlock(caret.blockId, caret.offset);
+    const nextSelection = selectionBefore
+      ? {
+          anchor: adjustPoint(selectionBefore.anchor),
+          focus: adjustPoint(selectionBefore.focus),
+        }
+      : null;
+    const touchesSelection =
+      selectionBefore !== null &&
+      (selectionBefore.anchor.blockId === snapshot.blockId ||
+        selectionBefore.focus.blockId === snapshot.blockId);
+    this.#commit(next, nextSelection, { restore: touchesSelection });
   }
 
   async #createAndInsertPage(state: PageLinkState, title: string): Promise<void> {
