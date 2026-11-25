@@ -38,6 +38,77 @@ function stripCodeSpanPadding(inner: string): string {
   return inner;
 }
 
+/** Match `[label](destination "optional title")` with balanced parentheses in the destination. */
+function matchMarkdownLink(
+  text: string,
+  start: number
+): { rawLabel: string; href: string; length: number } | null {
+  if (text[start] !== '[') return null;
+  let cursor = start + 1;
+  while (cursor < text.length) {
+    const ch = text[cursor];
+    if (ch === '\\' && cursor + 1 < text.length) {
+      cursor += 2;
+      continue;
+    }
+    if (ch === ']') break;
+    cursor += 1;
+  }
+  if (text[cursor] !== ']' || text[cursor + 1] !== '(') return null;
+  const rawLabel = text.slice(start + 1, cursor);
+  let pos = cursor + 2;
+  const destStart = pos;
+  let depth = 0;
+  while (pos < text.length) {
+    const ch = text[pos];
+    if (ch === '\\' && pos + 1 < text.length) {
+      pos += 2;
+      continue;
+    }
+    if (/\s/u.test(ch ?? '')) break;
+    if (ch === '(') {
+      depth += 1;
+      pos += 1;
+      continue;
+    }
+    if (ch === ')') {
+      if (depth === 0) break;
+      depth -= 1;
+      pos += 1;
+      continue;
+    }
+    pos += 1;
+  }
+  if (depth !== 0 || pos === destStart) return null;
+  const href = text.slice(destStart, pos);
+  if (text[pos] === ')') {
+    return { rawLabel, href, length: pos + 1 - start };
+  }
+  const titleMatch = /^\s+"[^"]*"\)/u.exec(text.slice(pos));
+  if (!titleMatch) return null;
+  return { rawLabel, href, length: pos + titleMatch[0].length - start };
+}
+
+function hasBalancedParens(value: string): boolean {
+  let depth = 0;
+  for (const ch of value) {
+    if (ch === '(') depth += 1;
+    else if (ch === ')') {
+      if (depth === 0) return false;
+      depth -= 1;
+    }
+  }
+  return depth === 0;
+}
+
+function formatMarkdownHref(href: string, escapePipe: boolean): string {
+  let out = hasBalancedParens(href)
+    ? href
+    : href.replace(/\(/gu, '%28').replace(/\)/gu, '%29');
+  if (escapePipe) out = out.replace(/\|/gu, '\\|');
+  return out;
+}
+
 function parseInline(text: string, allowLinks: boolean): InlineRun[] {
   if (!text) return [];
   const runs: InlineRun[] = [];
@@ -105,17 +176,13 @@ function parseInline(text: string, allowLinks: boolean): InlineRun[] {
     }
 
     if (allowLinks && char === '[') {
-      const match = /^\[((?:\\.|[^\]\\])*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/u.exec(
-        text.slice(index)
-      );
-      if (match?.[2]) {
+      const linkMatch = matchMarkdownLink(text, index);
+      if (linkMatch) {
         flush();
-        const rawLabel = match[1] ?? '';
-        const href = match[2];
-        for (const run of parseInline(rawLabel, false)) {
-          runs.push(withMark(run, { link: href }));
+        for (const run of parseInline(linkMatch.rawLabel, false)) {
+          runs.push(withMark(run, { link: linkMatch.href }));
         }
-        index += match[0].length;
+        index += linkMatch.length;
         continue;
       }
     }
@@ -518,6 +585,14 @@ function escapeInline(text: string): string {
   return out;
 }
 
+function runStartsWithStar(run: InlineRun | undefined): boolean {
+  const marks = run?.marks;
+  if (!marks) return false;
+  if (marks.link && safeHref(marks.link)) return false;
+  if (marks.strike) return false;
+  return Boolean(marks.bold || marks.italic);
+}
+
 function serializeRunsToMarkdown(
   runs: readonly InlineRun[],
   escapePlain: (text: string) => string,
@@ -525,7 +600,8 @@ function serializeRunsToMarkdown(
   escapeHrefPipe: boolean
 ): string {
   let out = '';
-  for (const run of runs) {
+  for (let i = 0; i < runs.length; i += 1) {
+    const run = runs[i]!;
     const text = run.text;
     const marks = run.marks;
     if (!marks) {
@@ -545,13 +621,24 @@ function serializeRunsToMarkdown(
           /[^ ]/u.test(body));
       body = needsPad ? `${fence} ${body} ${fence}` : `${fence}${body}${fence}`;
     }
-    if (marks.bold) body = `**${body}**`;
-    if (marks.italic) body = `*${body}*`;
-    if (marks.strike) body = `~~${body}~~`;
     const href = marks.link ? safeHref(marks.link) : null;
+    const outerIsEmphasis = !href && !marks.strike;
+    const prevEndsStar = out.endsWith('*');
+    const prevEndsUnderscore = out.endsWith('_');
+    const nextStartsStar = runStartsWithStar(runs[i + 1]);
+    const useUnderscore =
+      outerIsEmphasis && !prevEndsUnderscore && (prevEndsStar || nextStartsStar);
+
+    if (marks.bold && marks.italic) {
+      body = useUnderscore ? `_**${body}**_` : `***${body}***`;
+    } else if (marks.bold) {
+      body = useUnderscore ? `__${body}__` : `**${body}**`;
+    } else if (marks.italic) {
+      body = useUnderscore ? `_${body}_` : `*${body}*`;
+    }
+    if (marks.strike) body = `~~${body}~~`;
     if (href) {
-      const safeUrl = escapeHrefPipe ? href.replace(/\|/gu, '\\|') : href;
-      body = `[${body}](${safeUrl})`;
+      body = `[${body}](${formatMarkdownHref(href, escapeHrefPipe)})`;
     }
     out += body;
   }

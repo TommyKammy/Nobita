@@ -614,4 +614,60 @@ describe('simple table', () => {
       runs: [{ text: ' pad ', marks: { code: true } }],
     });
   });
+
+  it('round-trips adjacent emphasis runs and parenthesized link destinations in table cells', () => {
+    const table = createTableData({ rows: 2, columns: 2 });
+    const [c1, c2] = table.columns;
+    const [r1, r2] = table.rows;
+    let edited = setTableCellRuns(table, r1!.id, c1!.id, [
+      { text: 'a', marks: { italic: true } },
+      { text: 'b', marks: { bold: true } },
+      { text: 'c', marks: { italic: true } },
+    ]);
+    edited = setTableCellRuns(edited, r1!.id, c2!.id, [
+      { text: 'x', marks: { bold: true, italic: true } },
+      { text: 'y', marks: { bold: true } },
+    ]);
+    edited = setTableCellRuns(edited, r2!.id, c1!.id, [
+      { text: 'wiki', marks: { link: 'https://example.com/a(b)' } },
+    ]);
+    edited = setTableCellRuns(edited, r2!.id, c2!.id, [
+      { text: 'odd', marks: { link: 'https://example.com/a)b' } },
+    ]);
+
+    const block = createBlock('table', { id: 't', props: { table: edited } });
+    const md1 = blocksToMarkdown(createDoc({ blocks: [block] }), { title: false });
+    const imp1 = markdownToBlocks(md1, { extractTitle: false }).blocks.find(
+      item => item.type === 'table'
+    )!;
+    const md2 = blocksToMarkdown(createDoc({ blocks: [imp1] }), { title: false });
+    expect(md2).toBe(md1);
+
+    const impTable = imp1.props.table!;
+    const [ic1, ic2] = impTable.columns;
+    const [ir1, ir2] = impTable.rows;
+    expect(ir1?.cells[ic1!.id]).toEqual({
+      text: 'abc',
+      runs: [
+        { text: 'a', marks: { italic: true } },
+        { text: 'b', marks: { bold: true } },
+        { text: 'c', marks: { italic: true } },
+      ],
+    });
+    expect(ir1?.cells[ic2!.id]).toEqual({
+      text: 'xy',
+      runs: [
+        { text: 'x', marks: { bold: true, italic: true } },
+        { text: 'y', marks: { bold: true } },
+      ],
+    });
+    expect(ir2?.cells[ic1!.id]).toEqual({
+      text: 'wiki',
+      runs: [{ text: 'wiki', marks: { link: 'https://example.com/a(b)' } }],
+    });
+    expect(ir2?.cells[ic2!.id]).toEqual({
+      text: 'odd',
+      runs: [{ text: 'odd', marks: { link: 'https://example.com/a%29b' } }],
+    });
+  });
 });

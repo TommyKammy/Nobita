@@ -53,6 +53,23 @@ describe('inline markdown', () => {
       { text: ' pad ', marks: { code: true } },
     ]);
   });
+
+  it('parses links with balanced parentheses in destinations', () => {
+    expect(
+      parseInlineMarkdown(
+        'See [TypeScript](https://en.wikipedia.org/wiki/TypeScript_(programming_language)).'
+      )
+    ).toEqual([
+      { text: 'See ' },
+      {
+        text: 'TypeScript',
+        marks: {
+          link: 'https://en.wikipedia.org/wiki/TypeScript_(programming_language)',
+        },
+      },
+      { text: '.' },
+    ]);
+  });
 });
 
 describe('markdown documents', () => {
