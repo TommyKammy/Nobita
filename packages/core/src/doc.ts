@@ -413,6 +413,133 @@ export function duplicateBlockTree(block: Block): Block {  return {
   };
 }
 
+function filterOutBlocks(blocks: readonly Block[], ids: ReadonlySet<string>): Block[] {
+  if (ids.size === 0 || blocks.length === 0) return blocks as Block[];
+  let changed = false;
+  const out: Block[] = [];
+  for (const block of blocks) {
+    if (ids.has(block.id)) {
+      changed = true;
+      continue;
+    }
+    if (block.children.length > 0) {
+      const nextChildren = filterOutBlocks(block.children, ids);
+      if (nextChildren !== block.children) {
+        changed = true;
+        out.push({ ...block, children: nextChildren });
+        continue;
+      }
+    }
+    out.push(block);
+  }
+  return changed ? out : (blocks as Block[]);
+}
+
+/** Selected blocks in document order, collapsing descendants under selected ancestors. */
+export function selectedTopLevelBlocks(blocks: readonly Block[], ids: ReadonlySet<string>): Block[] {
+  if (ids.size === 0) return [];
+  const out: Block[] = [];
+  const visit = (list: readonly Block[]): void => {
+    for (const block of list) {
+      if (ids.has(block.id)) {
+        out.push(block);
+      } else if (block.children.length > 0) {
+        visit(block.children);
+      }
+    }
+  };
+  visit(blocks);
+  return out;
+}
+
+/** Remove a set of blocks (and their subtrees) and pick the nearest surviving focus block. */
+export function removeBlocks(doc: Doc, ids: ReadonlySet<string>): { doc: Doc; focusBlockId: string } {
+  if (ids.size === 0) {
+    return { doc, focusBlockId: doc.blocks[0]?.id ?? '' };
+  }
+  const flat = flattenBlocks(doc.blocks);
+  const topIds = new Set(selectedTopLevelBlocks(doc.blocks, ids).map(b => b.id));
+  if (topIds.size === 0) {
+    return { doc, focusBlockId: doc.blocks[0]?.id ?? '' };
+  }
+  const nextBlocks = filterOutBlocks(doc.blocks, topIds);
+  if (nextBlocks.length === 0) {
+    const fallback = createBlock('paragraph');
+    return { doc: { ...doc, blocks: [fallback] }, focusBlockId: fallback.id };
+  }
+  const remainingFlat = flattenBlocks(nextBlocks);
+  const remainingIds = new Set(remainingFlat.map(b => b.id));
+  const firstRemovedIdx = flat.findIndex(b => !remainingIds.has(b.id));
+  let focusBlockId = '';
+  if (firstRemovedIdx >= 0) {
+    for (let i = firstRemovedIdx - 1; i >= 0; i -= 1) {
+      const candidate = flat[i];
+      if (candidate && remainingIds.has(candidate.id)) {
+        focusBlockId = candidate.id;
+        break;
+      }
+    }
+    if (!focusBlockId) {
+      for (let i = firstRemovedIdx + 1; i < flat.length; i += 1) {
+        const candidate = flat[i];
+        if (candidate && remainingIds.has(candidate.id)) {
+          focusBlockId = candidate.id;
+          break;
+        }
+      }
+    }
+  }
+  if (!focusBlockId) {
+    focusBlockId = remainingFlat[0]!.id;
+  }
+  return { doc: { ...doc, blocks: nextBlocks }, focusBlockId };
+}
+
+/** Duplicate selected top-level blocks in document order right after the last selected block. */
+export function duplicateBlocks(
+  doc: Doc,
+  ids: ReadonlySet<string>
+): { doc: Doc; duplicatedIds: string[] } {
+  const selected = selectedTopLevelBlocks(doc.blocks, ids);
+  if (selected.length === 0) {
+    return { doc, duplicatedIds: [] };
+  }
+  const copies = selected.map(duplicateBlockTree);
+  const nextDoc = insertBlocksAfter(doc, selected[selected.length - 1]!.id, copies);
+  return {
+    doc: nextDoc,
+    duplicatedIds: copies.map(block => block.id),
+  };
+}
+
+/** Move selected top-level blocks (preserving document order) relative to a target block. */
+export function moveBlocks(
+  doc: Doc,
+  ids: ReadonlySet<string>,
+  targetId: string,
+  position: BlockPosition
+): Doc {
+  const selected = selectedTopLevelBlocks(doc.blocks, ids);
+  if (selected.length === 0) return doc;
+  if (selected.some(block => findBlock([block], targetId) !== null)) return doc;
+  if (!locateBlock(doc.blocks, targetId)) return doc;
+  const selectedIds = new Set(selected.map(b => b.id));
+  const stripped = filterOutBlocks(doc.blocks, selectedIds);
+  const targetLoc = locateBlock(stripped, targetId);
+  if (!targetLoc) return doc;
+  const result =
+    position === 'child'
+      ? modifyContainer(stripped, targetId, siblings => [...siblings, ...selected])
+      : modifyContainer(stripped, targetLoc.parent?.id ?? null, siblings => {
+          const idx = siblings.findIndex(item => item.id === targetId);
+          if (idx < 0) return null;
+          const next = siblings.slice();
+          next.splice(position === 'before' ? idx : idx + 1, 0, ...selected);
+          return next;
+        });
+  return result.changed ? { ...doc, blocks: result.blocks } : doc;
+}
+
 /** Document-order previous block, skipping children. */
 export function previousBlock(blocks: readonly Block[], id: string): Block | null {
   const order = flattenBlocks(blocks);

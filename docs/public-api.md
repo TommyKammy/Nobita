@@ -76,7 +76,8 @@ be synchronous and cached; `onOpenPage` owns loading and routing.
 ### Editor methods
 
 `getDoc()`, `getJSON(pretty?)`, `getMarkdown()`, `getHTML()`, `setDoc(doc, { history? })`,
-`getSelection()`, `focus(blockId?, offset?)`, `focusTitle()`, `blur()`, `setTitle(title)`,
+`getSelection()`, `getSelectedBlockIds()`, `selectBlocks(ids)`, `clearBlockSelection()`,
+`focus(blockId?, offset?)`, `focusTitle()`, `blur()`, `setTitle(title)`,
 `setReadonly(value)`, `setTheme(theme)`, `setPlaceholder(value)`, `undo()`, `redo()`,
 `insertMarkdown(markdown)`, `insertPageLink(page, { afterBlockId? })`, `refreshPageLinks()`,
 `getBlockLink(blockId)`, `setMentionProvider(provider)`, `setUploadImage(handler)`, `destroy()`.
@@ -89,6 +90,7 @@ Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `upl
 `onOpenPage`, `resolvePage`.
 
 Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`,
+`getSelectedBlockIds()`, `selectBlocks(ids)`, `clearBlockSelection()`,
 `insertPageLink()`, `refreshPageLinks()`, `setReadonly()`, `setTheme()`.
 
 Events:
@@ -106,7 +108,8 @@ Stable exports include:
 - Serialization: `parseDoc`, `docToJSON`, `blocksToMarkdown`, `markdownToBlocks`,
   `blocksToHtml`
 - Editing commands: `setBlockType`, `setBlockAlign`, `toggleChecked`,
-  `setCodeLanguage`, `setCalloutTone`, `insertBlockAfter`, etc.
+  `setCodeLanguage`, `setCalloutTone`, `insertBlockAfter`,
+  `selectedTopLevelBlocks`, `removeBlocks`, `duplicateBlocks`, `moveBlocks`, etc.
 - Data views: `DatabaseView`, `DatabaseViewColumn`, `DatabaseCell`,
   `DatabaseRow`, `DatabaseRowPage`, `DatabaseFilter`, `DatabaseFilterGroup`,
   `DatabaseFilterNode`, `DatabaseGroupProperty`, `DatabaseStatType`,

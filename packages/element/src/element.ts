@@ -210,6 +210,18 @@ export class NobitaEditorElement extends Base {
     this.#editor?.refreshPageLinks();
   }
 
+  getSelectedBlockIds(): string[] {
+    return this.#editor?.getSelectedBlockIds() ?? [];
+  }
+
+  selectBlocks(ids: readonly string[]): void {
+    this.#editor?.selectBlocks(ids);
+  }
+
+  clearBlockSelection(): void {
+    this.#editor?.clearBlockSelection();
+  }
+
   setReadonly(readonly: boolean): void {
     if (readonly) this.setAttribute('readonly', '');
     else this.removeAttribute('readonly');
