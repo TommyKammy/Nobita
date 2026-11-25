@@ -62,12 +62,14 @@ const database = (
   columns: ReturnType<typeof createDatabaseColumn>[],
   rows: ReturnType<typeof createDatabaseRow>[],
   views?: DatabaseView[],
-  activeViewId?: string
+  activeViewId?: string,
+  title?: string
 ): Block =>
   createBlock('database', {
     props: {
       database: {
         variant: 'database',
+        ...(title ? { title } : {}),
         columns,
         rows,
         ...(views ? { views } : {}),
@@ -127,7 +129,7 @@ export function createSeedState(): DemoState {
         bulleted('Undo history is structural and cheap.'),
       ]),
       bulleted('**Framework agnostic** — plain DOM, no Lit, React, or ProseMirror.'),
-      bulleted('**Small surface** — 11 block types, one dependency-free package.'),
+      bulleted('**Small surface** — 13 block types, one dependency-free package.'),
       heading(3, 'Try the controls'),
       todo('Type `/` anywhere to open the block menu', false),
       todo('Drag the handle in the left gutter to reorder blocks', false),
@@ -199,7 +201,7 @@ const editor = createEditor(document.querySelector('#editor'), {
       code(
         `nobita-editor {
   --nb-accent: #0f766e;
-  --nb-font-sans: 'Newsreader', serif;
+  --nb-font: 'Newsreader', serif;
   --nb-page-width: 760px;
 }`,
         'css'
@@ -322,6 +324,10 @@ const editor = createEditor(document.querySelector('#editor'), {
     text: 'Ship the data view',
     runs: parseInlineMarkdown('**Ship** the data view'),
   };
+  rows[1]!.cells[task.id] = {
+    text: 'Write markdown round-trip',
+    runs: parseInlineMarkdown('Write `markdown` round-trip'),
+  };
   rows[0]!.page = {
     content: [
       { text: 'Launch checklist\n', marks: { bold: true } },
@@ -336,7 +342,7 @@ const editor = createEditor(document.querySelector('#editor'), {
     null,
     [
       paragraph(
-        'Tables and databases are one compact data-view block. Cells are typed, rows are plain data, and everything exports cleanly to JSON, Markdown and HTML.'
+        'Simple tables and typed databases are separate blocks. Databases add table and board views, rich-text cells and editable record pages — all stored as plain JSON.'
       ),
       heading(2, 'Roadmap database'),
       database(
@@ -344,7 +350,8 @@ const editor = createEditor(document.querySelector('#editor'), {
         [task, status, owner, due, done],
         rows,
         [tableView, boardView],
-        tableView.id
+        tableView.id,
+        'Roadmap'
       ),
       heading(2, 'Simple table'),
       simpleTable([
@@ -353,7 +360,7 @@ const editor = createEditor(document.querySelector('#editor'), {
         ['Move block', '⌘⌥↑ / ↓', 'Reorder without dragging'],
       ]),
       paragraph(
-        'Use `+ Row` / `+ Column` for the simple table. The Database above uses view tabs, typed filters, multi-sort, search, column visibility and footer statistics.'
+        'Hover simple table edges to add rows or columns. The database above supports table and board views, rich-text cells, record pages, filters, multi-sort, search, grouping and statistics.'
       ),
     ],
     true

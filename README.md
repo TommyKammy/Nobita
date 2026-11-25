@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **91.1 KB gzipped** standalone ESM bundle (minified, includes the core and data views).
+- **93.7 KB gzipped** (`349.5 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core and data views.
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -29,13 +29,13 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, simple table, database, page links |
 | Inline | Bold, italic, underline, strikethrough, inline code, links, mentions, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo |
-| Data views | Multiple table/board views per database, AFFiNE-style view settings, per-view column order/widths/visibility, nested AND/OR filters, multi-sort, expandable search, footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state, rich-text text cells with an inline formatting toolbar, editable row pages, board card add/open/reorder/group actions, column menus, drag cell selection and fill, TSV copy/paste and import; typed columns (text, number, select, multi-select, date, checkbox, URL, files, people) |
+| Data views | Multiple named table and board views per database, AFFiNE-style view settings (`⋯`), per-view column order/widths/visibility, nested AND/OR filters, multi-sort, container-aware expandable search (auto-hidden below `560px`), footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state; rich-text cells (`B`/`I`/`U`/`S`/code toolbar & shortcuts, highlight/color rendering, IME & plain-text paste safe), editable record pages (`row.page.content`), board card add/open/drag-reorder/group actions (preserving multi-select tags), drag cell selection & fill, TSV copy/paste, readonly view switching & record-page viewing; 9 typed columns (`text`, `number`, `select`, `multi-select`, `date`, `checkbox`, `url`, `files`, `people`) |
 | Menus | Slash menu with fuzzy search and block actions (move/copy/link), block handle menu, selection toolbar with Turn into / Align / format / Color, link popover, mention picker |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
 | Clipboard | Rich HTML, Markdown, plain text, a private `application/x-nobita+json` format, and image paste through an upload adapter |
-| Persistence | JSON in / JSON out, `onChange`, `setDoc`, readonly mode, theming; optional `@nobita/storage` adapters for localStorage, SQLite/D1 and HTTP |
-| A11y | Keyboard menus, labels, focus-visible states, `aria-pressed` toolbar |
+| Persistence | JSON in / JSON out, `onChange`, `setDoc`, readonly mode (read-only view switching and record pages in databases), theming; optional `@nobita/storage` adapters for localStorage, SQLite/D1 and HTTP |
+| A11y | Keyboard menus and row/card actions (`Mod+Enter` opens record pages), record-page modal focus trap & focus restoration, `:focus-visible` outlines, `aria-pressed` / `data-active` formatting toolbars, `@media (hover: none)` touch controls |
 
 Not in the box: synced blocks, comments, math, embeds, collaboration, a managed image host, and virtualization for very large documents. Image uploads are supported through a host adapter. See [Roadmap](#roadmap).
 
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 91.1 KB bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 93.7 KB gzipped bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -195,10 +195,19 @@ A document is deliberately simple, stable JSON:
         {
           "id": "r1",
           "cells": {
-            "c1": { "text": "Ship it" },
+            "c1": {
+              "text": "Ship it",
+              "runs": [
+                { "text": "Ship", "marks": { "bold": true } },
+                { "text": " it" }
+              ]
+            },
             "c2": { "text": "Done" },
             "c3": { "text": "2026-12-01" },
             "c4": { "checked": true }
+          },
+          "page": {
+            "content": [{ "text": "Release checklist and notes." }]
           }
         }
       ],
@@ -207,7 +216,12 @@ A document is deliberately simple, stable JSON:
           "id": "v1",
           "name": "Table",
           "type": "table",
-          "filters": [],
+          "columns": [
+            { "id": "c1", "width": 200 },
+            { "id": "c2", "width": 130 },
+            { "id": "c3", "width": 120 },
+            { "id": "c4", "width": 86, "stat": "checked" }
+          ],
           "sorts": [{ "columnId": "c3", "direction": "asc" }]
         },
         {
@@ -215,7 +229,13 @@ A document is deliberately simple, stable JSON:
           "name": "Board",
           "type": "board",
           "groupBy": "c2",
-          "filters": [{ "columnId": "c2", "operator": "is", "value": "Todo" }]
+          "groupProperties": [
+            { "key": "Done", "manuallyCardSort": ["r1"] }
+          ],
+          "filter": {
+            "mode": "and",
+            "conditions": [{ "columnId": "c2", "operator": "is", "value": "Done" }]
+          }
         }
       ],
       "activeViewId": "v1"
@@ -225,7 +245,7 @@ A document is deliberately simple, stable JSON:
 }
 ```
 
-Column types are `text`, `number`, `select`, `multi-select`, `date`, `checkbox`, `url`, `files` and `people`. Columns can persist a `width`; empty cells are omitted, so documents stay compact. Each view stores its own filters, filter mode, sort keys, grouping, hidden columns and footer statistics. Markdown/HTML tables import as simple tables; TSV paste continues to fill database cells. Legacy documents with a single `view` / `sort` still load and are migrated on the next view edit.
+Column types are `text`, `number`, `select`, `multi-select`, `date`, `checkbox`, `url`, `files` and `people`. Text cells store optional rich-text `runs` alongside the plain `text` projection (used for search, filtering, sorting, statistics and TSV/Markdown export), and empty cells are omitted so documents stay compact. Rows can also carry an optional rich-text `page.content` body edited inside the record page panel. Each view stores its own column layout (order, width, visibility and footer stat), nested `filter` tree, `sorts`, `groupBy` and `groupProperties` (group order, hidden/collapsed state and `manuallyCardSort`). Markdown/HTML tables import as simple tables; TSV paste fills database cells. Legacy documents with a single `view`, `sort`, flat `filters` or `hiddenColumns` still load and migrate on the next edit.
 
 ## API
 
@@ -244,7 +264,7 @@ See [docs/public-api.md](docs/public-api.md) for the stable import surface, edit
 | `focus(blockId?, offset?)` | Focus the editor or a block |
 | `focusTitle()` / `blur()` | Focus control |
 | `undo()` / `redo()` | History |
-| `setReadonly(value)` / `setTheme(theme)` | Runtime configuration |
+| `setReadonly(value)` / `setTheme(theme)` / `setPlaceholder(value)` | Runtime configuration |
 | `insertMarkdown(markdown)` | Insert blocks at the caret |
 | `getBlockLink(blockId)` | Return the stable `#block-…` link for a block |
 | `insertPageLink(page, { afterBlockId? })` | Insert a reference to a host-owned page |
@@ -352,39 +372,40 @@ pnpm bench
 
 ## Performance
 
-Measured in headless Chrome 158 on the development host, production build:
+Measured in headless Chromium via `pnpm bench` (`setDoc` + full render, median of 5 runs, production build):
 
-| Blocks | Initial render | Keystroke (synthetic `beforeinput`, median) |
-| --- | ---: | ---: |
-| 200 | 11 ms | 0.4 ms |
-| 1,000 | 20 ms | 0.9 ms |
-| 3,000 | 35 ms | 3.5 ms |
+| Blocks | `setDoc` + render (median) |
+| --- | ---: |
+| 200 | 2.4 ms |
+| 1,000 | 14.1 ms |
+| 3,000 | 42.1 ms |
 
-A 100-row × 6-column data view renders in about **12 ms**. Data-view cell edits are in-place and do not rebuild the grid.
+Data-view cell edits update cells in-place by reference identity without rebuilding the grid, memoize per-state view queries, apply differential selection updates, and delegate table header/body events.
 
-Bundle sizes:
+Bundle sizes (`pnpm size`):
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 357.2 KB | **91.1 KB** |
-| Demo app (editor + UI + seed data) | 391.0 KB | 101.8 KB |
+| Editor ESM (`nobita.js`) | 349.5 KB | **93.7 KB** |
+| Editor IIFE (`nobita.global.js`) | 349.5 KB | **93.7 KB** |
+| Demo app (editor + UI + seed data) | 393.9 KB | 105.5 KB |
 
-The optional `@nobita/storage` package is not part of either bundle; it is only present when a host imports it.
+The optional `@nobita/storage` package is not part of any editor bundle; it is only present when a host imports it.
 
-Why it stays small: immutable path-copy updates mean undo is a pointer swap; per-block DOM views are patched by reference; no framework runtime ships; the renderer never re-renders unchanged blocks. See [architecture](docs/architecture.md).
+Why it stays small: immutable path-copy updates mean undo is a pointer swap; per-block DOM views are patched by reference; CSS is minified at bundle time; no framework runtime ships; the renderer never re-renders unchanged blocks. See [architecture](docs/architecture.md).
 
-The numbers are directional, not a guarantee: keystroke timing excludes OS/browser key dispatch and paint.
+The numbers are directional, not a guarantee: timing varies by hardware and browser version.
 
 ## Repository layout
 
 ```
 packages/core      Document model, commands, markdown, JSON validation, history — no DOM
-packages/element   Editor engine, block views, selection, menus, toolbar, web component
+packages/element   Editor engine, block views, modular database views, selection, menus, toolbar, web component, CSS bundler
 packages/react     Thin React host wrapper
 packages/storage   Optional persistence port and adapters (localStorage, SQLite/D1, HTTP)
 apps/demo          Notion-like demo: sidebar, pages, search, export, embed dialog
 examples/          Optional integrations, including the Cloudflare D1 Worker
-docs/              AFFiNE analysis, architecture and storage notes
+docs/              AFFiNE analysis, architecture, public API, command comparison, testing and storage notes
 ```
 
 ## Design notes
@@ -393,9 +414,9 @@ Nobita began with an analysis of AFFiNE 0.27.x, both the live app and the BlockS
 
 That last point matters: Chromium clamps ranges that span separate `contenteditable` elements inside a shadow root. To get real cross-block selection, formatting, copy and delete, Nobita places all blocks inside **one** contenteditable body while keeping per-block rendering and a block/offset selection model. The trade-off and internals are documented in [docs/architecture.md](docs/architecture.md).
 
-Data views follow the same rule: one `database` block, a narrow nested editing host for each cell, a structural-key check to avoid rebuilding the grid while typing, and plain row JSON. No grid library is shipped.
+Data views follow the same rule: one `database` block, model-driven rich-text runs via `@nobita/core`, delegated table listeners, structural-key + reference-identity sync to avoid rebuilding the grid while typing, and plain row JSON. No grid library is shipped.
 
-A command-by-command comparison with AFFiNE, including recommended P0/P1 additions, is in [docs/command-comparison.md](docs/command-comparison.md).
+A command-by-command comparison with AFFiNE is in [docs/command-comparison.md](docs/command-comparison.md).
 
 ## Roadmap
 
