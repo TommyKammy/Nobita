@@ -1144,3 +1144,360 @@ test('ignores Enter keydown during IME composition across database text hosts', 
   });
   expect(boardResult).toEqual({ defaultPrevented: false, stillFocused: true });
 });
+
+test('preserves caret position on undo in table rich-text cells', async ({ page }) => {
+  await openFixture(page);
+  const doc = p2Doc();
+  const rows = (
+    doc.blocks[0]!.props.database as {
+      rows: Array<{ id: string; cells: Record<string, unknown> }>;
+    }
+  ).rows;
+  rows[0]!.cells.name = {
+    text: 'Hello World',
+    runs: [{ text: 'Hello ', marks: { bold: true } }, { text: 'World' }],
+  };
+  await setDoc(page, doc);
+
+  const cell = page.locator(
+    '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+  );
+  await cell.click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector<HTMLElement>(
+      '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+    );
+    const firstText = target
+      ? document.createTreeWalker(target, NodeFilter.SHOW_TEXT).nextNode()
+      : null;
+    if (!firstText) throw new Error('Missing text node');
+    const range = document.createRange();
+    range.setStart(firstText, 5);
+    range.collapse(true);
+    const selection = root!.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  });
+  await page.keyboard.type('!');
+  await expect(cell).toHaveText('Hello! World');
+
+  await page.keyboard.press('Control+z');
+  await expect(cell).toHaveText('Hello World');
+  const caret = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const target = root?.querySelector<HTMLElement>(
+      '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+    );
+    const selection = root?.getSelection();
+    if (!target || !selection || selection.rangeCount === 0) return null;
+    const range = selection.getRangeAt(0);
+    const pre = document.createRange();
+    pre.selectNodeContents(target);
+    pre.setEnd(range.startContainer, range.startOffset);
+    return {
+      focused: root?.activeElement === target,
+      offset: pre.toString().length,
+    };
+  });
+  expect(caret?.focused).toBe(true);
+  expect(caret?.offset).toBeGreaterThan(0);
+});
+
+test('deep-clones rich-text runs when duplicating a column', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+
+  await page.locator('.nb-db-th[data-column-id="name"] .nb-db-col-head').click();
+  await page.getByRole('button', { name: 'Duplicate' }).click();
+
+  let doc = await getDoc(page);
+  let db = doc.blocks[0]?.props.database as {
+    columns: Array<{ id: string; name: string }>;
+    rows: Array<{
+      id: string;
+      cells: Record<string, { text?: string; runs?: Array<{ text: string; marks?: Record<string, unknown> }> }>;
+    }>;
+  };
+  const copyCol = db.columns.find(col => col.name === 'Name copy');
+  expect(copyCol).toBeTruthy();
+
+  const copyCell = page.locator(
+    `.nb-db-cell[data-row-id="r1"][data-column-id="${copyCol!.id}"] .nb-db-rich-text`
+  );
+  await copyCell.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' Copy');
+  await expect(copyCell).toHaveText('One Copy');
+
+  doc = await getDoc(page);
+  db = doc.blocks[0]?.props.database as typeof db;
+  const original = db.rows.find(row => row.id === 'r1')?.cells.name;
+  expect(original?.text).toBe('One');
+  expect(original?.runs).toEqual([{ text: 'One', marks: { bold: true } }]);
+});
+
+test('applies highlight/text-color styles in database rich-text and opens links on Mod+Click in record page', async ({
+  page,
+}) => {
+  await openFixture(page);
+  const doc = p2Doc();
+  const rows = (
+    doc.blocks[0]!.props.database as {
+      rows: Array<{
+        id: string;
+        cells: Record<string, unknown>;
+        page?: { content: unknown[] };
+      }>;
+    }
+  ).rows;
+  rows[0]!.cells.name = {
+    text: 'Highlight Color',
+    runs: [
+      { text: 'Highlight', marks: { highlight: 'yellow' } },
+      { text: ' ' },
+      { text: 'Color', marks: { color: 'red' } },
+    ],
+  };
+  rows[0]!.page = {
+    content: [
+      {
+        text: 'Docs',
+        marks: { link: 'https://example.com/docs', highlight: 'yellow', color: 'red' },
+      },
+    ],
+  };
+  await setDoc(page, doc);
+
+  const styles = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const hl = root?.querySelector<HTMLElement>('.nb-db-rich-text [data-highlight="yellow"]');
+    const fg = root?.querySelector<HTMLElement>('.nb-db-rich-text [data-text-color="red"]');
+    const base = root?.querySelector<HTMLElement>('.nb-db-rich-text');
+    if (!hl || !fg || !base) return null;
+    return {
+      hlBg: getComputedStyle(hl).backgroundColor,
+      fgColor: getComputedStyle(fg).color,
+      baseColor: getComputedStyle(base).color,
+    };
+  });
+  expect(styles).not.toBeNull();
+  expect(styles!.hlBg).not.toBe('rgba(0, 0, 0, 0)');
+  expect(styles!.hlBg).not.toBe('transparent');
+  expect(styles!.fgColor).not.toBe(styles!.baseColor);
+
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="name"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  await expect(page.locator('.nb-db-detail')).toBeVisible();
+
+  await page.evaluate(() => {
+    const win = window as unknown as {
+      __openedLinks?: Array<[unknown, unknown, unknown]>;
+    };
+    win.__openedLinks = [];
+    window.open = ((url?: string | URL, target?: string, features?: string) => {
+      win.__openedLinks!.push([url, target, features]);
+      return null;
+    }) as typeof window.open;
+  });
+
+  await page.locator('.nb-db-detail [data-link]').click({ modifiers: ['ControlOrMeta'] });
+  const opened = await page.evaluate(
+    () => (window as unknown as { __openedLinks?: unknown[] }).__openedLinks ?? []
+  );
+  expect(opened).toEqual([['https://example.com/docs', '_blank', 'noopener,noreferrer']]);
+});
+
+test('supports view switching and record page in readonly while blocking cut/paste and row menus', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.evaluate(() => {
+    const editor = document.querySelector('nobita-editor') as unknown as {
+      setReadonly(value: boolean): void;
+    };
+    editor.setReadonly(true);
+  });
+
+  await page.locator('.nb-db-viewtab', { hasText: 'Board' }).click();
+  await expect(page.locator('.nb-db-board')).toBeVisible();
+  let doc = await getDoc(page);
+  expect((doc.blocks[0]?.props.database as { activeViewId?: string }).activeViewId).toBe(
+    'v-table'
+  );
+
+  await page.locator('.nb-db-viewtab', { hasText: 'Table' }).click();
+  await expect(page.locator('.nb-db-table')).toBeVisible();
+  await expect(page.locator('.nb-db-row-expand')).toHaveCount(3);
+  await expect(page.locator('.nb-db-rowmenu')).toHaveCount(0);
+
+  await page.locator('.nb-db-table tbody tr').first().hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  await expect(page.locator('.nb-db-detail')).toBeVisible();
+  await expect(page.locator('.nb-db-detail-close')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.nb-db-detail')).toHaveCount(0);
+
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const db = root?.querySelector<HTMLElement>('.nb-db');
+    if (!db) throw new Error('Missing .nb-db');
+    const cutDt = new DataTransfer();
+    db.dispatchEvent(
+      new ClipboardEvent('cut', { bubbles: true, cancelable: true, clipboardData: cutDt })
+    );
+    const pasteDt = new DataTransfer();
+    pasteDt.setData('text/plain', 'Injected');
+    db.dispatchEvent(
+      new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: pasteDt })
+    );
+  });
+  doc = await getDoc(page);
+  const dbAfter = doc.blocks[0]?.props.database as {
+    rows: Array<{ id: string; cells: Record<string, { text?: string }> }>;
+  };
+  expect(dbAfter.rows).toHaveLength(3);
+  expect(dbAfter.rows[0]?.cells.name?.text).toBe('One');
+});
+
+test('prunes deleted row ids from manuallyCardSort on row and group deletion', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+  await showBoard(page);
+
+  const todo = page.locator('.nb-db-board-column[data-group="Todo"]');
+  await todo
+    .locator('.nb-db-card[data-row-id="r2"]')
+    .dragTo(todo.locator('.nb-db-card[data-row-id="r1"]'), {
+      targetPosition: { x: 20, y: 4 },
+    });
+
+  let doc = await getDoc(page);
+  let board = (
+    doc.blocks[0]?.props.database as {
+      views: Array<{
+        id: string;
+        groupProperties?: Array<{ key: string; manuallyCardSort?: string[] }>;
+      }>;
+    }
+  ).views.find(view => view.id === 'v-board');
+  expect(board?.groupProperties?.find(g => g.key === 'Todo')?.manuallyCardSort).toEqual([
+    'r2',
+    'r1',
+  ]);
+
+  await page.locator('.nb-db-viewtab', { hasText: 'Table' }).click();
+  const row1 = page.locator('.nb-db-table tbody tr[data-row-id="r1"]');
+  await row1.hover();
+  await row1.locator('.nb-db-rowmenu').click();
+  await page.getByRole('button', { name: 'Delete' }).click();
+
+  doc = await getDoc(page);
+  board = (
+    doc.blocks[0]?.props.database as {
+      views: Array<{
+        id: string;
+        groupProperties?: Array<{ key: string; manuallyCardSort?: string[] }>;
+      }>;
+    }
+  ).views.find(view => view.id === 'v-board');
+  expect(board?.groupProperties?.find(g => g.key === 'Todo')?.manuallyCardSort).toEqual([
+    'r2',
+  ]);
+
+  await showBoard(page);
+  await todo.locator('.nb-db-board-group-op[title="Group actions"]').click();
+  await page.locator('.nb-db-board-group-menu').getByRole('button', { name: 'Delete cards' }).click();
+
+  doc = await getDoc(page);
+  board = (
+    doc.blocks[0]?.props.database as {
+      views: Array<{
+        id: string;
+        groupProperties?: Array<{ key: string; manuallyCardSort?: string[] }>;
+      }>;
+    }
+  ).views.find(view => view.id === 'v-board');
+  expect(
+    board?.groupProperties?.find(g => g.key === 'Todo')?.manuallyCardSort
+  ).toBeUndefined();
+});
+
+test('updates data-active and aria-pressed on inline rich-text toolbar buttons', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+
+  const cell = page.locator(
+    '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+  );
+  await cell.click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const text = root?.querySelector(
+      '.nb-db-cell[data-row-id="r1"][data-column-id="name"] .nb-db-rich-text'
+    );
+    const node = text ? document.createTreeWalker(text, NodeFilter.SHOW_TEXT).nextNode() : null;
+    if (!node) throw new Error('Missing rich text node');
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, (node.textContent ?? '').length);
+    const selection = root!.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+
+  const bold = page.locator('.nb-db-inline-tool[data-tag="strong"]');
+  const italic = page.locator('.nb-db-inline-tool[data-tag="em"]');
+  await expect(bold).toHaveAttribute('data-active', 'true');
+  await expect(bold).toHaveAttribute('aria-pressed', 'true');
+  await expect(italic).toHaveAttribute('data-active', 'false');
+  await expect(italic).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('opens record page via Mod+Enter, traps Tab focus, and restores trigger focus after navigation', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+
+  const triggerCell = page.locator(
+    '.nb-db-cell[data-row-id="r1"][data-column-id="owner"] .nb-db-rich-text'
+  );
+  await triggerCell.click();
+  await page.keyboard.press('Control+Enter');
+  await expect(page.locator('.nb-db-detail')).toBeVisible();
+
+  for (let i = 0; i < 12; i += 1) {
+    await page.keyboard.press('Tab');
+    const inside = await page.evaluate(() => {
+      const root = document.querySelector('nobita-editor')?.shadowRoot;
+      const detail = root?.querySelector('.nb-db-detail');
+      const active = root?.activeElement ?? null;
+      return Boolean(detail && active && detail.contains(active));
+    });
+    expect(inside).toBe(true);
+  }
+  for (let i = 0; i < 6; i += 1) {
+    await page.keyboard.press('Shift+Tab');
+    const inside = await page.evaluate(() => {
+      const root = document.querySelector('nobita-editor')?.shadowRoot;
+      const detail = root?.querySelector('.nb-db-detail');
+      const active = root?.activeElement ?? null;
+      return Boolean(detail && active && detail.contains(active));
+    });
+    expect(inside).toBe(true);
+  }
+
+  await page.locator('.nb-db-detail-navbtn[data-nav="next"]').click();
+  await expect(page.locator('.nb-db-detail-title')).toHaveValue('Two');
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.nb-db-detail')).toHaveCount(0);
+  await expect(triggerCell).toBeFocused();
+});

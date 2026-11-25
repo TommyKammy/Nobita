@@ -337,4 +337,12 @@ test.describe('touch viewport', () => {
     expect(layout.viewbarWidth).toBeGreaterThan(80);
     expect(layout.toolsRight).toBeLessThanOrEqual(layout.barRight + 1);
   });
+
+  test('shows row operations without hover on touch viewports', async ({ page }) => {
+    await openFixture(page);
+    await setDoc(page);
+    const ops = page.locator('.nb-db-row-ops').first();
+    await expect(ops).toHaveCSS('opacity', '1');
+    await expect(ops).toHaveCSS('pointer-events', 'auto');
+  });
 });

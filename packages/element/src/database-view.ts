@@ -23,6 +23,7 @@ import {
   filteredDatabaseRows,
   groupedDatabaseRows,
   insertTextAt,
+  markStateInRange,
   marksAt,
   normalizeMark,
   normalizeRuns,
@@ -159,6 +160,47 @@ function defaultFilterOperator(type: DatabaseColumnType): DatabaseFilterOperator
   return filterOperators(type)[0] ?? 'is';
 }
 
+const NUMBER_FORMATTERS = new Map<string, Intl.NumberFormat>();
+
+function getNumberFormatter(
+  format: string,
+  decimals: number | undefined,
+  currency: string
+): Intl.NumberFormat {
+  const normalizedFormat =
+    format === 'percent' || format === 'currency' ? format : 'decimal';
+  const key = `${normalizedFormat}|${decimals ?? ''}|${
+    normalizedFormat === 'currency' ? currency : ''
+  }`;
+  let formatter = NUMBER_FORMATTERS.get(key);
+  if (formatter) return formatter;
+  const fraction =
+    decimals === undefined
+      ? {}
+      : { minimumFractionDigits: decimals, maximumFractionDigits: decimals };
+  if (normalizedFormat === 'percent') {
+    formatter = new Intl.NumberFormat(undefined, {
+      style: 'percent',
+      useGrouping: false,
+      ...fraction,
+    });
+  } else if (normalizedFormat === 'currency') {
+    formatter = new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency,
+      ...fraction,
+    });
+  } else {
+    formatter = new Intl.NumberFormat(undefined, {
+      style: 'decimal',
+      useGrouping: false,
+      ...(decimals === undefined ? { maximumFractionDigits: 0 } : fraction),
+    });
+  }
+  NUMBER_FORMATTERS.set(key, formatter);
+  return formatter;
+}
+
 function formatDatabaseNumber(value: string, column: DatabaseColumn): string {
   if (!value) return '';
   const number = Number.parseFloat(value);
@@ -170,42 +212,17 @@ function formatDatabaseNumber(value: string, column: DatabaseColumn): string {
       ? undefined
       : Math.max(0, Math.min(6, Math.round(decimalValue)));
   const format = typeof column.data?.format === 'string' ? column.data.format : 'number';
-  const fraction =
-    decimals === undefined
-      ? {}
-      : { minimumFractionDigits: decimals, maximumFractionDigits: decimals };
-  if (format === 'percent') {
-    return new Intl.NumberFormat(undefined, {
-      style: 'percent',
-      useGrouping: false,
-      ...fraction,
-    }).format(number);
+  const currency =
+    format === 'currency'
+      ? typeof column.data?.currency === 'string'
+        ? column.data.currency
+        : 'USD'
+      : '';
+  try {
+    return getNumberFormatter(format, decimals, currency).format(number);
+  } catch {
+    return number.toFixed(decimals ?? 0);
   }
-  if (format === 'decimal') {
-    return new Intl.NumberFormat(undefined, {
-      style: 'decimal',
-      useGrouping: false,
-      ...(decimals === undefined ? { maximumFractionDigits: 0 } : fraction),
-    }).format(number);
-  }
-  if (format === 'currency') {
-    const currency =
-      typeof column.data?.currency === 'string' ? column.data.currency : 'USD';
-    try {
-      return new Intl.NumberFormat(undefined, {
-        style: 'currency',
-        currency,
-        ...fraction,
-      }).format(number);
-    } catch {
-      return number.toFixed(decimals ?? 0);
-    }
-  }
-  return new Intl.NumberFormat(undefined, {
-    style: 'decimal',
-    useGrouping: false,
-    ...(decimals === undefined ? { maximumFractionDigits: 0 } : fraction),
-  }).format(number);
 }
 
 const cellKey = (rowId: string, columnId: string): string => `${rowId}\u0000${columnId}`;
@@ -355,8 +372,25 @@ export class DatabaseView {
     groupKey?: string;
   } | null = null;
   #rangeCells = new Set<string>();
+  #selectedTds = new Set<HTMLTableCellElement>();
+  #activeTds = new Set<HTMLTableCellElement>();
   #selectedRows = new Set<string>();
   #groupOverrides = new Map<string, { hide?: boolean; collapsed?: boolean }>();
+  #groupOverrideVersion = 0;
+  #readonlyActiveViewId: string | null = null;
+  #syncedData: DatabaseData | null = null;
+  #queryCache: {
+    data: DatabaseData;
+    searchQuery: string;
+    readonly: boolean;
+    readonlyActiveViewId: string | null;
+    overrideVersion: number;
+    views: (DatabaseViewConfig & { id: string; name: string })[];
+    activeView: DatabaseViewConfig & { id: string; name: string };
+    rowsByViewId: Map<string, DatabaseRow[]>;
+    groupsByViewId: Map<string, ReturnType<typeof groupedDatabaseRows>>;
+    statesByViewId: Map<string, ReturnType<typeof databaseViewColumnStates>>;
+  } | null = null;
   #filterBarOpen = new Set<string>();
   #dragSelect: {
     anchorRowId: string;
@@ -368,6 +402,7 @@ export class DatabaseView {
   #fillHandleRaf: number | null = null;
   #detail: HTMLElement | null = null;
   #detailRowId: string | null = null;
+  #detailTrigger: HTMLElement | null = null;
   #detailEvents = new AbortController();
   #visibleKey = '';
   #boardTitleEditing: { rowId: string; columnId: string } | null = null;
@@ -467,8 +502,14 @@ export class DatabaseView {
   setReadonly(readonly: boolean): void {
     if (readonly === this.#readonly) return;
     this.#readonly = readonly;
-    if (!readonly) this.#groupOverrides.clear();
-    if (readonly) this.#closeDetailPanel();
+    if (!readonly) {
+      this.#readonlyActiveViewId = null;
+      if (this.#groupOverrides.size > 0) {
+        this.#groupOverrides.clear();
+        this.#groupOverrideVersion += 1;
+      }
+    }
+    if (readonly) this.#closeDetailPanel({ restoreFocus: false });
     this.element.dataset.readonly = String(readonly);
     this.render();
   }
@@ -513,28 +554,65 @@ export class DatabaseView {
     this.#narrowSearchMedia?.removeEventListener('change', this.#onNarrowSearchMedia);
     this.#narrowSearchMedia = null;
     this.#filterBarOpen.clear();
+    this.#selectedTds.clear();
+    this.#activeTds.clear();
+    this.#syncedData = null;
+    this.#queryCache = null;
     this.#scrollElement = null;
     this.#cellToolbar = null;
     this.#pendingMarks = null;
     this.#closePopover();
-    this.#closeDetailPanel();
+    this.#closeDetailPanel({ restoreFocus: false });
     this.element.remove();
   }
 
   /** ---- rendering ---- */
 
-  #views(): (DatabaseViewConfig & { id: string; name: string })[] {
-    return databaseViews(this.#data).map((view, index) => ({
+  #ensureQueryCache() {
+    const readonlyActiveViewId = this.#readonly ? this.#readonlyActiveViewId : null;
+    if (
+      this.#queryCache &&
+      this.#queryCache.data === this.#data &&
+      this.#queryCache.searchQuery === this.#searchQuery &&
+      this.#queryCache.readonly === this.#readonly &&
+      this.#queryCache.readonlyActiveViewId === readonlyActiveViewId &&
+      this.#queryCache.overrideVersion === this.#groupOverrideVersion
+    ) {
+      return this.#queryCache;
+    }
+    const views = databaseViews(this.#data).map((view, index) => ({
       ...view,
       id: view.id ?? (index === 0 ? 'view-default' : `view-${index}`),
       name: view.name ?? (view.type === 'board' ? 'Board' : 'Table'),
       filters: view.filters ?? [],
     }));
+    const activeView =
+      (readonlyActiveViewId !== null
+        ? views.find(view => view.id === readonlyActiveViewId)
+        : undefined) ??
+      views.find(view => view.id === this.#data.activeViewId) ??
+      views[0]!;
+    this.#queryCache = {
+      data: this.#data,
+      searchQuery: this.#searchQuery,
+      readonly: this.#readonly,
+      readonlyActiveViewId,
+      overrideVersion: this.#groupOverrideVersion,
+      views,
+      activeView,
+      rowsByViewId: new Map(),
+      groupsByViewId: new Map(),
+      statesByViewId: new Map(),
+    };
+    return this.#queryCache;
+  }
+
+  #views(): (DatabaseViewConfig & { id: string; name: string })[] {
+    return this.#ensureQueryCache().views;
   }
 
   #activeView(): DatabaseViewConfig & { id: string; name: string } {
-    const views = this.#views();
-    return views.find(view => view.id === this.#data.activeViewId) ?? views[0]!;
+    return this.#ensureQueryCache().activeView;
   }
 
   #updateActiveView(patch: Partial<DatabaseViewConfig>): void {
@@ -554,6 +632,11 @@ export class DatabaseView {
 
   #setActiveView(id: string): void {
     if (id === this.#activeView().id) return;
+    if (this.#readonly) {
+      this.#readonlyActiveViewId = id;
+      this.render();
+      return;
+    }
     const { view: _legacyView, sort: _legacySort, ...rest } = this.#data;
     this.#host.commit({ ...rest, views: this.#views(), activeViewId: id });
   }
@@ -645,6 +728,7 @@ export class DatabaseView {
         ...(this.#groupOverrides.get(key) ?? {}),
         ...patch,
       });
+      this.#groupOverrideVersion += 1;
       this.render();
       return;
     }
@@ -665,7 +749,13 @@ export class DatabaseView {
   #columnStates(
     view: DatabaseViewConfig = this.#activeView()
   ): ReturnType<typeof databaseViewColumnStates> {
-    return databaseViewColumnStates(this.#data, view);
+    const cache = this.#ensureQueryCache();
+    const key = view.id ?? '';
+    const cached = cache.statesByViewId.get(key);
+    if (cached) return cached;
+    const result = databaseViewColumnStates(this.#data, view);
+    cache.statesByViewId.set(key, result);
+    return result;
   }
 
   #visibleColumns(view: DatabaseViewConfig = this.#activeView()): DatabaseColumn[] {
@@ -677,33 +767,55 @@ export class DatabaseView {
   }
 
   #rowsFor(view: DatabaseViewConfig = this.#activeView()): DatabaseRow[] {
-    return searchDatabaseRows(
-      this.#data,
-      filteredDatabaseRows(this.#data, view),
-      this.#searchQuery
-    );
+    const cache = this.#ensureQueryCache();
+    const key = view.id ?? '';
+    const cached = cache.rowsByViewId.get(key);
+    if (cached) return cached;
+    const filtered = filteredDatabaseRows(this.#data, view);
+    const result =
+      this.#searchQuery.trim().length > 0
+        ? searchDatabaseRows(this.#data, filtered, this.#searchQuery)
+        : filtered;
+    cache.rowsByViewId.set(key, result);
+    return result;
   }
 
   #groupsFor(
     view: DatabaseViewConfig = this.#activeView()
   ): ReturnType<typeof groupedDatabaseRows> {
-    const allowed = new Set(this.#rowsFor(view).map(row => row.id));
-    const groups = groupedDatabaseRows(this.#data, view).map(group => {
-      const override = this.#readonly
-        ? this.#groupOverrides.get(group.key)
-        : undefined;
-      return {
-        ...group,
-        ...(override?.hide !== undefined ? { hidden: override.hide } : {}),
-        ...(override?.collapsed !== undefined
-          ? { collapsed: override.collapsed }
-          : {}),
-        rows: group.rows.filter(row => allowed.has(row.id)),
-      };
-    });
-    return view.hideEmptyGroups
+    const cache = this.#ensureQueryCache();
+    const key = view.id ?? '';
+    const cached = cache.groupsByViewId.get(key);
+    if (cached) return cached;
+    const hasSearch = this.#searchQuery.trim().length > 0;
+    const allowed = hasSearch
+      ? new Set(this.#rowsFor(view).map(row => row.id))
+      : null;
+    const hasOverrides = this.#readonly && this.#groupOverrides.size > 0;
+    const baseGroups = groupedDatabaseRows(this.#data, view);
+    const groups =
+      allowed || hasOverrides
+        ? baseGroups.map(group => {
+            const override = hasOverrides
+              ? this.#groupOverrides.get(group.key)
+              : undefined;
+            return {
+              ...group,
+              ...(override?.hide !== undefined ? { hidden: override.hide } : {}),
+              ...(override?.collapsed !== undefined
+                ? { collapsed: override.collapsed }
+                : {}),
+              ...(allowed
+                ? { rows: group.rows.filter(row => allowed.has(row.id)) }
+                : {}),
+            };
+          })
+        : baseGroups;
+    const result = view.hideEmptyGroups
       ? groups.filter(group => group.rows.length > 0)
       : groups;
+    cache.groupsByViewId.set(key, result);
+    return result;
   }
 
   #keyFor(data: DatabaseData): string {
@@ -743,8 +855,16 @@ export class DatabaseView {
 
   #visibleKeyFor(
     data: DatabaseData,
-    view: DatabaseViewConfig = databaseView(data)
+    view: DatabaseViewConfig = data === this.#data ? this.#activeView() : databaseView(data)
   ): string {
+    if (data === this.#data) {
+      if (view.type === 'board' || view.groupBy) {
+        return this.#groupsFor(view)
+          .map(group => `${group.key}:${group.rows.map(row => row.id).join(',')}`)
+          .join('\u0001');
+      }
+      return this.#rowsFor(view).map(row => row.id).join('\u0001');
+    }
     const allowed = new Set(
       searchDatabaseRows(data, filteredDatabaseRows(data, view), this.#searchQuery).map(row => row.id)
     );
@@ -776,6 +896,8 @@ export class DatabaseView {
     this.#closePopover();
     this.#pendingMarks = null;
     this.#cells.clear();
+    this.#selectedTds.clear();
+    this.#activeTds.clear();
     this.#clearRange();
     this.#selectedRows = new Set(
       [...this.#selectedRows].filter(id => this.#data.rows.some(row => row.id === id))
@@ -897,6 +1019,7 @@ export class DatabaseView {
         placeCaret(title, 'end');
       });
     }
+    this.#syncedData = this.#data;
   }
 
   #renderContent(): void {
@@ -916,6 +1039,8 @@ export class DatabaseView {
       this.#pendingMarks = null;
     }
     this.#cells.clear();
+    this.#selectedTds.clear();
+    this.#activeTds.clear();
     this.#clearRange();
     this.#colElements = [];
     this.#visibleKey = this.#visibleKeyFor(this.#data, view);
@@ -926,6 +1051,7 @@ export class DatabaseView {
     this.#updateCount(view);
     this.#syncDetailPanel();
     this.#syncRowSelection();
+    this.#syncedData = this.#data;
   }
 
   #renderFilterBar(view: DatabaseViewConfig): HTMLElement | null {
@@ -1004,6 +1130,7 @@ export class DatabaseView {
       add.className = 'nb-db-viewtab nb-db-viewadd';
       add.textContent = '+';
       add.title = 'Add view';
+      add.setAttribute('aria-label', 'Add view');
       add.addEventListener('click', () => this.#openAddViewMenu(add), {
         signal: this.#events.signal,
       });
@@ -1028,8 +1155,13 @@ export class DatabaseView {
         activeFilterCount > 0 ? `Filter, ${activeFilterCount} active` : 'Filter rows'
       );
       if (activeFilterCount > 0) {
-        filter.setAttribute('aria-expanded', String(this.#filterBarOpen.has(viewId)));
-        filter.setAttribute('aria-controls', `${this.#instanceId}-filters`);
+        const open = this.#filterBarOpen.has(viewId);
+        filter.setAttribute('aria-expanded', String(open));
+        if (open) {
+          filter.setAttribute('aria-controls', `${this.#instanceId}-filters`);
+        } else {
+          filter.removeAttribute('aria-controls');
+        }
       }
       filter.addEventListener('click', () => {
         if (databaseFilterGroup(view).conditions.length === 0) {
@@ -1075,13 +1207,6 @@ export class DatabaseView {
     toggle.setAttribute('aria-label', 'Search');
     toggle.innerHTML = icon.search;
 
-    const setOpen = (open: boolean): void => {
-      this.#searchOpen = open;
-      wrap.dataset.open = String(open);
-      toggle.setAttribute('aria-expanded', String(open));
-    };
-    setOpen(this.#searchOpen || this.#searchQuery.length > 0);
-
     const search = document.createElement('input');
     search.className = 'nb-db-search';
     search.type = 'search';
@@ -1095,6 +1220,14 @@ export class DatabaseView {
     clear.title = 'Clear search';
     clear.setAttribute('aria-label', 'Clear search');
     clear.innerHTML = icon.x;
+
+    const setOpen = (open: boolean): void => {
+      this.#searchOpen = open;
+      wrap.dataset.open = String(open);
+      toggle.setAttribute('aria-expanded', String(open));
+      clear.tabIndex = open ? 0 : -1;
+    };
+    setOpen(this.#searchOpen || this.#searchQuery.length > 0);
 
     let composing = false;
     const applySearch = (): void => {
@@ -1418,6 +1551,7 @@ export class DatabaseView {
       up.innerHTML = icon.arrowUp;
       up.disabled = index === 0;
       up.title = 'Move up';
+      up.setAttribute('aria-label', `Move ${state.column.name} up`);
       up.addEventListener('click', () => {
         this.#closePopover();
         this.#patchViewColumn(state.column.id, {}, { move: -1 });
@@ -1428,6 +1562,7 @@ export class DatabaseView {
       down.innerHTML = icon.arrowDown;
       down.disabled = index === states.length - 1;
       down.title = 'Move down';
+      down.setAttribute('aria-label', `Move ${state.column.name} down`);
       down.addEventListener('click', () => {
         this.#closePopover();
         this.#patchViewColumn(state.column.id, {}, { move: 1 });
@@ -1535,6 +1670,7 @@ export class DatabaseView {
         remove.className = 'nb-db-filter-remove';
         remove.innerHTML = icon.x;
         remove.title = 'Remove sort';
+        remove.setAttribute('aria-label', 'Remove sort');
         remove.addEventListener('click', () => {
           draft.splice(index, 1);
           render();
@@ -1605,7 +1741,6 @@ export class DatabaseView {
         const heading = document.createElement('div');
         heading.className = 'nb-db-group-head';
         const collapsed = Boolean(group.collapsed);
-        heading.setAttribute('aria-expanded', String(!collapsed));
         const toggle = document.createElement('button');
         toggle.type = 'button';
         toggle.className = 'nb-db-group-toggle';
@@ -1856,7 +1991,7 @@ export class DatabaseView {
     tr.append(handle);
     for (const column of columns) {
       const td = this.#createCell(row, column);
-      if (column.id === opsColumnId && !this.#readonly) {
+      if (column.id === opsColumnId) {
         td.classList.add('has-row-ops');
         td.append(this.#renderRowOperations(row.id));
       }
@@ -1884,6 +2019,10 @@ export class DatabaseView {
       event.stopPropagation();
       this.#openDetailPanel(rowId);
     }, { signal: this.#contentEvents.signal });
+    if (this.#readonly) {
+      ops.append(expand);
+      return ops;
+    }
     const menu = document.createElement('button');
     menu.type = 'button';
     menu.className = 'nb-db-rowmenu';
@@ -2304,10 +2443,12 @@ export class DatabaseView {
           titleColumn.type === 'number'
             ? raw.replace(/[^0-9eE+.-]/gu, '')
             : raw;
+        const current = this.#currentCell(row.id, titleColumn.id);
+        if ((current?.text ?? '') === value) return;
         this.#commitCell(
           row.id,
           titleColumn.id,
-          this.#withText(this.#currentCell(row.id, titleColumn.id), value),
+          this.#withText(current, value),
           `db:${row.id}:${titleColumn.id}`
         );
       };
@@ -2437,9 +2578,17 @@ export class DatabaseView {
     const activeElement = root.activeElement;
     const columns = this.#visibleColumns(view);
     const titleColumn = this.#titleColumn(view) ?? columns[0];
+    const rowById = new Map(this.#data.rows.map(row => [row.id, row]));
+    const prev = this.#syncedData;
+    const prevColumnsSame = prev !== null && prev.columns === this.#data.columns;
+    const prevRowById =
+      !force && prev ? new Map(prev.rows.map(row => [row.id, row])) : null;
     for (const card of this.element.querySelectorAll<HTMLElement>('.nb-db-card[data-row-id]')) {
-      const row = this.#data.rows.find(item => item.id === card.dataset.rowId);
+      const rowId = card.dataset.rowId;
+      if (!rowId) continue;
+      const row = rowById.get(rowId);
       if (!row) continue;
+      if (!force && prevColumnsSame && prevRowById?.get(rowId) === row) continue;
       const title = card.querySelector<HTMLElement>('.nb-db-card-title');
       if (title && !this.#composingTargets.has(title) && (force || activeElement !== title)) {
         const raw = titleColumn
@@ -2483,28 +2632,24 @@ export class DatabaseView {
     event.stopPropagation();
     const startX = event.clientX;
     const startWidth = col.getBoundingClientRect().width;
-    const move = (moveEvent: PointerEvent): void => {
-      const width = Math.max(
-        MIN_DATABASE_COLUMN_WIDTH,
-        Math.min(
-          MAX_DATABASE_COLUMN_WIDTH,
-          Math.round(startWidth + moveEvent.clientX - startX)
-        )
-      );
-      col.style.width = `${width}px`;
-    };
-    const end = (): void => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', end);
-      window.removeEventListener('pointercancel', end);
-      const width = Number.parseFloat(col.style.width);
-      if (Number.isFinite(width)) {
-        this.#commitColumnWidth(column.id, width);
+    this.#beginWindowDrag(
+      moveEvent => {
+        const width = Math.max(
+          MIN_DATABASE_COLUMN_WIDTH,
+          Math.min(
+            MAX_DATABASE_COLUMN_WIDTH,
+            Math.round(startWidth + moveEvent.clientX - startX)
+          )
+        );
+        col.style.width = `${width}px`;
+      },
+      () => {
+        const width = Number.parseFloat(col.style.width);
+        if (Number.isFinite(width)) {
+          this.#commitColumnWidth(column.id, width);
+        }
       }
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', end);
-    window.addEventListener('pointercancel', end);
+    );
   }
 
   #openFilterPopover(anchor: HTMLElement): void {
@@ -2606,6 +2751,8 @@ export class DatabaseView {
       remove.type = 'button';
       remove.className = 'nb-db-filter-remove';
       remove.innerHTML = icon.x;
+      remove.title = 'Remove filter';
+      remove.setAttribute('aria-label', 'Remove filter');
       remove.addEventListener('click', () => {
         parent.conditions = parent.conditions.filter(item => item !== filter);
         render();
@@ -2767,6 +2914,7 @@ export class DatabaseView {
       remove.className = 'nb-db-filter-remove';
       remove.innerHTML = icon.x;
       remove.title = 'Remove group';
+      remove.setAttribute('aria-label', 'Remove group');
       remove.addEventListener('click', () => {
         if (!parentGroup) return;
         parentGroup.conditions = parentGroup.conditions.filter(item => item !== group);
@@ -2889,6 +3037,7 @@ export class DatabaseView {
         up.innerHTML = icon.arrowUp;
         up.disabled = index === 0;
         up.title = 'Move group up';
+        up.setAttribute('aria-label', `Move ${group.label || 'group'} up`);
         up.addEventListener('click', () => this.#moveGroup(group.key, -1), {
           signal: this.#events.signal,
         });
@@ -2898,6 +3047,7 @@ export class DatabaseView {
         down.innerHTML = icon.arrowDown;
         down.disabled = index === groups.length - 1;
         down.title = 'Move group down';
+        down.setAttribute('aria-label', `Move ${group.label || 'group'} down`);
         down.addEventListener('click', () => this.#moveGroup(group.key, 1), {
           signal: this.#events.signal,
         });
@@ -2906,6 +3056,10 @@ export class DatabaseView {
         toggle.className = 'nb-db-property-eye';
         toggle.dataset.hidden = String(Boolean(group.hidden));
         toggle.title = group.hidden ? 'Show group' : 'Hide group';
+        toggle.setAttribute(
+          'aria-label',
+          group.hidden ? `Show ${group.label || 'group'}` : `Hide ${group.label || 'group'}`
+        );
         toggle.innerHTML = group.hidden ? icon.expand : icon.checkboxSquare;
         toggle.addEventListener('click', () => {
           this.#closePopover();
@@ -2966,9 +3120,8 @@ export class DatabaseView {
     const selected = this.#selectedVisibleRows();
     if (selected.length === 0) return;
     const ids = new Set(selected.map(row => row.id));
-    const rows = this.#data.rows.filter(row => !ids.has(row.id));
     for (const id of ids) this.#selectedRows.delete(id);
-    this.#host.commit({ ...this.#data, rows });
+    this.#commitDeletedRows(ids);
   }
 
   #selectedVisibleRows(): DatabaseRow[] {
@@ -2983,7 +3136,10 @@ export class DatabaseView {
     return rows;
   }
 
-  #closeDetailPanel(): void {
+  #closeDetailPanel(
+    options: { restoreFocus?: boolean; keepTrigger?: boolean } = {}
+  ): void {
+    const { restoreFocus = true, keepTrigger = false } = options;
     this.#hideCellToolbar();
     this.#pendingMarks = null;
     this.#detail?.remove();
@@ -2991,16 +3147,44 @@ export class DatabaseView {
     this.#detailRowId = null;
     this.#detailEvents.abort();
     this.#detailEvents = new AbortController();
+    if (keepTrigger) return;
+    const trigger = this.#detailTrigger;
+    this.#detailTrigger = null;
+    if (restoreFocus && trigger?.isConnected) {
+      trigger.focus();
+    }
+  }
+
+  #detailFocusables(panel: HTMLElement): HTMLElement[] {
+    const candidates = panel.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [contenteditable="true"], [tabindex]:not([tabindex="-1"])'
+    );
+    const result: HTMLElement[] = [];
+    for (const element of candidates) {
+      if (element.hasAttribute('hidden') || element.getAttribute('aria-hidden') === 'true') {
+        continue;
+      }
+      const style = getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden') continue;
+      if (element.getClientRects().length === 0) continue;
+      result.push(element);
+    }
+    return result;
   }
 
   #openDetailPanel(rowId: string): void {
-    this.#closeDetailPanel();
     const row = this.#data.rows.find(item => item.id === rowId);
     if (!row) return;
+    const root = this.element.getRootNode() as ShadowRoot;
+    const hadDetail = this.#detail !== null;
+    if (!hadDetail) {
+      const activeEl = root.activeElement ?? this.element.ownerDocument.activeElement;
+      this.#detailTrigger = activeEl instanceof HTMLElement ? activeEl : null;
+    }
+    this.#closeDetailPanel({ restoreFocus: false, keepTrigger: true });
     this.#detailRowId = rowId;
     const view = this.#activeView();
     const titleColumn = this.#titleColumn(view);
-    const root = this.element.getRootNode() as ShadowRoot;
     const backdrop = document.createElement('div');
     backdrop.className = 'nb-db-detail-backdrop';
     const panel = document.createElement('section');
@@ -3024,6 +3208,7 @@ export class DatabaseView {
     prev.dataset.nav = 'prev';
     prev.innerHTML = icon.arrowUp;
     prev.title = 'Previous record';
+    prev.setAttribute('aria-label', 'Previous record');
     prev.addEventListener('click', () => navigate(-1));
     const next = document.createElement('button');
     next.type = 'button';
@@ -3031,6 +3216,7 @@ export class DatabaseView {
     next.dataset.nav = 'next';
     next.innerHTML = icon.arrowDown;
     next.title = 'Next record';
+    next.setAttribute('aria-label', 'Next record');
     next.addEventListener('click', () => navigate(1));
     this.#syncDetailNav(prev, next, rowId);
     nav.append(prev, next);
@@ -3064,6 +3250,47 @@ export class DatabaseView {
 
     panel.append(this.#renderDetailPage(row));
 
+    panel.addEventListener(
+      'keydown',
+      event => {
+        if (event.key !== 'Tab') return;
+        const focusables = this.#detailFocusables(panel);
+        if (focusables.length === 0) {
+          event.preventDefault();
+          return;
+        }
+        const active = root.activeElement as HTMLElement | null;
+        const currentIndex = active ? focusables.indexOf(active) : -1;
+        event.preventDefault();
+        if (event.shiftKey) {
+          const prevIndex =
+            currentIndex <= 0 ? focusables.length - 1 : currentIndex - 1;
+          focusables[prevIndex]?.focus();
+        } else {
+          const nextIndex =
+            currentIndex < 0 || currentIndex >= focusables.length - 1
+              ? 0
+              : currentIndex + 1;
+          focusables[nextIndex]?.focus();
+        }
+      },
+      { signal: this.#detailEvents.signal }
+    );
+
+    panel.addEventListener(
+      'click',
+      event => {
+        const target = event.target as Element | null;
+        const link = target?.closest<HTMLElement>('[data-link]');
+        if (link && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          const href = safeHref(link.dataset.link);
+          if (href) window.open(href, '_blank', 'noopener,noreferrer');
+        }
+      },
+      { signal: this.#detailEvents.signal }
+    );
+
     backdrop.append(panel);
     backdrop.addEventListener('pointerdown', event => {
       if (event.target === backdrop) this.#closeDetailPanel();
@@ -3090,8 +3317,12 @@ export class DatabaseView {
     });
     (root.querySelector('.nb-overlay') ?? root).append(backdrop);
     this.#detail = backdrop;
-    title.focus();
-    title.select();
+    if (this.#readonly) {
+      close.focus();
+    } else {
+      title.focus();
+      title.select();
+    }
   }
 
   #renderDetailTitle(
@@ -3116,10 +3347,12 @@ export class DatabaseView {
           titleColumn.type === 'number'
             ? title.value.replace(/[^0-9eE+.-]/gu, '')
             : title.value;
+        const current = this.#currentCell(row.id, titleColumn.id);
+        if ((current?.text ?? '') === value) return;
         this.#commitCell(
           row.id,
           titleColumn.id,
-          this.#withText(this.#currentCell(row.id, titleColumn.id), value),
+          this.#withText(current, value),
           `db:${row.id}:${titleColumn.id}`
         );
       }, { signal: this.#detailEvents.signal });
@@ -3231,7 +3464,7 @@ export class DatabaseView {
   }
 
   #renderDetailField(row: DatabaseRow, column: DatabaseColumn): HTMLElement {
-    const field = document.createElement('label');
+    const field = document.createElement(column.type === 'text' ? 'div' : 'label');
     field.className = 'nb-db-detail-field';
     field.dataset.columnId = column.id;
     field.dataset.schema = detailFieldSchema(column);
@@ -3338,9 +3571,9 @@ export class DatabaseView {
       button.className = 'nb-db-select nb-db-multi nb-db-detail-picker';
       button.disabled = this.#readonly;
       if (column.type === 'files') {
-        this.#applyFilesLabel(button, cell?.files ?? []);
+        this.#applyFilesLabel(button, cell?.files ?? [], column.name);
       } else {
-        this.#applyPeopleLabel(button, cell?.people ?? []);
+        this.#applyPeopleLabel(button, cell?.people ?? [], column.name);
       }
       button.addEventListener('click', () => {
         if (column.type === 'files') {
@@ -3358,6 +3591,9 @@ export class DatabaseView {
     text.contentEditable = this.#readonly ? 'false' : 'true';
     text.spellcheck = false;
     text.dataset.richText = 'true';
+    text.setAttribute('role', 'textbox');
+    text.setAttribute('aria-label', column.name);
+    text.setAttribute('aria-multiline', 'false');
     this.#renderTextCellContent(text, cell);
     if (!this.#readonly) {
       const commitField = (): void => {
@@ -3449,27 +3685,23 @@ export class DatabaseView {
     const startX = event.clientX;
     const startY = event.clientY;
     let moved = false;
-    const move = (moveEvent: PointerEvent): void => {
-      if (Math.abs(moveEvent.clientX - startX) < 6 && Math.abs(moveEvent.clientY - startY) < 6) {
-        return;
+    this.#beginWindowDrag(
+      moveEvent => {
+        if (Math.abs(moveEvent.clientX - startX) < 6 && Math.abs(moveEvent.clientY - startY) < 6) {
+          return;
+        }
+        moved = true;
+      },
+      endEvent => {
+        if (!moved) return;
+        this.#suppressClick = true;
+        window.setTimeout(() => {
+          this.#suppressClick = false;
+        }, 0);
+        const target = this.#headerColumnFromEvent(endEvent);
+        if (target && target !== columnId) this.#moveColumnTo(columnId, target);
       }
-      moved = true;
-    };
-    const end = (endEvent: PointerEvent): void => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', end);
-      window.removeEventListener('pointercancel', end);
-      if (!moved) return;
-      this.#suppressClick = true;
-      window.setTimeout(() => {
-        this.#suppressClick = false;
-      }, 0);
-      const target = this.#headerColumnFromEvent(endEvent);
-      if (target && target !== columnId) this.#moveColumnTo(columnId, target);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', end);
-    window.addEventListener('pointercancel', end);
+    );
   }
 
   #headerColumnFromEvent(event: Event): string | undefined {
@@ -3498,27 +3730,23 @@ export class DatabaseView {
     const startX = event.clientX;
     const startY = event.clientY;
     let moved = false;
-    const move = (moveEvent: PointerEvent): void => {
-      if (Math.abs(moveEvent.clientX - startX) < 6 && Math.abs(moveEvent.clientY - startY) < 6) {
-        return;
+    this.#beginWindowDrag(
+      moveEvent => {
+        if (Math.abs(moveEvent.clientX - startX) < 6 && Math.abs(moveEvent.clientY - startY) < 6) {
+          return;
+        }
+        moved = true;
+      },
+      endEvent => {
+        if (!moved) return;
+        this.#suppressClick = true;
+        window.setTimeout(() => {
+          this.#suppressClick = false;
+        }, 0);
+        const target = this.#rowFromEvent(endEvent);
+        if (target && target !== rowId) this.#moveRowTo(rowId, target, groupKey);
       }
-      moved = true;
-    };
-    const end = (endEvent: PointerEvent): void => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', end);
-      window.removeEventListener('pointercancel', end);
-      if (!moved) return;
-      this.#suppressClick = true;
-      window.setTimeout(() => {
-        this.#suppressClick = false;
-      }, 0);
-      const target = this.#rowFromEvent(endEvent);
-      if (target && target !== rowId) this.#moveRowTo(rowId, target, groupKey);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', end);
-    window.addEventListener('pointercancel', end);
+    );
   }
 
   #rowFromEvent(event: Event): string | undefined {
@@ -3620,14 +3848,7 @@ export class DatabaseView {
         ...row,
         cells: {
           ...row.cells,
-          [column.id]: {
-            ...cell,
-            ...(cell.values ? { values: [...cell.values] } : {}),
-            ...(cell.files ? { files: cell.files.map(file => ({ ...file })) } : {}),
-            ...(cell.people
-              ? { people: cell.people.map(person => ({ ...person })) }
-              : {}),
-          },
+          [column.id]: this.#cloneCell(cell),
         },
       };
     });
@@ -3747,10 +3968,8 @@ export class DatabaseView {
     remove.addEventListener('click', () => {
       this.#closePopover();
       const ids = new Set(rows.map(row => row.id));
-      this.#host.commit({
-        ...this.#data,
-        rows: this.#data.rows.filter(row => !ids.has(row.id)),
-      });
+      for (const id of ids) this.#selectedRows.delete(id);
+      this.#commitDeletedRows(ids);
     });
     content.append(add, remove);
     this.#showPopover(anchor, content);
@@ -3962,23 +4181,58 @@ export class DatabaseView {
   }
 
   #syncValues(): void {
+    const root = this.element.getRootNode() as ShadowRoot;
+    const prev = this.#syncedData;
+    const prevColumnsSame = prev !== null && prev.columns === this.#data.columns;
+    const prevRowById = prev
+      ? new Map(prev.rows.map(row => [row.id, row]))
+      : null;
+    const prevColById =
+      prev && !prevColumnsSame
+        ? new Map(prev.columns.map(column => [column.id, column]))
+        : null;
+
     for (const row of this.#data.rows) {
+      const prevRow = prevRowById?.get(row.id);
+      if (prevRow === row && prevColumnsSame) continue;
       for (const column of this.#data.columns) {
+        const cell = row.cells[column.id];
+        if (prevRow) {
+          const prevCol = prevColumnsSame ? column : prevColById?.get(column.id);
+          if (prevCol === column && prevRow.cells[column.id] === cell) continue;
+        }
         const copies = this.#cells.get(cellKey(row.id, column.id));
         if (!copies) continue;
-        const cell = row.cells[column.id];
         const value = column.type === 'checkbox' ? '' : cell?.text ?? '';
         for (const nodes of copies) {
           if (nodes.text && !this.#composingTargets.has(nodes.text)) {
-            if (nodes.text.dataset.richText === 'true') {
-              const signature = this.#runsSignature(cell?.runs);
-              if (nodes.text.dataset.runs !== signature) {
-                this.#renderTextCellContent(nodes.text, cell);
-              } else if (!cell?.runs && nodes.text.textContent !== value) {
-                nodes.text.textContent = value;
+            const target = nodes.text;
+            const updateText = (apply: () => void, nextLength: number): void => {
+              const focused = root.activeElement === target;
+              const saved = focused ? selectionOffsets(target) : null;
+              apply();
+              if (focused && saved) {
+                setSelectionOffsets(
+                  target,
+                  Math.min(saved.start, nextLength),
+                  Math.min(saved.end, nextLength)
+                );
               }
-            } else if (nodes.text.textContent !== value) {
-              nodes.text.textContent = value;
+            };
+            if (target.dataset.richText === 'true') {
+              const signature = this.#runsSignature(cell?.runs);
+              if (target.dataset.runs !== signature) {
+                const nextLength = cell?.runs ? runsLength(cell.runs) : value.length;
+                updateText(() => this.#renderTextCellContent(target, cell), nextLength);
+              } else if (!cell?.runs && target.textContent !== value) {
+                updateText(() => {
+                  target.textContent = value;
+                }, value.length);
+              }
+            } else if (target.textContent !== value) {
+              updateText(() => {
+                target.textContent = value;
+              }, value.length);
             }
           }
           if (nodes.input) {
@@ -3992,16 +4246,16 @@ export class DatabaseView {
             nodes.button.setAttribute('aria-checked', String(Boolean(cell?.checked)));
           }
           if (nodes.button && column.type === 'select') {
-            this.#applySelectLabel(nodes.button, value, column.options);
+            this.#applySelectLabel(nodes.button, value, column.options, column.name);
           }
           if (nodes.button && column.type === 'multi-select') {
-            this.#applyMultiLabel(nodes.button, cell?.values ?? []);
+            this.#applyMultiLabel(nodes.button, cell?.values ?? [], column.name);
           }
           if (nodes.button && column.type === 'files') {
-            this.#applyFilesLabel(nodes.button, cell?.files ?? []);
+            this.#applyFilesLabel(nodes.button, cell?.files ?? [], column.name);
           }
           if (nodes.button && column.type === 'people') {
-            this.#applyPeopleLabel(nodes.button, cell?.people ?? []);
+            this.#applyPeopleLabel(nodes.button, cell?.people ?? [], column.name);
           }
         }
       }
@@ -4011,6 +4265,7 @@ export class DatabaseView {
     this.#syncStats();
     this.#syncDetailPanel();
     this.#updateCount(this.#activeView());
+    this.#syncedData = this.#data;
   }
 
   #syncDetailPanel(): void {
@@ -4124,9 +4379,9 @@ export class DatabaseView {
       );
       if (picker) {
         if (column.type === 'files') {
-          this.#applyFilesLabel(picker, cell?.files ?? []);
+          this.#applyFilesLabel(picker, cell?.files ?? [], column.name);
         } else if (column.type === 'people') {
-          this.#applyPeopleLabel(picker, cell?.people ?? []);
+          this.#applyPeopleLabel(picker, cell?.people ?? [], column.name);
         }
         continue;
       }
@@ -4233,22 +4488,50 @@ export class DatabaseView {
 
   #syncStats(): void {
     const view = this.#activeView();
-    const groups = this.#groupsFor(view);
+    const states = this.#columnStates(view);
+    const stateByColId = new Map<string, (typeof states)[number]>();
+    let hasAnyStat = false;
+    for (const state of states) {
+      stateByColId.set(state.column.id, state);
+      if (!state.hide && state.stat) hasAnyStat = true;
+    }
+    if (!hasAnyStat) {
+      for (const button of this.element.querySelectorAll<HTMLButtonElement>(
+        '.nb-db-table .nb-db-stat[data-stat-column]'
+      )) {
+        if (button.dataset.calculated !== 'false') {
+          button.dataset.calculated = 'false';
+          button.textContent = 'Calculate';
+        }
+      }
+      return;
+    }
+    let groups: ReturnType<typeof groupedDatabaseRows> | null = null;
     for (const table of this.element.querySelectorAll<HTMLElement>('.nb-db-table')) {
       const groupKey = table.closest<HTMLElement>('.nb-db-group')?.dataset.group;
-      const rows = groupKey === undefined
-        ? this.#rowsFor(view)
-        : groups.find(group => group.key === groupKey)?.rows ?? [];
+      let rows: DatabaseRow[] | null = null;
       for (const button of table.querySelectorAll<HTMLButtonElement>('.nb-db-stat[data-stat-column]')) {
-        const column = this.#data.columns.find(item => item.id === button.dataset.statColumn);
-        if (!column) continue;
-        const stat = this.#columnStates(view).find(
-          item => item.column.id === column.id
-        )?.stat;
-        button.dataset.calculated = String(Boolean(stat));
-        button.textContent = stat
-          ? `${DATABASE_STAT_LABELS[stat]}: ${databaseStatValue(rows, column, stat)}`
-          : 'Calculate';
+        const columnId = button.dataset.statColumn;
+        const state = columnId ? stateByColId.get(columnId) : undefined;
+        if (!state) continue;
+        const stat = state.stat;
+        if (!stat) {
+          if (button.dataset.calculated !== 'false') {
+            button.dataset.calculated = 'false';
+            button.textContent = 'Calculate';
+          }
+          continue;
+        }
+        if (!rows) {
+          if (groupKey === undefined) {
+            rows = this.#rowsFor(view);
+          } else {
+            groups ??= this.#groupsFor(view);
+            rows = groups.find(group => group.key === groupKey)?.rows ?? [];
+          }
+        }
+        button.dataset.calculated = 'true';
+        button.textContent = `${DATABASE_STAT_LABELS[stat]}: ${databaseStatValue(rows, state.column, stat)}`;
       }
     }
   }
@@ -4337,7 +4620,7 @@ export class DatabaseView {
     button.type = 'button';
     button.className = 'nb-db-select';
     button.disabled = this.#readonly;
-    this.#applySelectLabel(button, cell?.text ?? '', column.options);
+    this.#applySelectLabel(button, cell?.text ?? '', column.options, column.name);
     button.addEventListener(
       'click',
       () => this.#openSelectPopover(column.id, row.id, button),
@@ -4346,7 +4629,7 @@ export class DatabaseView {
     button.addEventListener(
       'keydown',
       event => {
-        if (event.key === 'Enter' && !event.shiftKey) {
+        if (!(event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();
           this.#openSelectPopover(column.id, row.id, button);
           return;
@@ -4371,11 +4654,11 @@ export class DatabaseView {
     button.className = 'nb-db-select nb-db-multi';
     button.disabled = this.#readonly;
     if (column.type === 'multi-select') {
-      this.#applyMultiLabel(button, cell?.values ?? []);
+      this.#applyMultiLabel(button, cell?.values ?? [], column.name);
     } else if (column.type === 'files') {
-      this.#applyFilesLabel(button, cell?.files ?? []);
+      this.#applyFilesLabel(button, cell?.files ?? [], column.name);
     } else {
-      this.#applyPeopleLabel(button, cell?.people ?? []);
+      this.#applyPeopleLabel(button, cell?.people ?? [], column.name);
     }
     button.addEventListener(
       'click',
@@ -4393,7 +4676,7 @@ export class DatabaseView {
     button.addEventListener(
       'keydown',
       event => {
-        if (event.key === 'Enter' && !event.shiftKey) {
+        if (!(event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();
           button.click();
           return;
@@ -4586,8 +4869,16 @@ export class DatabaseView {
     this.#commitCell(rowId, columnId, cell, mergeKey);
   }
 
-  #applySelectLabel(button: HTMLButtonElement, value: string, options: string[] = []): void {
+  #applySelectLabel(
+    button: HTMLButtonElement,
+    value: string,
+    options: string[] = [],
+    columnName?: string
+  ): void {
     button.replaceChildren();
+    if (columnName) {
+      button.setAttribute('aria-label', value ? `${columnName}: ${value}` : columnName);
+    }
     if (!value) {
       button.classList.add('is-empty');
       const label = document.createElement('span');
@@ -4612,8 +4903,18 @@ export class DatabaseView {
     button.append(dot, label);
   }
 
-  #applyMultiLabel(button: HTMLButtonElement, values: string[]): void {
+  #applyMultiLabel(
+    button: HTMLButtonElement,
+    values: string[],
+    columnName?: string
+  ): void {
     button.replaceChildren();
+    if (columnName) {
+      button.setAttribute(
+        'aria-label',
+        values.length > 0 ? `${columnName}: ${values.join(', ')}` : columnName
+      );
+    }
     button.classList.toggle('is-empty', values.length === 0);
     if (values.length === 0) {
       const label = document.createElement('span');
@@ -4635,27 +4936,40 @@ export class DatabaseView {
     }
   }
 
-  #applyFilesLabel(button: HTMLButtonElement, files: DatabaseFile[]): void {
+  #applyFilesLabel(
+    button: HTMLButtonElement,
+    files: DatabaseFile[],
+    columnName?: string
+  ): void {
     button.replaceChildren();
     button.classList.toggle('is-empty', files.length === 0);
-    const label = document.createElement('span');
-    label.textContent =
+    const summary =
       files.length === 0
-        ? 'Add file…'
+        ? ''
         : files.length === 1
           ? files[0]!.name
           : `${files.length} files`;
+    if (columnName) {
+      button.setAttribute('aria-label', summary ? `${columnName}: ${summary}` : columnName);
+    }
+    const label = document.createElement('span');
+    label.textContent = summary || 'Add file…';
     button.append(label);
   }
 
-  #applyPeopleLabel(button: HTMLButtonElement, people: DatabasePerson[]): void {
+  #applyPeopleLabel(
+    button: HTMLButtonElement,
+    people: DatabasePerson[],
+    columnName?: string
+  ): void {
     button.replaceChildren();
     button.classList.toggle('is-empty', people.length === 0);
+    const summary = people.map(person => person.label).join(', ');
+    if (columnName) {
+      button.setAttribute('aria-label', summary ? `${columnName}: ${summary}` : columnName);
+    }
     const label = document.createElement('span');
-    label.textContent =
-      people.length === 0
-        ? 'Add people…'
-        : people.map(person => person.label).join(', ');
+    label.textContent = summary || 'Add people…';
     button.append(label);
   }
 
@@ -4761,8 +5075,47 @@ export class DatabaseView {
     });
   }
 
+  #pruneRowIdsFromViews(
+    views: readonly DatabaseViewConfig[],
+    deletedIds: ReadonlySet<string>
+  ): DatabaseViewConfig[] {
+    if (deletedIds.size === 0) return [...views];
+    let anyChanged = false;
+    const nextViews = views.map(view => {
+      if (!view.groupProperties?.length) return view;
+      let viewChanged = false;
+      const groupProperties = view.groupProperties.map(group => {
+        if (!group.manuallyCardSort?.length) return group;
+        const nextSort = group.manuallyCardSort.filter(id => !deletedIds.has(id));
+        if (nextSort.length === group.manuallyCardSort.length) return group;
+        viewChanged = true;
+        const { manuallyCardSort: _removed, ...rest } = group;
+        return nextSort.length > 0 ? { ...rest, manuallyCardSort: nextSort } : rest;
+      });
+      if (!viewChanged) return view;
+      anyChanged = true;
+      return { ...view, groupProperties };
+    });
+    return anyChanged ? nextViews : [...views];
+  }
+
+  #commitDeletedRows(deletedIds: ReadonlySet<string>): void {
+    const views = this.#data.views
+      ? this.#pruneRowIdsFromViews(this.#data.views, deletedIds)
+      : undefined;
+    const view = this.#data.view
+      ? this.#pruneRowIdsFromViews([this.#data.view], deletedIds)[0]
+      : undefined;
+    this.#host.commit({
+      ...this.#data,
+      rows: this.#data.rows.filter(row => !deletedIds.has(row.id)),
+      ...(views ? { views } : {}),
+      ...(view ? { view } : {}),
+    });
+  }
+
   #deleteRow(rowId: string): void {
-    this.#host.commit({ ...this.#data, rows: this.#data.rows.filter(row => row.id !== rowId) });
+    this.#commitDeletedRows(new Set([rowId]));
     if (this.#active?.rowId === rowId) this.#active = null;
   }
 
@@ -5088,6 +5441,11 @@ export class DatabaseView {
       this.#moveTab(rowId, columnId, event.shiftKey);
       return;
     }
+    if (mod && event.key === 'Enter') {
+      event.preventDefault();
+      this.#openDetailPanel(rowId);
+      return;
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       const nodes = activeNode;
@@ -5172,7 +5530,17 @@ export class DatabaseView {
       this.#hideCellToolbar();
       return;
     }
+    const offsets = selectionOffsets(target);
+    const activeMarks = offsets
+      ? markStateInRange(this.#readRichTextRuns(target), offsets.start, offsets.end)
+      : {};
     const toolbar = this.#ensureCellToolbar();
+    for (const button of toolbar.querySelectorAll<HTMLButtonElement>('.nb-db-inline-tool')) {
+      const markKey = button.dataset.tag ? TAG_TO_MARK[button.dataset.tag] : undefined;
+      const active = Boolean(markKey && activeMarks[markKey] === true);
+      button.dataset.active = String(active);
+      button.setAttribute('aria-pressed', String(active));
+    }
     toolbar.hidden = false;
     placeFloating(toolbar, rect, {
       align: 'center',
@@ -5558,48 +5926,47 @@ export class DatabaseView {
     };
     this.#dragSelect = drag;
     const root = this.element.getRootNode() as ShadowRoot;
-    const move = (moveEvent: PointerEvent): void => {
-      if (this.#dragSelect !== drag) return;
-      const cell = this.#cellFromEvent(moveEvent);
-      const targetRowId = cell?.dataset.rowId;
-      const targetColumnId = cell?.dataset.columnId;
-      if (!cell || !targetRowId || !targetColumnId) return;
-      if (
-        !drag.moved &&
-        targetRowId === drag.anchorRowId &&
-        targetColumnId === drag.anchorColumnId
-      ) {
-        return;
-      }
-      drag.moved = true;
-      this.#range = {
-        startRowId: drag.anchorRowId,
-        startColumnId: drag.anchorColumnId,
-        endRowId: targetRowId,
-        endColumnId: targetColumnId,
-        ...(groupKey !== undefined ? { groupKey } : {}),
-      };
-      nativeSelection(root)?.removeAllRanges();
-      moveEvent.preventDefault();
-      this.#renderRange();
-    };
-    const finish = (): void => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', finish);
-      window.removeEventListener('pointercancel', finish);
-      if (this.#dragSelect !== drag) return;
-      this.#dragSelect = null;
-      if (drag.moved) {
-        this.#suppressClick = true;
-        window.setTimeout(() => {
-          this.#suppressClick = false;
-        }, 0);
+    this.#beginWindowDrag(
+      moveEvent => {
+        if (this.#dragSelect !== drag) return;
+        const cell = this.#cellFromEvent(moveEvent);
+        const targetRowId = cell?.dataset.rowId;
+        const targetColumnId = cell?.dataset.columnId;
+        if (!cell || !targetRowId || !targetColumnId) return;
+        if (
+          !drag.moved &&
+          targetRowId === drag.anchorRowId &&
+          targetColumnId === drag.anchorColumnId
+        ) {
+          return;
+        }
+        drag.moved = true;
+        this.#range = {
+          startRowId: drag.anchorRowId,
+          startColumnId: drag.anchorColumnId,
+          endRowId: targetRowId,
+          endColumnId: targetColumnId,
+          ...(groupKey !== undefined ? { groupKey } : {}),
+        };
+        nativeSelection(root)?.removeAllRanges();
+        moveEvent.preventDefault();
         this.#renderRange();
+      },
+      () => {
+        if (this.#dragSelect !== drag) return;
+        this.#dragSelect = null;
+        if (drag.moved) {
+          this.#suppressClick = true;
+          window.setTimeout(() => {
+            this.#suppressClick = false;
+          }, 0);
+          this.#renderRange();
+        }
+      },
+      () => {
+        if (this.#dragSelect === drag) this.#dragSelect = null;
       }
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', finish);
-    window.addEventListener('pointercancel', finish);
+    );
   }
 
   #cellFromEvent(event: Event): HTMLElement | null {
@@ -5665,24 +6032,57 @@ export class DatabaseView {
   }
 
   #syncSelectionVisuals(): void {
-    for (const [key, copies] of this.#cells) {
-      const [rowId, columnId] = key.split('\u0000');
-      const selected = this.#rangeCells.has(key);
+    const nextSelected = new Set<HTMLTableCellElement>();
+    for (const key of this.#rangeCells) {
+      const copies = this.#cells.get(key);
+      if (!copies) continue;
       for (const nodes of copies) {
-        const groupKey = nodes.td.closest<HTMLElement>('.nb-db-group')?.dataset
-          .group;
-        const activeState = this.#active;
-        const active =
-          activeState !== null &&
-          activeState.rowId === rowId &&
-          activeState.columnId === columnId &&
-          (activeState.groupKey === undefined ||
-            activeState.groupKey === groupKey);
-        nodes.td.classList.toggle('is-selected', selected);
-        nodes.td.classList.toggle('is-active', active);
-        nodes.td.setAttribute('aria-selected', String(selected));
+        nextSelected.add(nodes.td);
       }
     }
+
+    const nextActive = new Set<HTMLTableCellElement>();
+    const activeState = this.#active;
+    if (activeState) {
+      const copies = this.#cells.get(cellKey(activeState.rowId, activeState.columnId));
+      if (copies) {
+        for (const nodes of copies) {
+          if (
+            activeState.groupKey === undefined ||
+            nodes.td.closest<HTMLElement>('.nb-db-group')?.dataset.group ===
+              activeState.groupKey
+          ) {
+            nextActive.add(nodes.td);
+          }
+        }
+      }
+    }
+
+    for (const td of this.#selectedTds) {
+      if (!nextSelected.has(td)) {
+        td.classList.remove('is-selected');
+        td.setAttribute('aria-selected', 'false');
+      }
+    }
+    for (const td of nextSelected) {
+      if (!this.#selectedTds.has(td)) {
+        td.classList.add('is-selected');
+        td.setAttribute('aria-selected', 'true');
+      }
+    }
+    for (const td of this.#activeTds) {
+      if (!nextActive.has(td)) {
+        td.classList.remove('is-active');
+      }
+    }
+    for (const td of nextActive) {
+      if (!this.#activeTds.has(td)) {
+        td.classList.add('is-active');
+      }
+    }
+
+    this.#selectedTds = nextSelected;
+    this.#activeTds = nextActive;
     this.#positionFillHandle();
   }
 
@@ -5732,6 +6132,32 @@ export class DatabaseView {
     handle.dataset.visible = 'true';
   }
 
+  #beginWindowDrag(
+    onMove: (event: PointerEvent) => void,
+    onFinish: (event: PointerEvent) => void,
+    onCancel?: () => void
+  ): void {
+    const contentSignal = this.#contentEvents.signal;
+    if (contentSignal.aborted) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    contentSignal.addEventListener(
+      'abort',
+      () => {
+        onCancel?.();
+        controller.abort();
+      },
+      { once: true, signal }
+    );
+    window.addEventListener('pointermove', onMove, { signal });
+    const finish = (event: PointerEvent): void => {
+      controller.abort();
+      onFinish(event);
+    };
+    window.addEventListener('pointerup', finish, { signal });
+    window.addEventListener('pointercancel', finish, { signal });
+  }
+
   #beginFillDrag(): void {
     if (this.#readonly) return;
     const active = this.#active;
@@ -5745,54 +6171,50 @@ export class DatabaseView {
     if (!source) return;
     const groupKey = active.groupKey;
     let moved = false;
-    const move = (moveEvent: PointerEvent): void => {
-      const target = this.#cellFromEvent(moveEvent);
-      if (!target || target.dataset.columnId !== active.columnId) return;
-      const targetRowId = target.dataset.rowId;
-      const targetIndex = visibleRows.findIndex(row => row.id === targetRowId);
-      if (targetIndex < 0) return;
-      moved = true;
-      const start = Math.min(sourceRowIndex, targetIndex);
-      const end = Math.max(sourceRowIndex, targetIndex);
-      const firstRow = visibleRows[start];
-      const lastRow = visibleRows[end];
-      if (!firstRow || !lastRow) return;
-      this.#range = {
-        startRowId: firstRow.id,
-        startColumnId: active.columnId,
-        endRowId: lastRow.id,
-        endColumnId: active.columnId,
-        ...(groupKey !== undefined ? { groupKey } : {}),
-      };
-      this.#renderRange();
-    };
-    const finish = (): void => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', finish);
-      window.removeEventListener('pointercancel', finish);
-      if (!moved) return;
-      const current = this.#rangeBounds();
-      if (!current) return;
-      const sourceCell = source.cells[column.id];
-      let next = this.#data;
-      for (let index = current.startRow; index <= current.endRow; index += 1) {
-        const row = current.rows[index];
-        if (!row || row.id === active.rowId) continue;
-        const cells = { ...row.cells };
-        if (sourceCell) cells[column.id] = this.#cloneCell(sourceCell);
-        else delete cells[column.id];
-        next = {
-          ...next,
-          rows: next.rows.map(item =>
-            item.id === row.id ? { ...item, cells } : item
-          ),
+    this.#beginWindowDrag(
+      moveEvent => {
+        const target = this.#cellFromEvent(moveEvent);
+        if (!target || target.dataset.columnId !== active.columnId) return;
+        const targetRowId = target.dataset.rowId;
+        const targetIndex = visibleRows.findIndex(row => row.id === targetRowId);
+        if (targetIndex < 0) return;
+        moved = true;
+        const start = Math.min(sourceRowIndex, targetIndex);
+        const end = Math.max(sourceRowIndex, targetIndex);
+        const firstRow = visibleRows[start];
+        const lastRow = visibleRows[end];
+        if (!firstRow || !lastRow) return;
+        this.#range = {
+          startRowId: firstRow.id,
+          startColumnId: active.columnId,
+          endRowId: lastRow.id,
+          endColumnId: active.columnId,
+          ...(groupKey !== undefined ? { groupKey } : {}),
         };
+        this.#renderRange();
+      },
+      () => {
+        if (!moved) return;
+        const current = this.#rangeBounds();
+        if (!current) return;
+        const sourceCell = source.cells[column.id];
+        const updated = new Map<string, DatabaseRow>();
+        for (let index = current.startRow; index <= current.endRow; index += 1) {
+          const row = current.rows[index];
+          if (!row || row.id === active.rowId) continue;
+          const cells = { ...row.cells };
+          if (sourceCell) cells[column.id] = this.#cloneCell(sourceCell);
+          else delete cells[column.id];
+          updated.set(row.id, { ...row, cells });
+        }
+        if (updated.size > 0) {
+          this.#host.commit({
+            ...this.#data,
+            rows: this.#data.rows.map(item => updated.get(item.id) ?? item),
+          });
+        }
       }
-      if (next !== this.#data) this.#host.commit(next);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', finish);
-    window.addEventListener('pointercancel', finish);
+    );
   }
 
   #cloneCell(cell: DatabaseCell): DatabaseCell {
@@ -6070,6 +6492,7 @@ export class DatabaseView {
   };
 
   #onCut = (event: ClipboardEvent): void => {
+    if (this.#readonly) return;
     const target = event.target as Element | null;
     if (target?.closest('.nb-db-popover, .nb-db-detail')) return;
     if (
@@ -6111,6 +6534,7 @@ export class DatabaseView {
   };
 
   #onPaste = (event: ClipboardEvent): void => {
+    if (this.#readonly) return;
     const target = event.target as Element | null;
     if (target?.closest('.nb-db-popover, .nb-db-card-title')) return;
     if (
@@ -6357,6 +6781,8 @@ export class DatabaseView {
         remove.type = 'button';
         remove.className = 'nb-db-filter-remove';
         remove.innerHTML = icon.x;
+        remove.title = `Remove ${file.name}`;
+        remove.setAttribute('aria-label', `Remove ${file.name}`);
         remove.addEventListener('click', () => {
           files.splice(index, 1);
           render();

@@ -420,7 +420,10 @@ function parseViewColumns(
   return result;
 }
 
-function parseGroupProperties(value: unknown): DatabaseGroupProperty[] {
+function parseGroupProperties(
+  value: unknown,
+  rowIds?: ReadonlySet<string>
+): DatabaseGroupProperty[] {
   if (!Array.isArray(value)) return [];
   const result: DatabaseGroupProperty[] = [];
   const seen = new Set<string>();
@@ -428,9 +431,19 @@ function parseGroupProperties(value: unknown): DatabaseGroupProperty[] {
     if (!isRecord(item) || typeof item.key !== 'string' || item.key.length > 200) continue;
     if (seen.has(item.key)) continue;
     seen.add(item.key);
-    const manuallyCardSort = Array.isArray(item.manuallyCardSort)
-      ? item.manuallyCardSort.filter((id): id is string => typeof id === 'string').slice(0, 1000)
-      : undefined;
+    let manuallyCardSort: string[] | undefined;
+    if (Array.isArray(item.manuallyCardSort)) {
+      const seenIds = new Set<string>();
+      const maxIds = rowIds ? rowIds.size : 50_000;
+      for (const id of item.manuallyCardSort) {
+        if (typeof id !== 'string') continue;
+        if (rowIds && !rowIds.has(id)) continue;
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        if (seenIds.size >= maxIds) break;
+      }
+      if (seenIds.size > 0) manuallyCardSort = [...seenIds];
+    }
     result.push({
       key: item.key,
       ...(item.hide === true ? { hide: true } : {}),
@@ -456,7 +469,8 @@ function parseSorts(value: unknown, columns: readonly DatabaseColumn[]): Databas
 
 function parseView(
   value: unknown,
-  columns: readonly DatabaseColumn[]
+  columns: readonly DatabaseColumn[],
+  rowIds?: ReadonlySet<string>
 ): DatabaseView | undefined {
   if (!isRecord(value)) return undefined;
   const type = value.type === 'board' ? 'board' : 'table';
@@ -510,7 +524,7 @@ function parseView(
     stats,
     legacyWidths
   );
-  const groupProperties = parseGroupProperties(value.groupProperties);
+  const groupProperties = parseGroupProperties(value.groupProperties, rowIds);
   const headerValue = isRecord(value.header) ? value.header : {};
   const header = {
     ...(typeof headerValue.titleColumnId === 'string' &&
@@ -571,12 +585,12 @@ export function normalizeDatabaseData(value: unknown, fallbackVariant: DatabaseV
     }
   }
   const sort = parseSort(value.sort, columns);
-  const view = parseView(value.view, columns);
+  const view = parseView(value.view, columns, rowIds);
   const views: DatabaseView[] = [];
   if (Array.isArray(value.views)) {
     const seen = new Set<string>();
     for (const item of value.views.slice(0, 100)) {
-      const parsed = parseView(item, columns);
+      const parsed = parseView(item, columns, rowIds);
       if (!parsed?.id || seen.has(parsed.id)) continue;
       seen.add(parsed.id);
       views.push(parsed);
@@ -869,48 +883,56 @@ function comparable(value: string, type: DatabaseColumnType): string | number {
   return value.toLocaleLowerCase();
 }
 
+const TEXT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
 function sortRows(
   rows: readonly DatabaseRow[],
   columns: readonly DatabaseColumn[],
   sorts: readonly DatabaseSort[]
 ): DatabaseRow[] {
   if (sorts.length === 0) return [...rows];
-  return rows
-    .map((row, index) => ({ row, index }))
-    .sort((a, b) => {
-      for (const sort of sorts) {
-        const column = columns.find(item => item.id === sort.columnId);
-        if (!column) continue;
-        const left = databaseCellText(a.row.cells[column.id], column.type);
-        const right = databaseCellText(b.row.cells[column.id], column.type);
-        if (!left && !right) continue;
-        if (!left) return 1;
-        if (!right) return -1;
-        let result = 0;
-        if (column.type === 'checkbox') {
-          const l = a.row.cells[column.id]?.checked ? 1 : 0;
-          const r = b.row.cells[column.id]?.checked ? 1 : 0;
-          result = l - r;
-        } else {
-          const l = comparable(left, column.type);
-          const r = comparable(right, column.type);
-          if (typeof l === 'number' && typeof r === 'number') {
-            if (Number.isNaN(l) && Number.isNaN(r)) result = 0;
-            else if (Number.isNaN(l)) result = 1;
-            else if (Number.isNaN(r)) result = -1;
-            else result = l - r;
-          } else {
-            result = String(l).localeCompare(String(r), undefined, {
-              numeric: true,
-              sensitivity: 'base',
-            });
-          }
-        }
-        if (result !== 0) return sort.direction === 'desc' ? -result : result;
+  const columnById = new Map(columns.map(column => [column.id, column]));
+  const resolvedSorts: { column: DatabaseColumn; direction: 'asc' | 'desc' }[] = [];
+  for (const sort of sorts) {
+    const column = columnById.get(sort.columnId);
+    if (column) resolvedSorts.push({ column, direction: sort.direction });
+  }
+  if (resolvedSorts.length === 0) return [...rows];
+
+  const entries = rows.map((row, index) => ({
+    row,
+    index,
+    keys: resolvedSorts.map(({ column }) => {
+      const text = databaseCellText(row.cells[column.id], column.type);
+      if (!text) return null;
+      if (column.type === 'checkbox') return row.cells[column.id]?.checked ? 1 : 0;
+      return comparable(text, column.type);
+    }),
+  }));
+
+  entries.sort((a, b) => {
+    for (let i = 0; i < resolvedSorts.length; i += 1) {
+      const sort = resolvedSorts[i]!;
+      const l = a.keys[i] ?? null;
+      const r = b.keys[i] ?? null;
+      if (l === null && r === null) continue;
+      if (l === null) return 1;
+      if (r === null) return -1;
+      let result = 0;
+      if (typeof l === 'number' && typeof r === 'number') {
+        if (Number.isNaN(l) && Number.isNaN(r)) result = 0;
+        else if (Number.isNaN(l)) result = 1;
+        else if (Number.isNaN(r)) result = -1;
+        else result = l - r;
+      } else {
+        result = TEXT_COLLATOR.compare(String(l), String(r));
       }
-      return a.index - b.index;
-    })
-    .map(entry => entry.row);
+      if (result !== 0) return sort.direction === 'desc' ? -result : result;
+    }
+    return a.index - b.index;
+  });
+
+  return entries.map(entry => entry.row);
 }
 
 export function databaseSorts(view: DatabaseView): DatabaseSort[] {
@@ -1251,10 +1273,17 @@ export function databaseStatValue(
   }
   if (numbers.length === 0) return '';
   if (type === 'sum') return formatStatNumber(numbers.reduce((sum, value) => sum + value, 0));
-  if (type === 'min') return formatStatNumber(Math.min(...numbers));
-  if (type === 'max') return formatStatNumber(Math.max(...numbers));
-  if (type === 'range') {
-    return formatStatNumber(Math.max(...numbers) - Math.min(...numbers));
+  if (type === 'min' || type === 'max' || type === 'range') {
+    let min = numbers[0] ?? 0;
+    let max = min;
+    for (let i = 1; i < numbers.length; i += 1) {
+      const n = numbers[i]!;
+      if (n < min) min = n;
+      if (n > max) max = n;
+    }
+    if (type === 'min') return formatStatNumber(min);
+    if (type === 'max') return formatStatNumber(max);
+    return formatStatNumber(max - min);
   }
   if (type === 'average') {
     return formatStatNumber(numbers.reduce((sum, value) => sum + value, 0) / numbers.length);
@@ -1280,14 +1309,14 @@ function applyGroupSettings(
   groups: DatabaseGroup[],
   view: DatabaseView
 ): DatabaseGroup[] {
-  const settings = new Map(
-    (view.groupProperties ?? []).map(group => [group.key, group])
-  );
+  const groupProperties = view.groupProperties ?? [];
+  const settings = new Map(groupProperties.map(group => [group.key, group]));
+  const orderIndex = new Map(groupProperties.map((group, index) => [group.key, index]));
   const hasOrder = settings.size > 0;
   const ordered = hasOrder
     ? [...groups].sort((a, b) => {
-        const ai = view.groupProperties?.findIndex(group => group.key === a.key) ?? -1;
-        const bi = view.groupProperties?.findIndex(group => group.key === b.key) ?? -1;
+        const ai = orderIndex.get(a.key) ?? -1;
+        const bi = orderIndex.get(b.key) ?? -1;
         if (ai < 0 && bi < 0) return 0;
         if (ai < 0) return 1;
         if (bi < 0) return -1;
@@ -1351,33 +1380,51 @@ export function groupedDatabaseRows(
 
   if (column.type === 'select' || column.type === 'multi-select') {
     const options = [...(column.options ?? [])];
-    const values = new Set(options);
+    const optionSet = new Set(options);
+    const buckets = new Map<string, DatabaseRow[]>();
+    const empty: DatabaseRow[] = [];
     for (const row of rows) {
       const cell = row.cells[column.id];
-      const rowValues =
-        column.type === 'multi-select'
-          ? cell?.values ?? []
-          : cell?.text
-            ? [cell.text]
-            : [];
-      for (const value of rowValues) values.add(value);
+      if (column.type === 'multi-select') {
+        const rowValues = cell?.values;
+        if (!rowValues || rowValues.length === 0) {
+          empty.push(row);
+          continue;
+        }
+        const seen = rowValues.length > 1 ? new Set<string>() : null;
+        for (const value of rowValues) {
+          if (seen) {
+            if (seen.has(value)) continue;
+            seen.add(value);
+          }
+          let bucket = buckets.get(value);
+          if (!bucket) {
+            bucket = [];
+            buckets.set(value, bucket);
+          }
+          bucket.push(row);
+        }
+      } else {
+        const value = cell?.text;
+        if (!value) {
+          empty.push(row);
+          continue;
+        }
+        let bucket = buckets.get(value);
+        if (!bucket) {
+          bucket = [];
+          buckets.set(value, bucket);
+        }
+        bucket.push(row);
+      }
     }
-    const ordered = [...options, ...[...values].filter(value => !options.includes(value)).sort()];
+    const extraKeys = [...buckets.keys()].filter(value => !optionSet.has(value)).sort();
+    const ordered = [...options, ...extraKeys];
     const groups: DatabaseGroup[] = ordered.map(value => ({
       key: value,
       label: value,
-      rows: rows.filter(row => {
-        const cell = row.cells[column.id];
-        if (column.type === 'multi-select') return (cell?.values ?? []).includes(value);
-        return cell?.text === value;
-      }),
+      rows: buckets.get(value) ?? [],
     }));
-    const empty = rows.filter(row => {
-      const cell = row.cells[column.id];
-      return column.type === 'multi-select'
-        ? !(cell?.values?.length)
-        : !cell?.text;
-    });
     if (empty.length > 0) groups.push({ key: '', label: 'No value', rows: empty });
     return applyGroupSettings(groups, view);
   }
