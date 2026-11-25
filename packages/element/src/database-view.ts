@@ -353,6 +353,7 @@ export class DatabaseView {
   #rangeCells = new Set<string>();
   #selectedRows = new Set<string>();
   #groupOverrides = new Map<string, { hide?: boolean; collapsed?: boolean }>();
+  #filterBarOpen = new Set<string>();
   #dragSelect: {
     anchorRowId: string;
     anchorColumnId: string;
@@ -369,7 +370,18 @@ export class DatabaseView {
   #boardBlurTimer: number | null = null;
   #instanceId = createId('db');
   #searchQuery = '';
+  #searchOpen = false;
   #searchFocusPending = false;
+  #narrowSearchMedia: MediaQueryList | null = null;
+  #onNarrowSearchMedia = (event: MediaQueryListEvent): void => {
+    if (!event.matches) return;
+    this.#searchOpen = false;
+    if (!this.#searchQuery) return;
+    this.#searchQuery = '';
+    this.#searchSelection = null;
+    this.#searchFocusPending = false;
+    this.render();
+  };
   #searchSelection: { start: number; end: number } | null = null;
 
   constructor(host: DatabaseHost, data: DatabaseData) {
@@ -386,6 +398,9 @@ export class DatabaseView {
     this.element.addEventListener('paste', this.#onPaste, true);
     this.element.addEventListener('click', this.#onClickCapture, true);
     this.element.addEventListener('keydown', this.#onDatabaseKeyDown, true);
+    const view = this.element.ownerDocument.defaultView;
+    this.#narrowSearchMedia = view?.matchMedia('(max-width: 560px)') ?? null;
+    this.#narrowSearchMedia?.addEventListener('change', this.#onNarrowSearchMedia);
     this.render();
   }
 
@@ -453,6 +468,9 @@ export class DatabaseView {
       this.#boardBlurTimer = null;
     }
     this.#events.abort();
+    this.#narrowSearchMedia?.removeEventListener('change', this.#onNarrowSearchMedia);
+    this.#narrowSearchMedia = null;
+    this.#filterBarOpen.clear();
     this.#closePopover();
     this.#closeDetailPanel();
     this.element.remove();
@@ -566,6 +584,9 @@ export class DatabaseView {
     const flat: DatabaseFilter[] = filter.conditions.filter(
       (item): item is DatabaseFilter => item.type !== 'group'
     );
+    const view = this.#activeView();
+    if (filter.conditions.length > 0) this.#filterBarOpen.add(view.id);
+    else this.#filterBarOpen.delete(view.id);
     this.#updateActiveView({
       filter,
       filters: flat,
@@ -771,8 +792,11 @@ export class DatabaseView {
       });
       tools.append(addRecord);
     }
-    headTop.append(title, count, tools);
-    head.append(headTop, this.#renderViewBar(view));
+    headTop.append(title, count);
+    const bar = document.createElement('div');
+    bar.className = 'nb-db-bar';
+    bar.append(this.#renderViewBar(view), tools);
+    head.append(headTop, bar);
 
     const scroll = document.createElement('div');
     scroll.className = 'nb-db-scroll';
@@ -833,8 +857,13 @@ export class DatabaseView {
   #renderFilterBar(view: DatabaseViewConfig): HTMLElement | null {
     const group = databaseFilterGroup(view);
     if (group.conditions.length === 0) return null;
+    const viewId = this.#activeView().id;
+    if (!this.#readonly && !this.#filterBarOpen.has(viewId)) return null;
     const bar = document.createElement('div');
     bar.className = 'nb-db-filter-bar';
+    bar.id = `${this.#instanceId}-filters`;
+    bar.setAttribute('role', 'region');
+    bar.setAttribute('aria-label', 'Active filters');
     for (const condition of group.conditions) {
       const chip = document.createElement('button');
       chip.type = 'button';
@@ -896,15 +925,6 @@ export class DatabaseView {
       bar.append(button);
     }
     if (!this.#readonly) {
-      const more = document.createElement('button');
-      more.type = 'button';
-      more.className = 'nb-db-viewtab nb-db-viewmore';
-      more.textContent = '⋯';
-      more.title = 'View actions';
-      more.addEventListener('click', () => this.#openViewMenu(more), {
-        signal: this.#events.signal,
-      });
-      bar.append(more);
       const add = document.createElement('button');
       add.type = 'button';
       add.className = 'nb-db-viewtab nb-db-viewadd';
@@ -919,13 +939,110 @@ export class DatabaseView {
   }
 
   #renderToolButtons(view: DatabaseViewConfig, tools: HTMLElement): void {
+    if (!this.#readonly) {
+      const viewId = this.#activeView().id;
+      const filter = document.createElement('button');
+      filter.type = 'button';
+      filter.className = 'nb-db-btn';
+      const activeFilterCount = databaseFilterGroup(view).conditions.length;
+      filter.dataset.active = String(activeFilterCount > 0);
+      filter.dataset.filterToggle = 'true';
+      filter.innerHTML = `${icon.filter}<span class="nb-db-btn-label">${activeFilterCount > 0 ? `Filter (${activeFilterCount})` : 'Filter'}</span>`;
+      filter.title = 'Filter rows';
+      filter.setAttribute(
+        'aria-label',
+        activeFilterCount > 0 ? `Filter, ${activeFilterCount} active` : 'Filter rows'
+      );
+      if (activeFilterCount > 0) {
+        filter.setAttribute('aria-expanded', String(this.#filterBarOpen.has(viewId)));
+        filter.setAttribute('aria-controls', `${this.#instanceId}-filters`);
+      }
+      filter.addEventListener('click', () => {
+        if (databaseFilterGroup(view).conditions.length === 0) {
+          this.#openFilterPopover(filter);
+          return;
+        }
+        if (this.#filterBarOpen.has(viewId)) this.#filterBarOpen.delete(viewId);
+        else this.#filterBarOpen.add(viewId);
+        this.render();
+        requestAnimationFrame(() => {
+          if (!this.element.isConnected) return;
+          this.element
+            .querySelector<HTMLButtonElement>('[data-filter-toggle="true"]')
+            ?.focus();
+        });
+      }, { signal: this.#events.signal });
+      tools.append(filter);
+    }
+
+    this.#renderSearch(tools);
+
+    if (this.#readonly) return;
+    const options = document.createElement('button');
+    options.type = 'button';
+    options.className = 'nb-db-btn nb-db-viewmore';
+    options.innerHTML = icon.more;
+    options.title = 'View settings';
+    options.setAttribute('aria-label', 'View settings');
+    options.addEventListener('click', () => this.#openViewMenu(options), {
+      signal: this.#events.signal,
+    });
+    tools.append(options);
+  }
+
+  #renderSearch(tools: HTMLElement): void {
+    const wrap = document.createElement('div');
+    wrap.className = 'nb-db-search-wrap';
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'nb-db-search-toggle';
+    toggle.title = 'Search rows';
+    toggle.setAttribute('aria-label', 'Search');
+    toggle.innerHTML = icon.search;
+
+    const setOpen = (open: boolean): void => {
+      this.#searchOpen = open;
+      wrap.dataset.open = String(open);
+      toggle.setAttribute('aria-expanded', String(open));
+    };
+    setOpen(this.#searchOpen || this.#searchQuery.length > 0);
+
     const search = document.createElement('input');
     search.className = 'nb-db-search';
     search.type = 'search';
     search.placeholder = 'Search';
     search.value = this.#searchQuery;
     search.setAttribute('aria-label', 'Search rows');
+
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.className = 'nb-db-search-clear';
+    clear.title = 'Clear search';
+    clear.setAttribute('aria-label', 'Clear search');
+    clear.innerHTML = icon.x;
+
+    const clearSearch = (): void => {
+      this.#searchQuery = '';
+      this.#searchSelection = { start: 0, end: 0 };
+      this.#searchOpen = true;
+      this.#searchFocusPending = true;
+      this.render();
+    };
+
+    toggle.addEventListener('click', () => {
+      setOpen(true);
+      search.focus();
+    }, { signal: this.#events.signal });
+    search.addEventListener('focus', () => setOpen(true), {
+      signal: this.#events.signal,
+    });
+    search.addEventListener('blur', () => {
+      if (!wrap.isConnected || search.value) return;
+      setOpen(false);
+    }, { signal: this.#events.signal });
     search.addEventListener('input', () => {
+      setOpen(true);
       this.#searchQuery = search.value;
       this.#searchSelection = {
         start: search.selectionStart ?? search.value.length,
@@ -934,59 +1051,33 @@ export class DatabaseView {
       this.#searchFocusPending = true;
       this.render();
     }, { signal: this.#events.signal });
-    tools.append(search);
-
-    if (this.#readonly) return;
-    const filter = document.createElement('button');
-    filter.type = 'button';
-    filter.className = 'nb-db-btn';
-    const activeFilterCount = databaseFilterGroup(view).conditions.length;
-    filter.dataset.active = String(activeFilterCount > 0);
-    filter.innerHTML = `${icon.filter}<span>${activeFilterCount > 0 ? `Filter (${activeFilterCount})` : 'Filter'}</span>`;
-    filter.title = 'Filter rows';
-    filter.addEventListener('click', () => this.#openFilterPopover(filter), {
+    search.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (search.value) {
+        clearSearch();
+        return;
+      }
+      setOpen(false);
+      search.blur();
+      toggle.focus();
+    }, { signal: this.#events.signal });
+    clear.addEventListener('mousedown', event => event.preventDefault(), {
       signal: this.#events.signal,
     });
-    tools.append(filter);
+    clear.addEventListener('click', () => {
+      if (!search.value && !this.#searchQuery) {
+        setOpen(false);
+        search.blur();
+        toggle.focus();
+        return;
+      }
+      clearSearch();
+    }, { signal: this.#events.signal });
 
-    const sortCount = (view.sorts ?? (view.sort ? [view.sort] : [])).length;
-    const sort = document.createElement('button');
-    sort.type = 'button';
-    sort.className = 'nb-db-btn';
-    sort.dataset.active = String(sortCount > 0);
-    sort.innerHTML = `${icon.sort}<span>${sortCount > 0 ? `Sort (${sortCount})` : 'Sort'}</span>`;
-    sort.title = 'Sort rows';
-    sort.addEventListener('click', () => this.#openSortPopover(sort), {
-      signal: this.#events.signal,
-    });
-    tools.append(sort);
-
-    const columns = document.createElement('button');
-    columns.type = 'button';
-    columns.className = 'nb-db-btn';
-    columns.innerHTML = `${icon.columns}<span>Columns</span>`;
-    columns.title = 'Show or hide columns';
-    columns.addEventListener('click', () => this.#openColumnsPopover(columns), {
-      signal: this.#events.signal,
-    });
-    tools.append(columns);
-
-    const group = document.createElement('button');
-    group.type = 'button';
-    group.className = 'nb-db-btn';
-    const groupColumn = view.groupBy
-      ? this.#data.columns.find(item => item.id === view.groupBy)
-      : undefined;
-    group.dataset.active = String(Boolean(groupColumn));
-    group.innerHTML = icon.group;
-    const groupLabel = document.createElement('span');
-    groupLabel.textContent = groupColumn ? `Group: ${groupColumn.name}` : 'Group';
-    group.append(groupLabel);
-    group.title = 'Group rows';
-    group.addEventListener('click', () => this.#openGroupPopover(group), {
-      signal: this.#events.signal,
-    });
-    tools.append(group);
+    wrap.append(toggle, search, clear);
+    tools.append(wrap);
   }
 
   #nextViewName(type: 'table' | 'board'): string {
@@ -1403,69 +1494,6 @@ export class DatabaseView {
     this.#showPopover(anchor, content);
   }
 
-  #openColumnsPopover(anchor: HTMLElement): void {
-    const view = this.#activeView();
-    const hidden = new Set(
-      this.#columnStates(view)
-        .filter(item => item.hide)
-        .map(item => item.column.id)
-    );
-    const content = document.createElement('div');
-    const title = document.createElement('div');
-    title.className = 'nb-db-pop-title';
-    title.textContent = 'Columns';
-    content.append(title);
-    const list = document.createElement('div');
-    list.className = 'nb-db-column-list';
-    const render = (): void => {
-      list.replaceChildren();
-      for (const column of this.#data.columns) {
-        const label = document.createElement('label');
-        label.className = 'nb-db-column-toggle';
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.checked = !hidden.has(column.id);
-        input.addEventListener('change', () => {
-          if (input.checked) hidden.delete(column.id);
-          else hidden.add(column.id);
-        });
-        const name = document.createElement('span');
-        name.textContent = column.name;
-        label.append(input, name);
-        list.append(label);
-      }
-    };
-    const actions = document.createElement('div');
-    actions.className = 'nb-db-pop-actions';
-    const showAll = document.createElement('button');
-    showAll.type = 'button';
-    showAll.textContent = 'Show all';
-    showAll.addEventListener('click', () => {
-      hidden.clear();
-      render();
-    });
-    const apply = document.createElement('button');
-    apply.type = 'button';
-    apply.textContent = 'Apply';
-    apply.addEventListener('click', () => {
-      const columns = this.#viewColumns(view).map(column => {
-        const next = { ...column };
-        if (hidden.has(column.id)) next.hide = true;
-        else delete next.hide;
-        return next;
-      });
-      this.#updateActiveView({
-        columns,
-        hiddenColumns: [...hidden],
-      });
-      this.#closePopover();
-    });
-    actions.append(showAll, apply);
-    content.append(list, actions);
-    render();
-    this.#showPopover(anchor, content);
-  }
-
   #renderTable(view: DatabaseViewConfig): HTMLElement {
     const wrapper = document.createElement('div');
     wrapper.className = 'nb-db-table-area';
@@ -1578,6 +1606,9 @@ export class DatabaseView {
       this.#colElements.push(col);
       colgroup.append(col);
     }
+    // Absorb leftover width so the 24px gutter and 40px add-column stay fixed.
+    const spacerCol = document.createElement('col');
+    colgroup.append(spacerCol);
     const addCol = document.createElement('col');
     addCol.style.width = '40px';
     colgroup.append(addCol);
@@ -1655,6 +1686,10 @@ export class DatabaseView {
       th.append(button, resizer);
       headRow.append(th);
     }
+    const spacerHead = document.createElement('th');
+    spacerHead.className = 'nb-db-spacer';
+    spacerHead.setAttribute('aria-hidden', 'true');
+    headRow.append(spacerHead);
     const addHead = document.createElement('th');
     addHead.className = 'nb-db-add-column-head';
     if (!this.#readonly) {
@@ -1689,7 +1724,7 @@ export class DatabaseView {
       empty.className = 'nb-db-empty-row';
       const td = document.createElement('td');
       td.className = 'nb-db-empty';
-      td.colSpan = Math.max(1, columns.length + 2);
+      td.colSpan = Math.max(1, columns.length + 3);
       td.textContent = this.#readonly ? 'No rows' : 'No rows yet. Add one below.';
       empty.append(td);
       tbody.append(empty);
@@ -1744,6 +1779,9 @@ export class DatabaseView {
       }
       tr.append(td);
     }
+    const spacer = document.createElement('td');
+    spacer.className = 'nb-db-spacer';
+    tr.append(spacer);
     const addCell = document.createElement('td');
     addCell.className = 'nb-db-add-cell';
     tr.append(addCell);
@@ -1809,6 +1847,9 @@ export class DatabaseView {
         td.append(button);
         footRow.append(td);
       }
+      const spacerFoot = document.createElement('td');
+      spacerFoot.className = 'nb-db-spacer';
+      footRow.append(spacerFoot);
       const addFoot = document.createElement('td');
       addFoot.className = 'nb-db-foot nb-db-add-cell';
       footRow.append(addFoot);
@@ -1818,11 +1859,14 @@ export class DatabaseView {
       const addRowRow = document.createElement('tr');
       addRowRow.className = 'nb-db-new-record-row';
       const addRowCell = document.createElement('td');
-      addRowCell.colSpan = Math.max(1, columns.length + 2);
+      addRowCell.colSpan = Math.max(1, columns.length + 3);
       const addRow = document.createElement('button');
       addRow.type = 'button';
       addRow.className = 'nb-db-new-record';
-      addRow.innerHTML = `${icon.plus}<span>New Record</span>`;
+      const addRowLabel = document.createElement('span');
+      addRowLabel.className = 'nb-db-new-record-label';
+      addRowLabel.innerHTML = `${icon.plus}<span>New Record</span>`;
+      addRow.append(addRowLabel);
       addRow.addEventListener('click', () => this.#addRow(undefined, groupKey), {
         signal: this.#events.signal,
       });

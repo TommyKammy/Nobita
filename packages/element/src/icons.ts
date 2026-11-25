@@ -95,9 +95,7 @@ export const icon = {
   highlight: highlightIcon,
   turnInto: textIcon,
   filter: wrap('<path d="M3.5 5.5h13M6 10h8M8.5 14.5h3"/>'),
-  sort: wrap('<path d="M7 16V4M4 7l3-3 3 3M12 6h5M12 10h3.5M12 14h2"/>'),
-  columns: wrap('<rect x="3" y="3.5" width="14" height="13" rx="2.5"/><path d="M8 3.5v13M13 3.5v13"/>'),
-  group: wrap('<rect x="3" y="3.5" width="6" height="5" rx="1.5"/><rect x="11" y="3.5" width="6" height="5" rx="1.5"/><rect x="3" y="11.5" width="6" height="5" rx="1.5"/><rect x="11" y="11.5" width="6" height="5" rx="1.5"/>'),
+  search: wrap('<circle cx="8.8" cy="8.8" r="5.3"/><path d="m12.8 12.8 4.2 4.2"/>'),
   expand: wrap('<path d="M3.5 7V3.5H7M13 3.5h3.5V7M16.5 13v3.5H13M7 16.5H3.5V13"/>'),
 } as const;
 

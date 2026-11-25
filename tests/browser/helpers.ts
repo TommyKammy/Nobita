@@ -48,6 +48,14 @@ export async function openFixture(page: Page): Promise<void> {
   await expect(page.locator('nobita-editor')).toBeVisible();
 }
 
+export async function openDatabaseViewSetting(
+  page: Page,
+  name: string | RegExp
+): Promise<void> {
+  await page.locator('.nb-db-viewmore').click();
+  await page.locator('.nb-db-view-menu').getByRole('button', { name }).click();
+}
+
 export async function resetDoc(page: Page): Promise<void> {
   await page.evaluate(() => (window as unknown as BrowserWindow).__setDoc?.());
   await page.waitForTimeout(50);

@@ -257,11 +257,14 @@ const editor = createEditor(document.querySelector('#editor'), {
     true
   );
 
-  const task = createDatabaseColumn('Task');
-  const status = createDatabaseColumn('Status', 'select', ['Todo', 'In progress', 'Done']);
-  const owner = createDatabaseColumn('Owner');
-  const due = createDatabaseColumn('Due', 'date');
-  const done = createDatabaseColumn('Done', 'checkbox');
+  const task = { ...createDatabaseColumn('Task'), width: 186 };
+  const status = {
+    ...createDatabaseColumn('Status', 'select', ['Todo', 'In progress', 'Done']),
+    width: 130,
+  };
+  const owner = { ...createDatabaseColumn('Owner'), width: 120 };
+  const due = { ...createDatabaseColumn('Due', 'date'), width: 120 };
+  const done = { ...createDatabaseColumn('Done', 'checkbox'), width: 86 };
 
   pages['data-views'] = page(
     'data-views',

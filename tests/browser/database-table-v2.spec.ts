@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { getDoc, openFixture } from './helpers';
+import { getDoc, openDatabaseViewSetting, openFixture } from './helpers';
 
 const v2Doc = () => ({
   version: 1,
@@ -2210,8 +2210,11 @@ test('renders grouped column names as text', async ({ page }) => {
   database.columns[1]!.name = '<img src=x onerror="window.__xss=1">';
   database.views[0]!.groupBy = 'status';
   await setDoc(page, doc);
-  await expect(page.locator('.nb-db-tools')).toContainText('Group: <img');
-  await expect(page.locator('.nb-db-tools img')).toHaveCount(0);
+  await page.locator('.nb-db-viewmore').click();
+  await expect(
+    page.locator('.nb-db-view-menu').getByRole('button', { name: /^Group/ })
+  ).toContainText('<img');
+  await expect(page.locator('.nb-db-view-menu img')).toHaveCount(0);
   expect(
     await page.evaluate(
       () => (window as unknown as { __xss?: number }).__xss
@@ -2224,6 +2227,7 @@ test('cuts only the selected rows that are visible', async ({ page }) => {
   await setDoc(page);
   await page.locator('.nb-db-row-check').nth(1).click();
   await page.locator('.nb-db-row-check').nth(2).click();
+  await page.locator('.nb-db-search-toggle').click();
   await page.getByLabel('Search rows').fill('Three');
   await expect(
     page.locator('.nb-db-table tbody tr[data-row-id]')
@@ -2572,7 +2576,7 @@ test('preserves omitted group settings when reordering groups', async ({ page })
     ],
   });
   await expect(page.locator('.nb-db-group')).toHaveCount(2);
-  await page.locator('.nb-db-tools .nb-db-btn', { hasText: 'Group' }).click();
+  await openDatabaseViewSetting(page, /^Group/);
   const settings = page.locator('.nb-db-group-setting');
   await expect(settings).toHaveCount(2);
   await settings.nth(1).locator('.nb-db-property-move').first().click();
@@ -2648,7 +2652,7 @@ test('reorders the no-value group', async ({ page }) => {
     'Todo',
     'No value',
   ]);
-  await page.locator('.nb-db-tools .nb-db-btn', { hasText: 'Group' }).click();
+  await openDatabaseViewSetting(page, /^Group/);
   const settings = page.locator('.nb-db-group-setting');
   await expect(settings).toHaveCount(2);
   await settings.nth(1).locator('.nb-db-property-move').first().click();
@@ -2739,6 +2743,7 @@ test('hides groups emptied by search', async ({ page }) => {
   view.hideEmptyGroups = true;
   await setDoc(page, doc);
   await expect(page.locator('.nb-db-group')).toHaveCount(2);
+  await page.locator('.nb-db-search-toggle').click();
   await page.getByLabel('Search rows').fill('Three');
   await expect(page.locator('.nb-db-group')).toHaveCount(1);
   await expect(page.locator('.nb-db-group-label')).toHaveText(['Todo']);
@@ -2800,7 +2805,7 @@ test('hides groups and persists collapsed group state', async ({ page }) => {
   view.groupProperties = [{ key: 'Todo' }, { key: 'Done' }];
   await setDoc(page, doc);
   await expect(page.locator('.nb-db-group')).toHaveCount(2);
-  await page.locator('.nb-db-btn', { hasText: 'Group' }).click();
+  await openDatabaseViewSetting(page, /^Group/);
   await page
     .locator('.nb-db-group-setting', { hasText: 'Done' })
     .locator('.nb-db-property-eye')
