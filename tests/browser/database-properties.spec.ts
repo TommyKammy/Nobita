@@ -475,4 +475,101 @@ test.describe('database progress, image, and board card covers', () => {
     await expect(card1).not.toHaveClass(/has-cover/);
     await expect(card1.locator('.nb-db-card-cover')).toHaveCount(0);
   });
+
+  test('progress scrubbing completes across sort/group reorders and clears stale row/range selections', async ({
+    page,
+  }) => {
+    await openFixture(page);
+    await setDoc(page);
+
+    // 1. Select row r2 via row checkbox, then click r1's progress slider and press Backspace.
+    // Row selection must be cleared so Backspace clears only r1's progress cell (not deleting r2).
+    await page.locator('.nb-db-table tbody tr[data-row-id="r2"]').hover();
+    await page
+      .locator('.nb-db-table tbody tr[data-row-id="r2"] .nb-db-row-check')
+      .click();
+    await expect(
+      page.locator('.nb-db-table tbody tr[data-row-id="r2"]')
+    ).toHaveClass(/is-row-selected/);
+
+    const r1Track = page.locator(
+      'td[data-row-id="r1"][data-column-id="pct"] .nb-db-progress-track'
+    );
+    const r1Box = await r1Track.boundingBox();
+    if (!r1Box) throw new Error('Missing r1 progress track box');
+    await page.mouse.click(r1Box.x + r1Box.width * 0.4, r1Box.y + r1Box.height / 2);
+
+    await expect(
+      page.locator('.nb-db-table tbody tr[data-row-id="r2"]')
+    ).not.toHaveClass(/is-row-selected/);
+    await expect(
+      page.locator('td[data-row-id="r1"][data-column-id="pct"] .nb-db-progress')
+    ).toHaveAttribute('aria-valuenow', '40');
+
+    await page.keyboard.press('Backspace');
+    await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(3);
+    await expect(
+      page.locator('td[data-row-id="r1"][data-column-id="pct"] .nb-db-progress')
+    ).toHaveAttribute('aria-valuetext', 'Empty');
+    expect((await getDb(page)).rows.map(r => r.id)).toEqual(['r1', 'r2', 'r3']);
+
+    // 2. Sort ascending by Progress (r2=100, r1=empty, r3=empty) and scrub r2 down past r1/r3
+    // after setting r1=50, verifying scrubbing across a reorder reaches the final pointer position.
+    const r1Slider = page.locator(
+      'td[data-row-id="r1"][data-column-id="pct"] .nb-db-progress'
+    );
+    await r1Slider.focus();
+    await page.keyboard.press('End');
+    await expect(r1Slider).toHaveAttribute('aria-valuenow', '100');
+
+    const r2Slider = page.locator(
+      'td[data-row-id="r2"][data-column-id="pct"] .nb-db-progress'
+    );
+    await r2Slider.focus();
+    for (let i = 0; i < 10; i += 1) {
+      await page.keyboard.press('ArrowLeft');
+    }
+    await expect(r2Slider).toHaveAttribute('aria-valuenow', '50');
+
+    // Sort ascending: order is r2 (50%), r1 (100%), r3 (empty)
+    await page.locator('th[data-column-id="pct"] .nb-db-col-head').click();
+    await page
+      .locator('.nb-db-column-popover')
+      .getByRole('button', { name: 'Sort Ascending' })
+      .click();
+    expect(
+      await page
+        .locator('.nb-db-table tbody tr')
+        .evaluateAll(rows => rows.map(row => row.getAttribute('data-row-id')))
+    ).toEqual(['r2', 'r1', 'r3']);
+
+    // Scrub r1 from 100% down across 50% (which reorders r1 ahead of r2) all the way to 10%
+    const sortedR1Track = page.locator(
+      'td[data-row-id="r1"][data-column-id="pct"] .nb-db-progress-track'
+    );
+    const sortedBox = await sortedR1Track.boundingBox();
+    if (!sortedBox) throw new Error('Missing sorted r1 track box');
+
+    await page.mouse.move(
+      sortedBox.x + sortedBox.width * 0.4,
+      sortedBox.y + sortedBox.height / 2
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      sortedBox.x + sortedBox.width * 0.1,
+      sortedBox.y + sortedBox.height / 2,
+      { steps: 4 }
+    );
+    await page.mouse.up();
+
+    await expect(
+      page.locator('td[data-row-id="r1"][data-column-id="pct"] .nb-db-progress')
+    ).toHaveAttribute('aria-valuenow', '10');
+    expect((await getDb(page)).rows[0]?.cells.pct?.text).toBe('10');
+    expect(
+      await page
+        .locator('.nb-db-table tbody tr')
+        .evaluateAll(rows => rows.map(row => row.getAttribute('data-row-id')))
+    ).toEqual(['r1', 'r2', 'r3']);
+  });
 });

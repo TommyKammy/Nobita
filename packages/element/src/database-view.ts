@@ -2124,28 +2124,37 @@ export class DatabaseView {
 
     if (!this.#readonly) {
       const mergeKey = `db:${row.id}:${column.id}`;
-      const percentAt = (clientX: number): number | null => {
-        const rect = track.getBoundingClientRect();
-        if (rect.width <= 0) return null;
-        return Math.max(
-          0,
-          Math.min(100, Math.round(((clientX - rect.left) / rect.width) * 100))
-        );
-      };
       control.addEventListener(
         'pointerdown',
         event => {
-          if (event.button !== 0) return;
+          if (event.button !== 0 || event.shiftKey) return;
           event.preventDefault();
           event.stopPropagation();
+          if (this.#selectedRows.size > 0) {
+            this.#selectedRows.clear();
+            this.#syncRowSelection();
+          }
+          this.#suppressClick = false;
+          if (this.#range) {
+            this.#clearRange();
+            this.#renderRange();
+          }
           control.focus();
           this.#activateCellInput(control, row.id, column.id);
           this.#syncSelectionVisuals();
+          const initialRect = track.getBoundingClientRect();
+          const percentAt = (clientX: number): number | null => {
+            const rect = track.isConnected ? track.getBoundingClientRect() : initialRect;
+            if (rect.width <= 0) return null;
+            return Math.max(
+              0,
+              Math.min(100, Math.round(((clientX - rect.left) / rect.width) * 100))
+            );
+          };
           const initial = percentAt(event.clientX);
           let lastPct = initial;
           if (initial !== null) {
             applyProgressState(control, String(initial), column.name);
-            this.#commitCell(row.id, column.id, { text: String(initial) }, mergeKey);
           }
           this.#beginWindowDrag(
             moveEvent => {
@@ -2153,9 +2162,23 @@ export class DatabaseView {
               if (nextPct === null || nextPct === lastPct) return;
               lastPct = nextPct;
               applyProgressState(control, String(nextPct), column.name);
-              this.#commitCell(row.id, column.id, { text: String(nextPct) }, mergeKey);
             },
-            () => {}
+            finishEvent => {
+              if (finishEvent.type === 'pointercancel') {
+                applyProgressState(
+                  control,
+                  this.#currentCell(row.id, column.id)?.text,
+                  column.name
+                );
+                return;
+              }
+              if (lastPct === null) return;
+              const nextValue = String(lastPct);
+              if ((this.#currentCell(row.id, column.id)?.text ?? '') === nextValue) {
+                return;
+              }
+              this.#commitCell(row.id, column.id, { text: nextValue }, mergeKey);
+            }
           );
         },
         { signal }
@@ -3311,6 +3334,7 @@ export class DatabaseView {
       target instanceof HTMLTextAreaElement ||
       (target instanceof HTMLElement &&
         (target.matches('[contenteditable="true"]') ||
+          target.matches('.nb-db-progress[role="slider"]') ||
           Boolean(target.closest('.nb-db-text[contenteditable="true"]'))));
     const editingCell =
       target instanceof HTMLElement && Boolean(target.closest('.nb-db-cell'));
