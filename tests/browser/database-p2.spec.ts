@@ -280,6 +280,33 @@ test('synchronizes marks-only undo in record-page text fields', async ({ page })
   expect(owner?.runs).toBeUndefined();
 });
 
+test('applies formatting typed after a collapsed-caret shortcut', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+  const cell = page.locator(
+    '.nb-db-cell[data-row-id="r2"][data-column-id="name"] .nb-db-rich-text'
+  );
+  await cell.fill('');
+  await cell.press('End');
+  await page.keyboard.press('Control+b');
+  await page.keyboard.type('Bold');
+  await expect(cell).toHaveText('Bold');
+  const doc = await getDoc(page);
+  const saved = (doc.blocks[0]?.props.database as {
+    rows: Array<{
+      id: string;
+      cells: Record<string, {
+        text?: string;
+        runs?: Array<{ text: string; marks?: { bold?: true } }>;
+      }>;
+    }>;
+  }).rows.find(row => row.id === 'r2')?.cells.name;
+  expect(saved?.text).toBe('Bold');
+  expect(saved?.runs?.[0]?.marks?.bold).toBe(true);
+});
+
 test('persists an editable row page body', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);

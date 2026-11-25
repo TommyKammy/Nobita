@@ -5202,6 +5202,8 @@ export class DatabaseView {
         selection.removeAllRanges();
         selection.addRange(caret);
       }
+      this.#syncCellToolbar();
+      return;
     } else {
       const wrapper = document.createElement(tag);
       wrapper.append(range.extractContents());
