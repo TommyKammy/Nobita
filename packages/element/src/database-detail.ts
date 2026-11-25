@@ -215,9 +215,11 @@ export class DatabaseDetailController {
         const target = event.target as Element | null;
         const link = target?.closest<HTMLElement>('[data-link]');
         if (link && (event.metaKey || event.ctrlKey)) {
-          event.preventDefault();
           const href = safeHref(link.dataset.link);
-          if (href) window.open(href, '_blank', 'noopener,noreferrer');
+          if (href && !href.startsWith('#page-') && !href.startsWith('#block-')) {
+            event.preventDefault();
+            window.open(href, '_blank', 'noopener,noreferrer');
+          }
         }
       },
       { signal: this.#detailEvents.signal }

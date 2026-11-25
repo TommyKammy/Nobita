@@ -675,3 +675,73 @@ test('matches documented /new-page and /link-page slash aliases', async ({ page 
   await page.keyboard.type('/link-page');
   await expect(page.locator('.nb-menu-item', { hasText: 'Link page' })).toBeVisible();
 });
+
+test('navigates inline page chips inside database record detail overlays', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'db-overlay-page',
+    title: '',
+    blocks: [
+      {
+        id: 'db1',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            columns: [{ id: 'c1', name: 'Task', type: 'text' }],
+            rows: [
+              {
+                id: 'r1',
+                cells: {
+                  c1: {
+                    text: 'Ship Roadmap',
+                    runs: [
+                      { text: 'Ship ' },
+                      {
+                        text: 'Roadmap',
+                        marks: { page: { id: 'p-road', title: 'Roadmap', icon: '🗺️' } },
+                      },
+                    ],
+                  },
+                },
+                page: {
+                  content: [
+                    { text: 'Details in ' },
+                    {
+                      text: 'Spec',
+                      marks: { page: { id: 'p-spec', title: 'Spec', icon: '📐' } },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+
+  await page.evaluate(() => {
+    const opened: string[] = [];
+    (window as unknown as { __openedOverlayPages: string[] }).__openedOverlayPages = opened;
+    const host = document.querySelector('nobita-editor') as HTMLElement & {
+      onOpenPage?: (pageId: string) => void;
+    };
+    host.onOpenPage = pageId => opened.push(pageId);
+  });
+
+  // Open the record detail modal (mounted inside .nb-overlay).
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="c1"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  await expect(page.locator('.nb-db-detail')).toBeVisible();
+
+  await page.locator('.nb-db-detail .nb-m-page', { hasText: 'Spec' }).click();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { __openedOverlayPages: string[] }).__openedOverlayPages
+    )
+  ).toEqual(['p-spec']);
+});

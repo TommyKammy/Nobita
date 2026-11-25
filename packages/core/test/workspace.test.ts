@@ -13,7 +13,9 @@ import {
   getBacklinks,
   getPageBreadcrumbs,
   getPageDescendantIds,
+  parseDoc,
   searchWorkspacePages,
+  setTableCellRuns,
 } from '../src/index.js';
 
 describe('workspace page links and backlinks', () => {
@@ -154,6 +156,35 @@ describe('workspace page links and backlinks', () => {
     const refs = extractPageLinks(doc);
     expect(refs).toHaveLength(1);
     expect(refs[0]?.pageId).toBe('%E0%A4%A');
+  });
+
+  it('preserves page-only runs in simple table cells through setTableCellRuns and parseDoc', () => {
+    const table = createTableData({ rows: 1, columns: 1 });
+    const rowId = table.rows[0]!.id;
+    const colId = table.columns[0]!.id;
+    const updated = setTableCellRuns(table, rowId, colId, [
+      { text: 'See ' },
+      { text: 'Spec', marks: { page: { id: 'p-spec', title: 'Spec', icon: '📐' } } },
+    ]);
+    expect(updated.rows[0]?.cells[colId]?.runs?.[1]?.marks?.page?.id).toBe('p-spec');
+
+    const roundTripped = parseDoc(
+      createDoc({
+        id: 'tbl-doc',
+        title: 'Table doc',
+        blocks: [createBlock('table', { id: 't1', props: { table: updated } })],
+      })
+    );
+    expect(extractPageLinks(roundTripped)).toEqual([
+      {
+        pageId: 'p-spec',
+        blockId: 't1',
+        kind: 'inline',
+        snippet: 'See Spec',
+        title: 'Spec',
+        icon: '📐',
+      },
+    ]);
   });
 });
 

@@ -1434,43 +1434,12 @@ export class NobitaEditor implements BlockHost {
           }
           return;
         }
-        const inlinePage = target.closest<HTMLElement>('.nb-m-page');
-        if (inlinePage) {
-          const pageId = inlinePage.dataset.pageId;
-          if (pageId) {
-            event.preventDefault();
-            event.stopPropagation();
-            this.openPage(pageId);
-          }
-          return;
-        }
+        if (this.#handleInlineNavClick(target, event)) return;
         const link = target.closest<HTMLElement>('[data-link]');
-        if (link) {
+        if (link && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
           const href = safeHref(link.dataset.link);
-          if (href?.startsWith('#block-')) {
-            event.preventDefault();
-            const blockId = decodeURIComponent(href.slice('#block-'.length));
-            if (this.#viewIndex.has(blockId) || findBlock(this.store.doc.blocks, blockId)) {
-              this.#focusBlock(blockId, 0);
-            }
-            return;
-          }
-          if (href?.startsWith('#page-')) {
-            event.preventDefault();
-            const raw = href.slice('#page-'.length);
-            let pageId = raw;
-            try {
-              pageId = decodeURIComponent(raw);
-            } catch {
-              // Keep raw fragment if malformed.
-            }
-            if (pageId) this.openPage(pageId);
-            return;
-          }
-          if (event.metaKey || event.ctrlKey) {
-            event.preventDefault();
-            if (href) window.open(href, '_blank', 'noopener,noreferrer');
-          }
+          if (href) window.open(href, '_blank', 'noopener,noreferrer');
         }
         if (target.closest('.nb-text')) {
           this.clearBlockSelection();
@@ -1640,7 +1609,54 @@ export class NobitaEditor implements BlockHost {
     });
   }
 
+  #handleInlineNavClick(target: Element, event: MouseEvent): boolean {
+    const inlinePage = target.closest<HTMLElement>('.nb-m-page');
+    if (inlinePage) {
+      const pageId = inlinePage.dataset.pageId;
+      if (pageId) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.openPage(pageId);
+      }
+      return true;
+    }
+    const link = target.closest<HTMLElement>('[data-link]');
+    if (!link) return false;
+    const href = safeHref(link.dataset.link);
+    if (href?.startsWith('#block-')) {
+      event.preventDefault();
+      event.stopPropagation();
+      const blockId = decodeURIComponent(href.slice('#block-'.length));
+      if (this.#viewIndex.has(blockId) || findBlock(this.store.doc.blocks, blockId)) {
+        this.#focusBlock(blockId, 0);
+      }
+      return true;
+    }
+    if (href?.startsWith('#page-')) {
+      event.preventDefault();
+      event.stopPropagation();
+      const raw = href.slice('#page-'.length);
+      let pageId = raw;
+      try {
+        pageId = decodeURIComponent(raw);
+      } catch {
+        // Keep raw fragment if malformed.
+      }
+      if (pageId) this.openPage(pageId);
+      return true;
+    }
+    return false;
+  }
+
   #bindChrome(): void {
+    this.#overlay.addEventListener(
+      'click',
+      event => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target) this.#handleInlineNavClick(target, event);
+      },
+      { signal: this.#bodyEvents.signal }
+    );
     document.addEventListener('selectionchange', this.#onDocumentSelection);
     this.root.addEventListener('pointerup', this.#onImmediateSelection, true);
     this.root.addEventListener('keyup', this.#onImmediateSelection, true);
