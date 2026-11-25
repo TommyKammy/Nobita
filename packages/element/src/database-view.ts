@@ -5117,7 +5117,25 @@ export class DatabaseView {
       }
       ancestor = ancestor.parentElement;
     }
-    if (range.collapsed && (marked || existing)) return;
+    if (range.collapsed && (marked || existing)) {
+      const pending = marked ?? existing;
+      if (!pending) return;
+      if (
+        pending.parentElement &&
+        (pending.textContent ?? '').replace(/\u200B/gu, '') === ''
+      ) {
+        const parent = pending.parentElement;
+        const index = Array.from(parent.childNodes).indexOf(pending);
+        pending.remove();
+        const caret = document.createRange();
+        caret.setStart(parent, Math.max(0, index));
+        caret.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(caret);
+        this.#syncCellToolbar();
+      }
+      return;
+    }
     const markedElement = marked ?? existing;
     if (
       markedElement &&

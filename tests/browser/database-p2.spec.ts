@@ -307,6 +307,29 @@ test('applies formatting typed after a collapsed-caret shortcut', async ({
   expect(saved?.runs?.[0]?.marks?.bold).toBe(true);
 });
 
+test('toggles pending formatting off at a collapsed caret', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  const cell = page.locator(
+    '.nb-db-cell[data-row-id="r2"][data-column-id="name"] .nb-db-rich-text'
+  );
+  await cell.fill('');
+  await cell.press('End');
+  await page.keyboard.press('Control+b');
+  await page.keyboard.press('Control+b');
+  await page.keyboard.type('Plain');
+  await expect(cell).toHaveText('Plain');
+  const doc = await getDoc(page);
+  const saved = (doc.blocks[0]?.props.database as {
+    rows: Array<{
+      id: string;
+      cells: Record<string, { text?: string; runs?: unknown[] }>;
+    }>;
+  }).rows.find(row => row.id === 'r2')?.cells.name;
+  expect(saved?.text).toBe('Plain');
+  expect(saved?.runs).toBeUndefined();
+});
+
 test('persists an editable row page body', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
