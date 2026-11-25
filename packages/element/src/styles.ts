@@ -246,6 +246,12 @@ input, select, textarea { font: inherit; color: inherit; }
 .nb-block:focus-within > .nb-row > .nb-gutter,
 .nb-gutter.is-visible { opacity: 1; }
 
+.nb-block.nb-block-selected > .nb-row {
+  background: var(--nb-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--nb-accent);
+}
+.nb-block.nb-block-selected > .nb-row > .nb-gutter { opacity: 1; }
+
 .nb-gutter-btn {
   display: grid;
   place-items: center;

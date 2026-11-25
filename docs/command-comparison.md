@@ -314,6 +314,11 @@ the editor core just for parity:
   selection toolbar, HTML `<mark>` round-trip, Markdown degradation.
 - ✅ **Text colors** (P1): eight-color foreground palette, default-color reset,
   HTML `<span data-nb-color>` round-trip, Markdown degradation.
+- ✅ **Block selection model** (P1): selected block IDs independent of text
+  range (`Escape`, gutter `Shift`/`Mod`-click, staged `Mod+A`, `Shift+Arrow`,
+  `Enter` to insert after, `Backspace`/`Delete` batch delete, `Mod+D` batch
+  duplicate, batch `copy`/`cut`/`paste`, multi-block drag, and non-text block
+  selection for `divider`/`image`/`table`/`database`/`page`).
 
 ### P0 — remaining small wins
 
@@ -323,18 +328,12 @@ the editor core just for parity:
 
 ### P1 — remaining
 
-1. **Block selection model.**
-   - Selected block ids independent of text range.
-   - Escape, gutter click, Shift+Arrow, Cmd+A stages, Enter to insert after,
-     Delete selected, batch duplicate/copy.
-   - Makes image/database/table/divider selectable and unlocks table-from-selection.
-   - Est. 4–6 KB plus careful tests.
-2. **Database calendar view.**
+1. **Database calendar view.**
    - Rich-text cells, editable row pages and board add/reorder/group actions are now implemented. Calendar remains intentionally out of scope.
-3. **Create Table from selected blocks** (toolbar/block selection).
-   - Convert blocks into database rows; requires block selection first.
+2. **Create Table from selected blocks** (toolbar/block selection).
+   - Convert selected blocks into database rows (builds on the block selection model).
    - Est. 2–3 KB.
-6. **Bracket auto-pair and backtick-wrap-selection.**
+3. **Bracket auto-pair and backtick-wrap-selection.**
    - Text-only, small but edge-case heavy.
    - Est. 1–2 KB.
 
