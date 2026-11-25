@@ -31,6 +31,7 @@ import type {
   DatabaseFilterGroup,
   DatabaseFilterOperator,
   DatabaseFile,
+  DatabaseGroupProperty,
   DatabasePerson,
   DatabaseRow,
   DatabaseStatType,
@@ -198,6 +199,57 @@ function titleTextEditable(column: DatabaseColumn | undefined): boolean {
     column && ['text', 'number', 'date', 'url'].includes(column.type)
   );
 }
+
+/** Merge a reordered visible sequence into a saved order without dropping hidden entries. */
+function mergeOrder(
+  saved: readonly string[],
+  visible: readonly string[]
+): string[] {
+  const visibleSet = new Set(visible);
+  const order: string[] = [];
+  let visibleIndex = 0;
+  for (const id of saved) {
+    if (visibleSet.has(id)) {
+      const next = visible[visibleIndex];
+      if (next !== undefined) {
+        order.push(next);
+        visibleIndex += 1;
+      }
+    } else if (!order.includes(id)) {
+      order.push(id);
+    }
+  }
+  while (visibleIndex < visible.length) {
+    const next = visible[visibleIndex];
+    if (next !== undefined) order.push(next);
+    visibleIndex += 1;
+  }
+  return order;
+}
+
+/** Materialize saved group settings in visible order, keeping omitted groups. */
+function seedGroupSettings(
+  saved: readonly DatabaseGroupProperty[],
+  visibleKeys: readonly string[]
+): DatabaseGroupProperty[] {
+  const keys = [...visibleKeys];
+  for (const setting of saved) {
+    if (!keys.includes(setting.key)) keys.push(setting.key);
+  }
+  const byKey = new Map(saved.map(setting => [setting.key, setting]));
+  return keys.map(key => {
+    const setting = byKey.get(key);
+    return setting
+      ? {
+          ...setting,
+          ...(setting.manuallyCardSort
+            ? { manuallyCardSort: [...setting.manuallyCardSort] }
+            : {}),
+        }
+      : { key };
+  });
+}
+
 
 function selectionOffsets(
   element: HTMLElement
@@ -452,6 +504,32 @@ export class DatabaseView {
     });
   }
 
+  #viewsWithColumn(
+    columnId: string,
+    anchorId: string | null,
+    after: boolean,
+    width = 180,
+    copyFromId?: string
+  ): DatabaseViewConfig[] {
+    return this.#views().map(view => {
+      const columns = this.#viewColumns(view);
+      if (columns.some(column => column.id === columnId)) return view;
+      let index = anchorId
+        ? columns.findIndex(column => column.id === anchorId)
+        : columns.length;
+      if (index < 0) index = columns.length;
+      else if (after) index += 1;
+      const template = copyFromId
+        ? columns.find(column => column.id === copyFromId)
+        : undefined;
+      columns.splice(index, 0, {
+        ...(template ?? { id: columnId, width }),
+        id: columnId,
+      });
+      return { ...view, columns };
+    });
+  }
+
   #patchViewColumn(
     columnId: string,
     patch: Partial<DatabaseViewColumn>,
@@ -505,15 +583,11 @@ export class DatabaseView {
       return;
     }
     const view = this.#activeView();
-    const existing = new Map(
-      (view.groupProperties ?? []).map(group => [group.key, { ...group }])
+    const groups = seedGroupSettings(
+      view.groupProperties ?? [],
+      this.#groupsFor(view).map(group => group.key)
     );
-    const keys = this.#groupsFor(view).map(group => group.key);
-    for (const groupKey of existing.keys()) {
-      if (!keys.includes(groupKey)) keys.push(groupKey);
-    }
-    if (!keys.includes(key)) keys.push(key);
-    const groups = keys.map(groupKey => existing.get(groupKey) ?? { key: groupKey });
+    if (!groups.some(group => group.key === key)) groups.push({ key });
     const index = groups.findIndex(group => group.key === key);
     if (index >= 0) {
       const current = groups[index];
@@ -1484,6 +1558,16 @@ export class DatabaseView {
       titleColumn && columns.some(column => column.id === titleColumn.id)
         ? titleColumn.id
         : columns[0]?.id;
+    table.append(this.#renderTableColgroup(states));
+    table.append(this.#renderTableHead(view, states));
+    table.append(this.#renderTableBody(columns, rows, opsColumnId, groupKey));
+    table.append(this.#renderTableFoot(columns, rows, states, groupKey));
+    return table;
+  }
+
+  #renderTableColgroup(
+    states: ReturnType<typeof databaseViewColumnStates>
+  ): HTMLTableColElement {
     const colgroup = document.createElement('colgroup');
     const handleCol = document.createElement('col');
     handleCol.style.width = '24px';
@@ -1497,13 +1581,19 @@ export class DatabaseView {
     const addCol = document.createElement('col');
     addCol.style.width = '40px';
     colgroup.append(addCol);
-    table.append(colgroup);
+    return colgroup;
+  }
 
+  #renderTableHead(
+    view: DatabaseViewConfig,
+    states: ReturnType<typeof databaseViewColumnStates>
+  ): HTMLTableSectionElement {
     const thead = document.createElement('thead');
     const headRow = document.createElement('tr');
     const corner = document.createElement('th');
     corner.className = 'nb-db-handle nb-db-corner';
     headRow.append(corner);
+    const sorts = databaseSorts(view);
     for (const state of states) {
       const column = state.column;
       const th = document.createElement('th');
@@ -1521,7 +1611,6 @@ export class DatabaseView {
       name.className = 'nb-db-colname';
       name.textContent = column.name;
       button.append(typeIcon, name);
-      const sorts = databaseSorts(view);
       const sortIndex = sorts.findIndex(sort => sort.columnId === column.id);
       if (sortIndex >= 0) {
         const sort = document.createElement('span');
@@ -1582,78 +1671,18 @@ export class DatabaseView {
     }
     headRow.append(addHead);
     thead.append(headRow);
-    table.append(thead);
+    return thead;
+  }
 
+  #renderTableBody(
+    columns: readonly DatabaseColumn[],
+    rows: readonly DatabaseRow[],
+    opsColumnId: string | undefined,
+    groupKey?: string
+  ): HTMLTableSectionElement {
     const tbody = document.createElement('tbody');
     for (const row of rows) {
-      const tr = document.createElement('tr');
-      tr.dataset.rowId = row.id;
-      tr.classList.toggle('is-row-selected', this.#selectedRows.has(row.id));
-      const handle = document.createElement('td');
-      handle.className = 'nb-db-handle';
-      if (!this.#readonly) {
-        const grip = document.createElement('button');
-        grip.type = 'button';
-        grip.className = 'nb-db-row-grip';
-        grip.title = 'Select row';
-        grip.setAttribute('aria-label', 'Select row');
-        grip.innerHTML = icon.more;
-        grip.addEventListener('pointerdown', event => {
-          this.#beginRowDrag(event, row.id, groupKey);
-        }, { signal: this.#events.signal });
-        grip.addEventListener('click', () => this.#toggleRowSelection(row.id), {
-          signal: this.#events.signal,
-        });
-        const check = document.createElement('button');
-        check.type = 'button';
-        check.className = 'nb-db-row-check';
-        check.dataset.rowId = row.id;
-        check.setAttribute('role', 'checkbox');
-        check.setAttribute('aria-checked', String(this.#selectedRows.has(row.id)));
-        check.setAttribute('aria-label', 'Select row');
-        check.innerHTML = icon.checkboxSquare;
-        check.addEventListener('click', event => {
-          event.preventDefault();
-          this.#toggleRowSelection(row.id);
-        }, { signal: this.#events.signal });
-        handle.append(grip, check);
-      }
-      tr.append(handle);
-      for (const column of columns) {
-        const td = this.#createCell(row, column);
-        if (column.id === opsColumnId && !this.#readonly) {
-          td.classList.add('has-row-ops');
-          const ops = document.createElement('div');
-          ops.className = 'nb-db-row-ops';
-          const expand = document.createElement('button');
-          expand.type = 'button';
-          expand.className = 'nb-db-row-expand';
-          expand.title = 'Expand row';
-          expand.setAttribute('aria-label', 'Expand row');
-          expand.innerHTML = icon.expand;
-          expand.addEventListener('click', event => {
-            event.stopPropagation();
-            this.#openDetailPanel(row.id);
-          }, { signal: this.#events.signal });
-          const menu = document.createElement('button');
-          menu.type = 'button';
-          menu.className = 'nb-db-rowmenu';
-          menu.title = 'Row actions';
-          menu.setAttribute('aria-label', 'Row actions');
-          menu.innerHTML = icon.more;
-          menu.addEventListener('click', event => {
-            event.stopPropagation();
-            this.#openRowPopover(row.id, menu);
-          }, { signal: this.#events.signal });
-          ops.append(expand, menu);
-          td.append(ops);
-        }
-        tr.append(td);
-      }
-      const addCell = document.createElement('td');
-      addCell.className = 'nb-db-add-cell';
-      tr.append(addCell);
-      tbody.append(tr);
+      tbody.append(this.#renderTableRow(row, columns, opsColumnId, groupKey));
     }
     if (rows.length === 0) {
       const empty = document.createElement('tr');
@@ -1665,10 +1694,97 @@ export class DatabaseView {
       empty.append(td);
       tbody.append(empty);
     }
-    table.append(tbody);
+    return tbody;
+  }
 
+  #renderTableRow(
+    row: DatabaseRow,
+    columns: readonly DatabaseColumn[],
+    opsColumnId: string | undefined,
+    groupKey?: string
+  ): HTMLTableRowElement {
+    const tr = document.createElement('tr');
+    tr.dataset.rowId = row.id;
+    tr.classList.toggle('is-row-selected', this.#selectedRows.has(row.id));
+    const handle = document.createElement('td');
+    handle.className = 'nb-db-handle';
+    if (!this.#readonly) {
+      const grip = document.createElement('button');
+      grip.type = 'button';
+      grip.className = 'nb-db-row-grip';
+      grip.title = 'Select row';
+      grip.setAttribute('aria-label', 'Select row');
+      grip.innerHTML = icon.more;
+      grip.addEventListener('pointerdown', event => {
+        this.#beginRowDrag(event, row.id, groupKey);
+      }, { signal: this.#events.signal });
+      grip.addEventListener('click', () => this.#toggleRowSelection(row.id), {
+        signal: this.#events.signal,
+      });
+      const check = document.createElement('button');
+      check.type = 'button';
+      check.className = 'nb-db-row-check';
+      check.dataset.rowId = row.id;
+      check.setAttribute('role', 'checkbox');
+      check.setAttribute('aria-checked', String(this.#selectedRows.has(row.id)));
+      check.setAttribute('aria-label', 'Select row');
+      check.innerHTML = icon.checkboxSquare;
+      check.addEventListener('click', event => {
+        event.preventDefault();
+        this.#toggleRowSelection(row.id);
+      }, { signal: this.#events.signal });
+      handle.append(grip, check);
+    }
+    tr.append(handle);
+    for (const column of columns) {
+      const td = this.#createCell(row, column);
+      if (column.id === opsColumnId && !this.#readonly) {
+        td.classList.add('has-row-ops');
+        td.append(this.#renderRowOperations(row.id));
+      }
+      tr.append(td);
+    }
+    const addCell = document.createElement('td');
+    addCell.className = 'nb-db-add-cell';
+    tr.append(addCell);
+    return tr;
+  }
+
+  #renderRowOperations(rowId: string): HTMLElement {
+    const ops = document.createElement('div');
+    ops.className = 'nb-db-row-ops';
+    const expand = document.createElement('button');
+    expand.type = 'button';
+    expand.className = 'nb-db-row-expand';
+    expand.title = 'Expand row';
+    expand.setAttribute('aria-label', 'Expand row');
+    expand.innerHTML = icon.expand;
+    expand.addEventListener('click', event => {
+      event.stopPropagation();
+      this.#openDetailPanel(rowId);
+    }, { signal: this.#events.signal });
+    const menu = document.createElement('button');
+    menu.type = 'button';
+    menu.className = 'nb-db-rowmenu';
+    menu.title = 'Row actions';
+    menu.setAttribute('aria-label', 'Row actions');
+    menu.innerHTML = icon.more;
+    menu.addEventListener('click', event => {
+      event.stopPropagation();
+      this.#openRowPopover(rowId, menu);
+    }, { signal: this.#events.signal });
+    ops.append(expand, menu);
+    return ops;
+  }
+
+  #renderTableFoot(
+    columns: readonly DatabaseColumn[],
+    rows: readonly DatabaseRow[],
+    states: ReturnType<typeof databaseViewColumnStates>,
+    groupKey?: string
+  ): HTMLTableSectionElement {
+    const tfoot = document.createElement('tfoot');
     if (states.length > 0) {
-      const tfoot = document.createElement('tfoot');
       const footRow = document.createElement('tr');
       const cornerFoot = document.createElement('td');
       cornerFoot.className = 'nb-db-handle nb-db-foot-handle';
@@ -1697,13 +1813,6 @@ export class DatabaseView {
       addFoot.className = 'nb-db-foot nb-db-add-cell';
       footRow.append(addFoot);
       tfoot.append(footRow);
-      table.append(tfoot);
-    }
-
-    let foot = table.querySelector('tfoot');
-    if (!foot) {
-      foot = document.createElement('tfoot');
-      table.append(foot);
     }
     if (!this.#readonly) {
       const addRowRow = document.createElement('tr');
@@ -1719,9 +1828,9 @@ export class DatabaseView {
       });
       addRowCell.append(addRow);
       addRowRow.append(addRowCell);
-      foot.append(addRowRow);
+      tfoot.append(addRowRow);
     }
-    return table;
+    return tfoot;
   }
 
   #openStatPopover(
@@ -2116,227 +2225,11 @@ export class DatabaseView {
     list.className = 'nb-db-filter-list';
     content.append(list);
 
-    const renderCondition = (
-      filter: DatabaseFilter,
-      parent: DatabaseFilterGroup
-    ): HTMLElement => {
-      const column = this.#data.columns.find(item => item.id === filter.columnId);
-      const row = document.createElement('div');
-      row.className = 'nb-db-filter-row';
-      if (!column) {
-        row.textContent = 'This filter references a deleted column.';
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'nb-db-filter-remove';
-        remove.innerHTML = icon.x;
-        remove.addEventListener('click', () => {
-          parent.conditions = parent.conditions.filter(item => item !== filter);
-          render();
-        });
-        row.append(remove);
-        return row;
-      }
-      const columnSelect = document.createElement('select');
-      columnSelect.setAttribute('aria-label', 'Filter column');
-      for (const item of this.#data.columns) {
-        const option = document.createElement('option');
-        option.value = item.id;
-        option.textContent = item.name;
-        option.selected = item.id === filter.columnId;
-        columnSelect.append(option);
-      }
-      columnSelect.addEventListener('change', () => {
-        const next = this.#data.columns.find(item => item.id === columnSelect.value);
-        if (!next) return;
-        filter.columnId = next.id;
-        filter.operator = defaultFilterOperator(next.type);
-        filter.value = next.type === 'checkbox' ? 'true' : '';
-        render();
-      });
 
-      const operatorSelect = document.createElement('select');
-      operatorSelect.setAttribute('aria-label', 'Filter operator');
-      const operators = filterOperators(column.type);
-      if (!operators.includes(filter.operator)) operators.unshift(filter.operator);
-      for (const value of operators) {
-        const option = document.createElement('option');
-        option.value = value;
-        option.textContent = FILTER_LABELS[value];
-        option.selected = filter.operator === value;
-        operatorSelect.append(option);
-      }
-      operatorSelect.addEventListener('change', () => {
-        filter.operator = operatorSelect.value as DatabaseFilterOperator;
-        render();
-      });
-      row.append(columnSelect, operatorSelect);
-
-      const needsValue =
-        filter.operator !== 'isEmpty' &&
-        filter.operator !== 'isNotEmpty' &&
-        filter.operator !== 'isChecked' &&
-        filter.operator !== 'isUnchecked';
-      if (needsValue) {
-        if (column.type === 'select') {
-          const select = document.createElement('select');
-          select.setAttribute('aria-label', 'Filter value');
-          const single = document.createElement('option');
-          single.value = '';
-          single.textContent = 'Choose…';
-          select.append(single);
-          for (const optionValue of column.options ?? []) {
-            const option = document.createElement('option');
-            option.value = optionValue;
-            option.textContent = optionValue;
-            option.selected = filter.value === optionValue;
-            select.append(option);
-          }
-          select.addEventListener('change', () => {
-            filter.value = select.value;
-          });
-          row.append(select);
-        } else if (column.type === 'multi-select') {
-          const input = document.createElement('input');
-          input.value = filter.value ?? '';
-          input.placeholder = 'Option, Option';
-          input.setAttribute('aria-label', 'Filter value');
-          input.addEventListener('input', () => {
-            filter.value = input.value;
-          });
-          row.append(input);
-        } else if (column.type === 'number') {
-          const input = document.createElement('input');
-          input.type = 'number';
-          input.value = filter.value ?? '';
-          input.setAttribute('aria-label', 'Filter value');
-          input.addEventListener('input', () => {
-            filter.value = input.value;
-          });
-          row.append(input);
-        } else if (column.type === 'date') {
-          const input = document.createElement('input');
-          input.type = 'date';
-          input.value = filter.value ?? '';
-          input.setAttribute('aria-label', 'Filter value');
-          input.addEventListener('input', () => {
-            filter.value = input.value;
-          });
-          row.append(input);
-        } else if (column.type === 'checkbox') {
-          const select = document.createElement('select');
-          select.setAttribute('aria-label', 'Filter value');
-          for (const value of ['true', 'false']) {
-            const option = document.createElement('option');
-            option.value = value;
-            option.textContent = value === 'true' ? 'Checked' : 'Unchecked';
-            option.selected = (filter.value ?? 'true') === value;
-            select.append(option);
-          }
-          select.addEventListener('change', () => {
-            filter.value = select.value;
-          });
-          row.append(select);
-        } else {
-          const input = document.createElement('input');
-          input.value = filter.value ?? '';
-          input.placeholder = 'Value';
-          input.setAttribute('aria-label', 'Filter value');
-          input.addEventListener('input', () => {
-            filter.value = input.value;
-          });
-          row.append(input);
-        }
-      }
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'nb-db-filter-remove';
-      remove.innerHTML = icon.x;
-      remove.title = 'Remove filter';
-      remove.setAttribute('aria-label', 'Remove filter');
-      remove.addEventListener('click', () => {
-        parent.conditions = parent.conditions.filter(item => item !== filter);
-        render();
-      });
-      row.append(remove);
-      return row;
-    };
-
-    const renderGroup = (
-      group: DatabaseFilterGroup,
-      parent: HTMLElement,
-      depth: number,
-      parentGroup?: DatabaseFilterGroup
-    ): void => {
-      const box = document.createElement('div');
-      box.className = depth === 0 ? 'nb-db-filter-root-group' : 'nb-db-filter-group';
-      if (depth > 0) {
-        const head = document.createElement('div');
-        head.className = 'nb-db-filter-group-head';
-        const op = document.createElement('select');
-        op.setAttribute('aria-label', 'Filter group mode');
-        for (const [value, label] of [['and', 'All'], ['or', 'Any']] as const) {
-          const option = document.createElement('option');
-          option.value = value;
-          option.textContent = label;
-          option.selected = group.op === value;
-          op.append(option);
-        }
-        op.addEventListener('change', () => {
-          group.op = op.value === 'or' ? 'or' : 'and';
-        });
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'nb-db-filter-remove';
-        remove.innerHTML = icon.x;
-        remove.title = 'Remove group';
-        remove.addEventListener('click', () => {
-          if (!parentGroup) return;
-          parentGroup.conditions = parentGroup.conditions.filter(item => item !== group);
-          render();
-        });
-        head.append(op, remove);
-        box.append(head);
-      }
-      for (const item of group.conditions) {
-        if (item.type === 'group') {
-          renderGroup(item, box, depth + 1, group);
-        } else {
-          box.append(renderCondition(item, group));
-        }
-      }
-      if (depth > 0) {
-        const footer = document.createElement('div');
-        footer.className = 'nb-db-filter-group-actions';
-        const addCondition = document.createElement('button');
-        addCondition.type = 'button';
-        addCondition.className = 'nb-db-filter-add';
-        addCondition.textContent = '+ Add condition';
-        addCondition.addEventListener('click', () => {
-          const first = this.#data.columns[0];
-          if (!first) return;
-          group.conditions.push(this.#defaultFilter(first));
-          render();
-        });
-        footer.append(addCondition);
-        if (depth < 4) {
-          const addGroup = document.createElement('button');
-          addGroup.type = 'button';
-          addGroup.className = 'nb-db-filter-add';
-          addGroup.textContent = '+ Add group';
-          addGroup.addEventListener('click', () => {
-            group.conditions.push({ type: 'group', op: 'and', conditions: [] });
-            render();
-          });
-          footer.append(addGroup);
-        }
-        box.append(footer);
-      }
-      parent.append(box);
-    };
 
     const render = (): void => {
       list.replaceChildren();
-      renderGroup(root, list, 0);
+      this.#renderFilterGroup(root, list, 0, undefined, render);
       if (root.conditions.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'nb-db-filter-empty';
@@ -2381,6 +2274,226 @@ export class DatabaseView {
     content.append(footer);
     render();
     this.#showPopover(anchor, content);
+  }
+
+  #renderFilterCondition(
+    filter: DatabaseFilter,
+    parent: DatabaseFilterGroup,
+    render: () => void
+  ): HTMLElement {
+    const column = this.#data.columns.find(item => item.id === filter.columnId);
+    const row = document.createElement('div');
+    row.className = 'nb-db-filter-row';
+    if (!column) {
+      row.textContent = 'This filter references a deleted column.';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'nb-db-filter-remove';
+      remove.innerHTML = icon.x;
+      remove.addEventListener('click', () => {
+        parent.conditions = parent.conditions.filter(item => item !== filter);
+        render();
+      });
+      row.append(remove);
+      return row;
+    }
+    const columnSelect = document.createElement('select');
+    columnSelect.setAttribute('aria-label', 'Filter column');
+    for (const item of this.#data.columns) {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.name;
+      option.selected = item.id === filter.columnId;
+      columnSelect.append(option);
+    }
+    columnSelect.addEventListener('change', () => {
+      const next = this.#data.columns.find(item => item.id === columnSelect.value);
+      if (!next) return;
+      filter.columnId = next.id;
+      filter.operator = defaultFilterOperator(next.type);
+      filter.value = next.type === 'checkbox' ? 'true' : '';
+      render();
+    });
+
+    const operatorSelect = document.createElement('select');
+    operatorSelect.setAttribute('aria-label', 'Filter operator');
+    const operators = filterOperators(column.type);
+    if (!operators.includes(filter.operator)) operators.unshift(filter.operator);
+    for (const value of operators) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = FILTER_LABELS[value];
+      option.selected = filter.operator === value;
+      operatorSelect.append(option);
+    }
+    operatorSelect.addEventListener('change', () => {
+      filter.operator = operatorSelect.value as DatabaseFilterOperator;
+      render();
+    });
+    row.append(columnSelect, operatorSelect);
+
+    const needsValue =
+      filter.operator !== 'isEmpty' &&
+      filter.operator !== 'isNotEmpty' &&
+      filter.operator !== 'isChecked' &&
+      filter.operator !== 'isUnchecked';
+    if (needsValue) {
+      if (column.type === 'select') {
+        const select = document.createElement('select');
+        select.setAttribute('aria-label', 'Filter value');
+        const single = document.createElement('option');
+        single.value = '';
+        single.textContent = 'Choose…';
+        select.append(single);
+        for (const optionValue of column.options ?? []) {
+          const option = document.createElement('option');
+          option.value = optionValue;
+          option.textContent = optionValue;
+          option.selected = filter.value === optionValue;
+          select.append(option);
+        }
+        select.addEventListener('change', () => {
+          filter.value = select.value;
+        });
+        row.append(select);
+      } else if (column.type === 'multi-select') {
+        const input = document.createElement('input');
+        input.value = filter.value ?? '';
+        input.placeholder = 'Option, Option';
+        input.setAttribute('aria-label', 'Filter value');
+        input.addEventListener('input', () => {
+          filter.value = input.value;
+        });
+        row.append(input);
+      } else if (column.type === 'number') {
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.value = filter.value ?? '';
+        input.setAttribute('aria-label', 'Filter value');
+        input.addEventListener('input', () => {
+          filter.value = input.value;
+        });
+        row.append(input);
+      } else if (column.type === 'date') {
+        const input = document.createElement('input');
+        input.type = 'date';
+        input.value = filter.value ?? '';
+        input.setAttribute('aria-label', 'Filter value');
+        input.addEventListener('input', () => {
+          filter.value = input.value;
+        });
+        row.append(input);
+      } else if (column.type === 'checkbox') {
+        const select = document.createElement('select');
+        select.setAttribute('aria-label', 'Filter value');
+        for (const value of ['true', 'false']) {
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = value === 'true' ? 'Checked' : 'Unchecked';
+          option.selected = (filter.value ?? 'true') === value;
+          select.append(option);
+        }
+        select.addEventListener('change', () => {
+          filter.value = select.value;
+        });
+        row.append(select);
+      } else {
+        const input = document.createElement('input');
+        input.value = filter.value ?? '';
+        input.placeholder = 'Value';
+        input.setAttribute('aria-label', 'Filter value');
+        input.addEventListener('input', () => {
+          filter.value = input.value;
+        });
+        row.append(input);
+      }
+    }
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'nb-db-filter-remove';
+    remove.innerHTML = icon.x;
+    remove.title = 'Remove filter';
+    remove.setAttribute('aria-label', 'Remove filter');
+    remove.addEventListener('click', () => {
+      parent.conditions = parent.conditions.filter(item => item !== filter);
+      render();
+    });
+    row.append(remove);
+    return row;
+  }
+
+  #renderFilterGroup(
+    group: DatabaseFilterGroup,
+    parent: HTMLElement,
+    depth: number,
+    parentGroup: DatabaseFilterGroup | undefined,
+    render: () => void
+  ): void {
+    const box = document.createElement('div');
+    box.className = depth === 0 ? 'nb-db-filter-root-group' : 'nb-db-filter-group';
+    if (depth > 0) {
+      const head = document.createElement('div');
+      head.className = 'nb-db-filter-group-head';
+      const op = document.createElement('select');
+      op.setAttribute('aria-label', 'Filter group mode');
+      for (const [value, label] of [['and', 'All'], ['or', 'Any']] as const) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        option.selected = group.op === value;
+        op.append(option);
+      }
+      op.addEventListener('change', () => {
+        group.op = op.value === 'or' ? 'or' : 'and';
+      });
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'nb-db-filter-remove';
+      remove.innerHTML = icon.x;
+      remove.title = 'Remove group';
+      remove.addEventListener('click', () => {
+        if (!parentGroup) return;
+        parentGroup.conditions = parentGroup.conditions.filter(item => item !== group);
+        render();
+      });
+      head.append(op, remove);
+      box.append(head);
+    }
+    for (const item of group.conditions) {
+      if (item.type === 'group') {
+        this.#renderFilterGroup(item, box, depth + 1, group, render);
+      } else {
+        box.append(this.#renderFilterCondition(item, group, render));
+      }
+    }
+    if (depth > 0) {
+      const footer = document.createElement('div');
+      footer.className = 'nb-db-filter-group-actions';
+      const addCondition = document.createElement('button');
+      addCondition.type = 'button';
+      addCondition.className = 'nb-db-filter-add';
+      addCondition.textContent = '+ Add condition';
+      addCondition.addEventListener('click', () => {
+        const first = this.#data.columns[0];
+        if (!first) return;
+        group.conditions.push(this.#defaultFilter(first));
+        render();
+      });
+      footer.append(addCondition);
+      if (depth < 4) {
+        const addGroup = document.createElement('button');
+        addGroup.type = 'button';
+        addGroup.className = 'nb-db-filter-add';
+        addGroup.textContent = '+ Add group';
+        addGroup.addEventListener('click', () => {
+          group.conditions.push({ type: 'group', op: 'and', conditions: [] });
+          render();
+        });
+        footer.append(addGroup);
+      }
+      box.append(footer);
+    }
+    parent.append(box);
   }
 
   #openGroupPopover(anchor: HTMLElement): void {
@@ -2504,25 +2617,10 @@ export class DatabaseView {
     keys.splice(target, 0, keyValue);
     const settings = view.groupProperties ?? [];
     const byKey = new Map(settings.map(group => [group.key, group]));
-    const visible = new Set(keys);
-    const order: string[] = [];
-    let visibleIndex = 0;
-    for (const item of settings) {
-      if (visible.has(item.key)) {
-        const nextKey = keys[visibleIndex];
-        if (nextKey !== undefined) {
-          order.push(nextKey);
-          visibleIndex += 1;
-        }
-      } else if (!order.includes(item.key)) {
-        order.push(item.key);
-      }
-    }
-    while (visibleIndex < keys.length) {
-      const nextKey = keys[visibleIndex];
-      if (nextKey !== undefined) order.push(nextKey);
-      visibleIndex += 1;
-    }
+    const order = mergeOrder(
+      settings.map(group => group.key),
+      keys
+    );
     this.#updateActiveView({
       groupProperties: order.map(groupKey => byKey.get(groupKey) ?? { key: groupKey }),
     });
@@ -2807,41 +2905,25 @@ export class DatabaseView {
     if (column.type === 'number' || column.type === 'date' || column.type === 'url') {
       const input = document.createElement('input');
       input.className = 'nb-db-detail-input';
-      input.value =
-        column.type === 'number'
-          ? formatDatabaseNumber(cell?.text ?? '', column)
-          : cell?.text ?? '';
-      input.type = 'text';
-      input.inputMode = column.type === 'number' ? 'decimal' : 'text';
       input.disabled = this.#readonly;
-      input.addEventListener('input', () => {
-        const value =
-          column.type === 'number'
-            ? input.value.replace(/[^0-9eE+.-]/gu, '')
-            : input.value;
-        this.#commitCell(
-          row.id,
-          column.id,
-          { ...(cell ?? {}), text: value },
-          `db:${row.id}:${column.id}`
-        );
-      }, { signal: this.#detailEvents.signal });
       if (column.type === 'number') {
-        input.addEventListener(
-          'focus',
-          () => {
-            input.value = this.#currentCell(row.id, column.id)?.text ?? '';
-            input.select();
-          },
-          { signal: this.#detailEvents.signal }
+        this.#attachNumberInput(
+          input,
+          row,
+          column,
+          this.#detailEvents.signal
         );
-        input.addEventListener(
-          'blur',
-          () => {
-            input.value = formatDatabaseNumber(input.value, column);
-          },
-          { signal: this.#detailEvents.signal }
-        );
+      } else {
+        input.type = 'text';
+        input.value = cell?.text ?? '';
+        input.addEventListener('input', () => {
+          this.#commitCell(
+            row.id,
+            column.id,
+            { ...(cell ?? {}), text: input.value },
+            `db:${row.id}:${column.id}`
+          );
+        }, { signal: this.#detailEvents.signal });
       }
       field.append(input);
       return field;
@@ -3030,43 +3112,18 @@ export class DatabaseView {
       const [moved] = ordered.splice(groupFrom, 1);
       if (!moved) return;
       ordered.splice(groupTo, 0, moved);
-      const settings = view.groupProperties ?? [];
+      const settings = seedGroupSettings(
+        view.groupProperties ?? [],
+        groups.map(item => item.key)
+      );
       const visibleOrder = ordered.map(entry => entry.id);
-      const visible = new Set(visibleOrder);
       const savedOrder =
         settings.find(item => item.key === group.key)?.manuallyCardSort ?? [];
-      const order: string[] = [];
-      let visibleIndex = 0;
-      for (const id of savedOrder) {
-        if (visible.has(id)) {
-          const nextId = visibleOrder[visibleIndex];
-          if (nextId !== undefined) {
-            order.push(nextId);
-            visibleIndex += 1;
-          }
-        } else if (!order.includes(id)) {
-          order.push(id);
-        }
-      }
-      while (visibleIndex < visibleOrder.length) {
-        const nextId = visibleOrder[visibleIndex];
-        if (nextId !== undefined) order.push(nextId);
-        visibleIndex += 1;
-      }
-      const keys = groups.map(item => item.key);
-      for (const item of settings) {
-        if (!keys.includes(item.key)) keys.push(item.key);
-      }
-      if (!keys.includes(group.key)) keys.push(group.key);
-      const byKey = new Map(settings.map(item => [item.key, item]));
-      const groupProperties = keys.map(key =>
-        key === group.key
-          ? {
-              ...(byKey.get(key) ?? {}),
-              key,
-              manuallyCardSort: order,
-            }
-          : byKey.get(key) ?? { key }
+      const order = mergeOrder(savedOrder, visibleOrder);
+      const groupProperties = settings.map(setting =>
+        setting.key === group.key
+          ? { ...setting, manuallyCardSort: order }
+          : setting
       );
       const views = this.#views().map(item =>
         item.id === view.id ? { ...item, groupProperties } : item
@@ -3140,16 +3197,7 @@ export class DatabaseView {
       };
     });
     const view = this.#activeView();
-    const views = this.#views().map(item => {
-      const columns = this.#viewColumns(item);
-      const index = columns.findIndex(entry => entry.id === columnId);
-      if (index < 0) return item;
-      columns.splice(index + 1, 0, {
-        ...(columns[index] ?? { id: column.id, width: 180 }),
-        id: column.id,
-      });
-      return { ...item, columns };
-    });
+    const views = this.#viewsWithColumn(column.id, columnId, true, 180, columnId);
     this.#host.commit({
       ...this.#data,
       columns,
@@ -3197,6 +3245,66 @@ export class DatabaseView {
 
   #currentCell(rowId: string, columnId: string): DatabaseCell | undefined {
     return this.#data.rows.find(row => row.id === rowId)?.cells[columnId];
+  }
+
+  #activateCellInput(
+    element: HTMLElement,
+    rowId: string,
+    columnId: string
+  ): void {
+    const groupKey = element.closest<HTMLElement>('.nb-db-group')?.dataset.group;
+    this.#active = {
+      rowId,
+      columnId,
+      ...(groupKey !== undefined ? { groupKey } : {}),
+    };
+  }
+
+  #attachNumberInput(
+    input: HTMLInputElement,
+    row: DatabaseRow,
+    column: DatabaseColumn,
+    signal: AbortSignal,
+    onFocus?: () => void
+  ): void {
+    input.type = 'text';
+    input.inputMode = 'decimal';
+    input.value = formatDatabaseNumber(
+      this.#currentCell(row.id, column.id)?.text ?? '',
+      column
+    );
+    input.addEventListener(
+      'input',
+      () => {
+        const value = input.value.replace(/[^0-9eE+.-]/gu, '');
+        this.#commitCell(
+          row.id,
+          column.id,
+          this.#withText(this.#currentCell(row.id, column.id), value),
+          `db:${row.id}:${column.id}`
+        );
+      },
+      { signal }
+    );
+    input.addEventListener(
+      'focus',
+      () => {
+        onFocus?.();
+        input.value = this.#currentCell(row.id, column.id)?.text ?? '';
+        input.select();
+      },
+      { signal }
+    );
+    input.addEventListener(
+      'blur',
+      () => {
+        input.value = formatDatabaseNumber(
+          this.#currentCell(row.id, column.id)?.text ?? '',
+          column
+        );
+      },
+      { signal }
+    );
   }
 
   #syncTitle(): void {
@@ -3474,166 +3582,201 @@ export class DatabaseView {
     );
 
     if (column.type === 'checkbox') {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'nb-db-check';
-      button.setAttribute('role', 'checkbox');
-      button.setAttribute('aria-checked', String(Boolean(cell?.checked)));
-      button.setAttribute('aria-label', column.name);
-      button.innerHTML = icon.check;
-      button.disabled = this.#readonly;
-      button.addEventListener(
-        'click',
-        event => {
+      this.#createCheckboxCell(td, nodes, row, column, cell);
+    } else if (column.type === 'select') {
+      this.#createSelectCell(td, nodes, row, column, cell);
+    } else if (
+      column.type === 'multi-select' ||
+      column.type === 'files' ||
+      column.type === 'people'
+    ) {
+      this.#createPickerCell(td, nodes, row, column, cell);
+    } else if (column.type === 'number' || column.type === 'date') {
+      this.#createValueCell(td, nodes, row, column, cell);
+    } else {
+      this.#createTextCell(td, nodes, row, column, cell);
+    }
+
+    this.#registerCell(key, nodes);
+    return td;
+  }
+
+  #createCheckboxCell(
+    td: HTMLTableCellElement,
+    nodes: CellNodes,
+    row: DatabaseRow,
+    column: DatabaseColumn,
+    cell: DatabaseCell | undefined
+  ): void {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'nb-db-check';
+    button.setAttribute('role', 'checkbox');
+    button.setAttribute('aria-checked', String(Boolean(cell?.checked)));
+    button.setAttribute('aria-label', column.name);
+    button.innerHTML = icon.check;
+    button.disabled = this.#readonly;
+    button.addEventListener(
+      'click',
+      event => {
+        event.preventDefault();
+        const checked = button.getAttribute('aria-checked') !== 'true';
+        button.setAttribute('aria-checked', String(checked));
+        this.#commitCell(
+          row.id,
+          column.id,
+          { ...(cell?.text ? { text: cell.text } : {}), checked },
+          `db:${row.id}:${column.id}`
+        );
+      },
+      { signal: this.#events.signal }
+    );
+    button.addEventListener(
+      'keydown',
+      event => this.#onCellKeyDown(event, row.id, column.id, 'checkbox'),
+      { signal: this.#events.signal }
+    );
+    td.append(button);
+    nodes.button = button;
+  }
+
+  #createSelectCell(
+    td: HTMLTableCellElement,
+    nodes: CellNodes,
+    row: DatabaseRow,
+    column: DatabaseColumn,
+    cell: DatabaseCell | undefined
+  ): void {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'nb-db-select';
+    button.disabled = this.#readonly;
+    this.#applySelectLabel(button, cell?.text ?? '', column.options);
+    button.addEventListener(
+      'click',
+      () => this.#openSelectPopover(column.id, row.id, button),
+      { signal: this.#events.signal }
+    );
+    button.addEventListener(
+      'keydown',
+      event => {
+        if (event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();
-          const checked = button.getAttribute('aria-checked') !== 'true';
-          button.setAttribute('aria-checked', String(checked));
-          this.#commitCell(row.id, column.id, { ...(cell?.text ? { text: cell.text } : {}), checked }, `db:${row.id}:${column.id}`);
-        },
-        { signal: this.#events.signal }
-      );
-      button.addEventListener(
-        'keydown',
-        event => this.#onCellKeyDown(event, row.id, column.id, 'checkbox'),
-        { signal: this.#events.signal }
-      );
-      td.append(button);
-      nodes.button = button;
-      this.#registerCell(key, nodes);
-      return td;
-    }
+          this.#openSelectPopover(column.id, row.id, button);
+          return;
+        }
+        this.#onCellKeyDown(event, row.id, column.id, 'select');
+      },
+      { signal: this.#events.signal }
+    );
+    td.append(button);
+    nodes.button = button;
+  }
 
-    if (column.type === 'select') {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'nb-db-select';
-      button.disabled = this.#readonly;
-      this.#applySelectLabel(button, cell?.text ?? '', column.options);
-      button.addEventListener(
-        'click',
-        () => this.#openSelectPopover(column.id, row.id, button),
-        { signal: this.#events.signal }
-      );
-      button.addEventListener(
-        'keydown',
-        event => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            this.#openSelectPopover(column.id, row.id, button);
-            return;
-          }
-          this.#onCellKeyDown(event, row.id, column.id, 'select');
-        },
-        { signal: this.#events.signal }
-      );
-      td.append(button);
-      nodes.button = button;
-      this.#registerCell(key, nodes);
-      return td;
+  #createPickerCell(
+    td: HTMLTableCellElement,
+    nodes: CellNodes,
+    row: DatabaseRow,
+    column: DatabaseColumn,
+    cell: DatabaseCell | undefined
+  ): void {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'nb-db-select nb-db-multi';
+    button.disabled = this.#readonly;
+    if (column.type === 'multi-select') {
+      this.#applyMultiLabel(button, cell?.values ?? []);
+    } else if (column.type === 'files') {
+      this.#applyFilesLabel(button, cell?.files ?? []);
+    } else {
+      this.#applyPeopleLabel(button, cell?.people ?? []);
     }
+    button.addEventListener(
+      'click',
+      () => {
+        if (column.type === 'multi-select') {
+          this.#openMultiSelectPopover(column.id, row.id, button);
+        } else if (column.type === 'files') {
+          this.#openFilesPopover(column.id, row.id, button);
+        } else {
+          this.#openPeoplePopover(column.id, row.id, button);
+        }
+      },
+      { signal: this.#events.signal }
+    );
+    button.addEventListener(
+      'keydown',
+      event => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          button.click();
+          return;
+        }
+        this.#onCellKeyDown(event, row.id, column.id, column.type as CellKind);
+      },
+      { signal: this.#events.signal }
+    );
+    td.append(button);
+    nodes.button = button;
+  }
 
-    if (column.type === 'multi-select' || column.type === 'files' || column.type === 'people') {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'nb-db-select nb-db-multi';
-      button.disabled = this.#readonly;
-      if (column.type === 'multi-select') {
-        this.#applyMultiLabel(button, cell?.values ?? []);
-      } else if (column.type === 'files') {
-        this.#applyFilesLabel(button, cell?.files ?? []);
-      } else {
-        this.#applyPeopleLabel(button, cell?.people ?? []);
-      }
-      button.addEventListener(
-        'click',
-        () => {
-          if (column.type === 'multi-select') {
-            this.#openMultiSelectPopover(column.id, row.id, button);
-          } else if (column.type === 'files') {
-            this.#openFilesPopover(column.id, row.id, button);
-          } else {
-            this.#openPeoplePopover(column.id, row.id, button);
-          }
-        },
-        { signal: this.#events.signal }
+  #createValueCell(
+    td: HTMLTableCellElement,
+    nodes: CellNodes,
+    row: DatabaseRow,
+    column: DatabaseColumn,
+    cell: DatabaseCell | undefined
+  ): void {
+    const input = document.createElement('input');
+    input.className = 'nb-db-input';
+    input.disabled = this.#readonly;
+    input.setAttribute('aria-label', column.name);
+    if (column.type === 'number') {
+      this.#attachNumberInput(
+        input,
+        row,
+        column,
+        this.#events.signal,
+        () => this.#activateCellInput(input, row.id, column.id)
       );
-      button.addEventListener(
-        'keydown',
-        event => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            button.click();
-            return;
-          }
-          this.#onCellKeyDown(event, row.id, column.id, column.type as CellKind);
-        },
-        { signal: this.#events.signal }
-      );
-      td.append(button);
-      nodes.button = button;
-      this.#registerCell(key, nodes);
-      return td;
-    }
-
-    if (column.type === 'number' || column.type === 'date') {
-      const input = document.createElement('input');
-      input.className = 'nb-db-input';
+    } else {
       input.type = 'text';
-      input.inputMode = column.type === 'number' ? 'decimal' : 'text';
-      if (column.type === 'date') input.placeholder = 'YYYY-MM-DD';
-      input.value =
-        column.type === 'number'
-          ? formatDatabaseNumber(cell?.text ?? '', column)
-          : cell?.text ?? '';
-      input.disabled = this.#readonly;
-      input.setAttribute('aria-label', column.name);
+      input.placeholder = 'YYYY-MM-DD';
+      input.value = cell?.text ?? '';
       input.addEventListener(
         'input',
         () => {
-          const value =
-            column.type === 'number'
-              ? input.value.replace(/[^0-9eE+.-]/gu, '')
-              : input.value;
-          this.#commitCell(row.id, column.id, this.#withText(cell, value), `db:${row.id}:${column.id}`);
+          this.#commitCell(
+            row.id,
+            column.id,
+            this.#withText(this.#currentCell(row.id, column.id), input.value),
+            `db:${row.id}:${column.id}`
+          );
         },
         { signal: this.#events.signal }
       );
       input.addEventListener(
         'focus',
-        () => {
-          const groupKey = input.closest<HTMLElement>('.nb-db-group')?.dataset.group;
-          this.#active = {
-            rowId: row.id,
-            columnId: column.id,
-            ...(groupKey !== undefined ? { groupKey } : {}),
-          };
-          if (column.type === 'number') {
-            input.value = this.#currentCell(row.id, column.id)?.text ?? '';
-            input.select();
-          }
-        },
+        () => this.#activateCellInput(input, row.id, column.id),
         { signal: this.#events.signal }
       );
-      if (column.type === 'number') {
-        input.addEventListener(
-          'blur',
-          () => {
-            input.value = formatDatabaseNumber(input.value, column);
-          },
-          { signal: this.#events.signal }
-        );
-      }
-      input.addEventListener(
-        'keydown',
-        event => this.#onCellKeyDown(event, row.id, column.id, column.type as CellKind),
-        { signal: this.#events.signal }
-      );
-      td.append(input);
-      nodes.input = input;
-      this.#registerCell(key, nodes);
-      return td;
     }
+    input.addEventListener(
+      'keydown',
+      event => this.#onCellKeyDown(event, row.id, column.id, column.type as CellKind),
+      { signal: this.#events.signal }
+    );
+    td.append(input);
+    nodes.input = input;
+  }
 
+  #createTextCell(
+    td: HTMLTableCellElement,
+    nodes: CellNodes,
+    row: DatabaseRow,
+    column: DatabaseColumn,
+    cell: DatabaseCell | undefined
+  ): void {
     const text = document.createElement('div');
     text.className = 'nb-db-text';
     text.contentEditable = this.#readonly ? 'false' : 'true';
@@ -3647,20 +3790,18 @@ export class DatabaseView {
         'input',
         () => {
           const value = (text.textContent ?? '').replace(/\r?\n/gu, ' ');
-          this.#commitCell(row.id, column.id, this.#withText(cell, value), `db:${row.id}:${column.id}`);
+          this.#commitCell(
+            row.id,
+            column.id,
+            this.#withText(this.#currentCell(row.id, column.id), value),
+            `db:${row.id}:${column.id}`
+          );
         },
         { signal: this.#events.signal }
       );
       text.addEventListener(
         'focus',
-        () => {
-          const groupKey = text.closest<HTMLElement>('.nb-db-group')?.dataset.group;
-          this.#active = {
-            rowId: row.id,
-            columnId: column.id,
-            ...(groupKey !== undefined ? { groupKey } : {}),
-          };
-        },
+        () => this.#activateCellInput(text, row.id, column.id),
         { signal: this.#events.signal }
       );
       text.addEventListener(
@@ -3681,8 +3822,6 @@ export class DatabaseView {
     }
     td.append(text);
     nodes.text = text;
-    this.#registerCell(key, nodes);
-    return td;
   }
 
   #applySelectLabel(button: HTMLButtonElement, value: string, options: string[] = []): void {
@@ -3843,12 +3982,7 @@ export class DatabaseView {
       type
     );
     const view = this.#activeView();
-    const views = this.#views().map(item => {
-      const columns = this.#viewColumns(item);
-      return columns.some(entry => entry.id === column.id)
-        ? item
-        : { ...item, columns: [...columns, { id: column.id, width: 180 }] };
-    });
+    const views = this.#viewsWithColumn(column.id, null, false);
     this.#host.commit({
       ...this.#data,
       columns: [...this.#data.columns, column],
@@ -4013,16 +4147,7 @@ export class DatabaseView {
     const index = columns.findIndex(item => item.id === anchorId);
     columns.splice(index < 0 ? columns.length : after ? index + 1 : index, 0, column);
     const view = this.#activeView();
-    const views = this.#views().map(item => {
-      const viewColumns = this.#viewColumns(item);
-      const viewIndex = viewColumns.findIndex(entry => entry.id === anchorId);
-      viewColumns.splice(
-        viewIndex < 0 ? viewColumns.length : after ? viewIndex + 1 : viewIndex,
-        0,
-        { id: column.id, width: 180 }
-      );
-      return { ...item, columns: viewColumns };
-    });
+    const views = this.#viewsWithColumn(column.id, anchorId, after);
     this.#host.commit({
       ...this.#data,
       columns,
@@ -5218,6 +5343,61 @@ export class DatabaseView {
     input.select();
   }
 
+  #buildNumberFormatField(column: DatabaseColumn): {
+    field: HTMLElement;
+    formatSelect: HTMLSelectElement;
+    decimals: HTMLInputElement;
+    decimalPatch: () => { decimal?: number };
+  } {
+    const field = document.createElement('div');
+    field.className = 'nb-db-field nb-db-number-format';
+    const label = document.createElement('span');
+    label.textContent = 'Format';
+    const formatSelect = document.createElement('select');
+    formatSelect.setAttribute('aria-label', 'Number format');
+    for (const [value, text] of [
+      ['number', 'Number'],
+      ['currency', 'Currency'],
+      ['percent', 'Percent'],
+      ['decimal', 'Decimal'],
+    ] as const) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      option.selected = (column.data?.format ?? 'number') === value;
+      formatSelect.append(option);
+    }
+    const decimals = document.createElement('input');
+    decimals.type = 'number';
+    decimals.min = '0';
+    decimals.max = '6';
+    decimals.step = '1';
+    const defaultDecimals =
+      typeof column.data?.decimal === 'number'
+        ? column.data.decimal
+        : column.data?.format === 'currency'
+          ? 2
+          : 0;
+    decimals.value = String(defaultDecimals);
+    let decimalTouched = false;
+    decimals.addEventListener('input', () => {
+      decimalTouched = true;
+    });
+    decimals.setAttribute('aria-label', 'Decimal places');
+    const decimalPatch = (): { decimal?: number } =>
+      decimalTouched || typeof column.data?.decimal === 'number'
+        ? {
+            decimal: Math.max(
+              0,
+              Math.min(6, Math.round(Number(decimals.value) || 0))
+            ),
+          }
+        : {};
+    field.append(label, formatSelect, decimals);
+    field.style.display = column.type === 'number' ? '' : 'none';
+    return { field, formatSelect, decimals, decimalPatch };
+  }
+
   #openColumnPopover(columnId: string, anchor: HTMLElement): void {
     if (this.#readonly) return;
     const column = this.#data.columns.find(item => item.id === columnId);
@@ -5272,53 +5452,9 @@ export class DatabaseView {
     typeSelect.addEventListener('change', syncOptionsVisibility);
     syncOptionsVisibility();
 
-    const numberField = document.createElement('div');
-    numberField.className = 'nb-db-field nb-db-number-format';
-    const numberLabel = document.createElement('span');
-    numberLabel.textContent = 'Format';
-    const formatSelect = document.createElement('select');
-    formatSelect.setAttribute('aria-label', 'Number format');
-    for (const [value, label] of [
-      ['number', 'Number'],
-      ['currency', 'Currency'],
-      ['percent', 'Percent'],
-      ['decimal', 'Decimal'],
-    ] as const) {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = label;
-      option.selected = (column.data?.format ?? 'number') === value;
-      formatSelect.append(option);
-    }
-    const decimals = document.createElement('input');
-    decimals.type = 'number';
-    decimals.min = '0';
-    decimals.max = '6';
-    decimals.step = '1';
-    const defaultDecimals =
-      typeof column.data?.decimal === 'number'
-        ? column.data.decimal
-        : column.data?.format === 'currency'
-          ? 2
-          : 0;
-    decimals.value = String(defaultDecimals);
-    let decimalTouched = false;
-    decimals.addEventListener('input', () => {
-      decimalTouched = true;
-    });
-    decimals.setAttribute('aria-label', 'Decimal places');
-    const decimalPatch = (): { decimal?: number } =>
-      decimalTouched || typeof column.data?.decimal === 'number'
-        ? {
-            decimal: Math.max(
-              0,
-              Math.min(6, Math.round(Number(decimals.value) || 0))
-            ),
-          }
-        : {};
-    numberField.append(numberLabel, formatSelect, decimals);
-    numberField.style.display = column.type === 'number' ? '' : 'none';
-
+    const numberFormat = this.#buildNumberFormatField(column);
+    const { field: numberField, formatSelect, decimals, decimalPatch } =
+      numberFormat;
     const actions = document.createElement('div');
     actions.className = 'nb-db-pop-actions';
     const action = (
