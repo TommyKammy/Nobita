@@ -222,6 +222,7 @@ export class NobitaEditor implements BlockHost {
   #blockAnchorId: string | null = null;
   #blockFocusId: string | null = null;
   #selectedBlockEls = new Set<HTMLElement>();
+  #toolbarDismissedKey: string | null = null;
   #destroyed = false;
   #docEpoch = 0;
   #bodyEvents = new AbortController();
@@ -250,6 +251,10 @@ export class NobitaEditor implements BlockHost {
       this.#toolbar.isVisible ||
       this.#linkPopover.element.parentNode !== null;
     if (!hadOverlay) return;
+    if (this.#toolbar.isVisible) {
+      const sel = this.#currentSelection();
+      this.#toolbarDismissedKey = sel ? this.#selectionKey(sel) : null;
+    }
     this.#mention = null;
     this.#menu.close();
     this.#toolbar.hide();
@@ -515,6 +520,7 @@ export class NobitaEditor implements BlockHost {
   setDoc(doc: Doc | string, options: { history?: boolean } = {}): void {
     const parsed = parseDoc(doc);
     this.clearBlockSelection();
+    this.#toolbarDismissedKey = null;
     this.#menu.close();
     this.#toolbar.hide();
     this.#slash = null;
@@ -603,13 +609,20 @@ export class NobitaEditor implements BlockHost {
   }
 
   #restoreHistorySelection(): void {
-    const focusId = this.store.selection?.focus.blockId;
-    const block = focusId ? findBlock(this.store.doc.blocks, focusId) : undefined;
-    if (block?.type === 'table') {
-      this.#focusBlock(block.id, 0);
+    const selection = this.store.selection;
+    if (!selection) return;
+    const anchorBlock = findBlock(this.store.doc.blocks, selection.anchor.blockId);
+    const focusBlock = findBlock(this.store.doc.blocks, selection.focus.blockId);
+    if (!focusBlock) return;
+    if (focusBlock.type === 'table' && selection.anchor.blockId === selection.focus.blockId) {
+      this.#focusBlock(focusBlock.id, 0);
       return;
     }
-    this.#restoreSelection(this.store.selection, false);
+    if (!isTextualBlock(focusBlock) || (anchorBlock && !isTextualBlock(anchorBlock))) {
+      this.#selectBlockRange(anchorBlock?.id ?? focusBlock.id, focusBlock.id);
+      return;
+    }
+    this.#restoreSelection(selection, false);
   }
 
   insertMarkdown(markdown: string): void {
@@ -1024,13 +1037,18 @@ export class NobitaEditor implements BlockHost {
     }
   }
 
-  async #uploadImage(blockId: string, file: File): Promise<void> {
+  async #uploadImage(
+    blockId: string,
+    file: File,
+    replaceIds?: ReadonlySet<string>
+  ): Promise<void> {
     const upload = this.#options.uploadImage;
     if (!upload || this.#readonly) return;
     const epoch = this.#docEpoch;
     try {
       const result = await upload(file);
       if (this.#destroyed || this.#readonly || epoch !== this.#docEpoch) return;
+      if (!findBlock(this.store.doc.blocks, blockId)) return;
       const src = typeof result === 'string' ? result : result.src;
       if (!src) return;
       const alt = typeof result === 'string' ? undefined : result.alt;
@@ -1042,9 +1060,16 @@ export class NobitaEditor implements BlockHost {
           ...(caption ? { caption } : {}),
         },
       });
-      const next = insertBlockRelative(this.store.doc, blockId, block, 'after');
-      this.#commit(next, this.store.selection);
-      this.#views.get(block.id)?.focusImageCaption();
+      let next = insertBlockRelative(this.store.doc, blockId, block, 'after');
+      if (replaceIds && replaceIds.size > 0) {
+        next = removeBlocks(next, replaceIds).doc;
+        this.clearBlockSelection();
+        const point: Point = { blockId: block.id, offset: 0 };
+        this.#commit(next, { anchor: point, focus: point }, { restore: false });
+      } else {
+        this.#commit(next, this.store.selection);
+      }
+      this.#findView(block.id)?.focusImageCaption();
     } catch {
       // Host upload failures leave the document untouched.
     }
@@ -2313,8 +2338,22 @@ export class NobitaEditor implements BlockHost {
     this.#syncPlaceholders();
   }
 
+  #visibleBlocks(blocks: readonly Block[] = this.store.doc.blocks): Block[] {
+    const out: Block[] = [];
+    const visit = (list: readonly Block[]): void => {
+      for (const block of list) {
+        out.push(block);
+        if (!block.props.collapsed && block.children.length > 0) {
+          visit(block.children);
+        }
+      }
+    };
+    visit(blocks);
+    return out;
+  }
+
   #selectBlockRange(anchorId: string, focusId: string, focusBody = true): void {
-    const order = flattenBlocks(this.store.doc.blocks);
+    const order = this.#visibleBlocks();
     const a = order.findIndex(b => b.id === anchorId);
     const f = order.findIndex(b => b.id === focusId);
     if (a < 0 || f < 0) {
@@ -2371,7 +2410,7 @@ export class NobitaEditor implements BlockHost {
 
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      const order = flattenBlocks(this.store.doc.blocks);
+      const order = this.#visibleBlocks();
       if (order.length === 0) return;
       const currentId = this.#blockFocusId ?? this.#blockAnchorId;
       const currentIndex = currentId ? order.findIndex(b => b.id === currentId) : -1;
@@ -2431,12 +2470,17 @@ export class NobitaEditor implements BlockHost {
       if (this.#readonly) return;
       const { doc, duplicatedIds } = duplicateBlocks(this.store.doc, this.#selectedBlockIds);
       if (duplicatedIds.length === 0) return;
-      this.#commit(doc, null);
-      this.#setBlockSelection(
-        duplicatedIds,
-        duplicatedIds[0]!,
-        duplicatedIds[duplicatedIds.length - 1]!
+      const firstDup = duplicatedIds[0]!;
+      const lastDup = duplicatedIds[duplicatedIds.length - 1]!;
+      this.#commit(
+        doc,
+        {
+          anchor: { blockId: firstDup, offset: 0 },
+          focus: { blockId: lastDup, offset: 0 },
+        },
+        { restore: false }
       );
+      this.#setBlockSelection(duplicatedIds, firstDup, lastDup);
     }
   }
 
@@ -2451,7 +2495,12 @@ export class NobitaEditor implements BlockHost {
       this.#focusBlock(caret.blockId, caret.offset);
       return;
     }
-    this.#commit(nextDoc, null);
+    const point: Point | null = focusBlock ? { blockId: focusBlock.id, offset: 0 } : null;
+    this.#commit(
+      nextDoc,
+      point ? { anchor: point, focus: point } : null,
+      { restore: false }
+    );
     if (focusBlock) {
       this.#setBlockSelection([focusBlock.id], focusBlock.id, focusBlock.id);
     }
@@ -2473,12 +2522,25 @@ export class NobitaEditor implements BlockHost {
   #pasteInBlockSelection(event: ClipboardEvent): void {
     event.preventDefault();
     if (this.#readonly) return;
-    const payload = readClipboardPayload(event);
-    if (!payload || payload.blocks.length === 0) return;
     const selected = selectedTopLevelBlocks(this.store.doc.blocks, this.#selectedBlockIds);
     if (selected.length === 0) return;
-    const copies = payload.blocks.map(duplicateBlockTree);
     const lastSelected = selected[selected.length - 1]!;
+    const image = Array.from(event.clipboardData?.files ?? []).find(file =>
+      file.type.startsWith('image/')
+    );
+    if (image) {
+      if (this.#options.uploadImage) {
+        void this.#uploadImage(
+          lastSelected.id,
+          image,
+          new Set(selected.map(block => block.id))
+        );
+      }
+      return;
+    }
+    const payload = readClipboardPayload(event);
+    if (!payload || payload.blocks.length === 0) return;
+    const copies = payload.blocks.map(duplicateBlockTree);
     const inserted = insertBlocksAfter(this.store.doc, lastSelected.id, copies);
     const { doc: nextDoc } = removeBlocks(inserted, new Set(selected.map(b => b.id)));
     this.clearBlockSelection();
@@ -2489,8 +2551,15 @@ export class NobitaEditor implements BlockHost {
       this.#focusBlock(caret.blockId, caret.offset);
       return;
     }
-    this.#commit(nextDoc, null);
     const pastedIds = copies.map(b => b.id);
+    this.#commit(
+      nextDoc,
+      {
+        anchor: { blockId: pastedIds[0]!, offset: 0 },
+        focus: { blockId: pastedIds[pastedIds.length - 1]!, offset: 0 },
+      },
+      { restore: false }
+    );
     this.#setBlockSelection(pastedIds, pastedIds[0]!, pastedIds[pastedIds.length - 1]!);
   }
 
@@ -2588,8 +2657,17 @@ export class NobitaEditor implements BlockHost {
     }
     const selection = this.#currentSelection();
     if (!selection || this.#isCollapsed(selection)) {
+      this.#toolbarDismissedKey = null;
       this.#toolbar.hide();
       return;
+    }
+    const selectionKey = this.#selectionKey(selection);
+    if (this.#toolbarDismissedKey !== null) {
+      if (this.#toolbarDismissedKey === selectionKey) {
+        this.#toolbar.hide();
+        return;
+      }
+      this.#toolbarDismissedKey = null;
     }
     const rect = selectionRect(this.root);
     if (!rect) {

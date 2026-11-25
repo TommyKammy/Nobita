@@ -362,3 +362,132 @@ test('multi-block drag-and-drop, readonly guards, and nested field focus clearin
   await page.keyboard.press('ControlOrMeta+a');
   expect(await getSelectedBlockIds(page)).toEqual(['img1', 't1', 'db1', 'p2', 'p1', 'd1']);
 });
+
+test('skips collapsed descendants during keyboard block navigation and range extension', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'collapsed-nav',
+    title: '',
+    blocks: [
+      {
+        id: 'parent',
+        type: 'bulleted',
+        text: [{ text: 'Parent' }],
+        props: { collapsed: true },
+        children: [
+          { id: 'hiddenChild', type: 'paragraph', text: [{ text: 'Hidden' }], props: {}, children: [] },
+        ],
+      },
+      { id: 'after', type: 'paragraph', text: [{ text: 'After' }], props: {}, children: [] },
+    ],
+  });
+
+  await focusBlock(page, 'parent', 0);
+  await page.keyboard.press('Escape');
+  expect(await getSelectedBlockIds(page)).toEqual(['parent']);
+
+  // ArrowDown skips the collapsed hiddenChild and lands directly on 'after'
+  await page.keyboard.press('ArrowDown');
+  expect(await getSelectedBlockIds(page)).toEqual(['after']);
+
+  // ArrowUp returns to 'parent', and Shift+ArrowDown selects ['parent', 'after'] without hiddenChild
+  await page.keyboard.press('ArrowUp');
+  expect(await getSelectedBlockIds(page)).toEqual(['parent']);
+  await page.keyboard.press('Shift+ArrowDown');
+  expect(await getSelectedBlockIds(page)).toEqual(['parent', 'after']);
+});
+
+test('Escape dismisses selection toolbar once and advances to block selection on second Escape', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await focusBlock(page, 'b1', 0);
+  await page.keyboard.press('ControlOrMeta+a');
+
+  const toolbar = page.locator('.nb-toolbar');
+  await expect(toolbar).toBeVisible();
+  expect(await getSelectedBlockIds(page)).toEqual([]);
+
+  // First Escape dismisses toolbar and keeps it hidden after keyup
+  await page.keyboard.press('Escape');
+  await expect(toolbar).toBeHidden();
+  expect(await getSelectedBlockIds(page)).toEqual([]);
+
+  // Second Escape advances to block selection for b1
+  await page.keyboard.press('Escape');
+  expect(await getSelectedBlockIds(page)).toEqual(['b1']);
+  await expect(page.locator('.nb-block[data-block-id="b1"]')).toHaveClass(/nb-block-selected/);
+});
+
+test('block-selection paste invokes uploadImage for clipboard image files', async ({ page }) => {
+  await openFixture(page);
+  const uploadedUrl =
+    'data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2240%22%20height%3D%2240%22%3E%3Crect%20width%3D%2240%22%20height%3D%2240%22%20fill%3D%22%2310b981%22/%3E%3C/svg%3E';
+
+  await page.evaluate(src => {
+    const editor = (window as unknown as {
+      __editor?: { setUploadImage(handler: (file: File) => Promise<{ src: string }>): void };
+    }).__editor;
+    editor?.setUploadImage(async () => ({ src }));
+  }, uploadedUrl);
+
+  await focusBlock(page, 'b2', 0);
+  await page.keyboard.press('Escape');
+  expect(await getSelectedBlockIds(page)).toEqual(['b2']);
+
+  await page.evaluate(() => {
+    const body = document.querySelector('nobita-editor')?.shadowRoot?.querySelector('.nb-body');
+    if (!body) throw new Error('Missing body');
+    const data = new DataTransfer();
+    const file = new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', {
+      type: 'image/png',
+    });
+    data.items.add(file);
+    body.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data }));
+  });
+
+  await expect(page.locator('.nb-block[data-type="image"] img.nb-image')).toHaveAttribute(
+    'src',
+    uploadedUrl
+  );
+  const doc = await getDoc(page);
+  expect(doc.blocks.map(b => b.type)).toEqual(['paragraph', 'image', 'paragraph']);
+});
+
+test('redoing a batch deletion restores block selection on a surviving non-text block', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'redo-non-text-focus',
+    title: '',
+    blocks: [
+      { id: 'p1', type: 'paragraph', text: [{ text: 'First' }], props: {}, children: [] },
+      { id: 'd1', type: 'divider', text: [], props: {}, children: [] },
+    ],
+  });
+
+  await focusBlock(page, 'p1', 0);
+  await page.keyboard.press('Escape');
+  expect(await getSelectedBlockIds(page)).toEqual(['p1']);
+
+  await page.keyboard.press('Backspace');
+  expect(await getSelectedBlockIds(page)).toEqual(['d1']);
+
+  // Undo restores p1 and clears block selection
+  await page.keyboard.press('ControlOrMeta+z');
+  expect(await getSelectedBlockIds(page)).toEqual([]);
+  let doc = await getDoc(page);
+  expect(doc.blocks.map(b => b.id)).toEqual(['p1', 'd1']);
+
+  // Redo deletes p1 again AND restores block selection on d1
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  doc = await getDoc(page);
+  expect(doc.blocks.map(b => b.id)).toEqual(['d1']);
+  expect(await getSelectedBlockIds(page)).toEqual(['d1']);
+  await expect(page.locator('.nb-block[data-block-id="d1"]')).toHaveClass(/nb-block-selected/);
+});
