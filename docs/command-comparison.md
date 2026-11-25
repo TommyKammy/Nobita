@@ -2,7 +2,7 @@
 
 Comparison date: 2026-11-24  
 AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **86.7 KB gzip**
+Nobita: `0.1.0` (`packages/*`), editor bundle **86.8 KB gzip**
 
 > P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
 > `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
@@ -357,6 +357,6 @@ the editor core just for parity:
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
 
-The current editor is 86.7 KB gzip. Phase 1 data views added about 7.5 KB gzip,
+The current editor is 86.8 KB gzip. Phase 1 data views added about 7.5 KB gzip,
 Phase 2 references/input added about 2.4 KB, page links about 1.3 KB, table/database P1 about 27.0 KB and the
-database UI alignment/hover/toolbar pass about 0.5 KB; remaining items are incremental on top of the existing view model.
+database UI alignment/hover/toolbar pass about 0.6 KB; remaining items are incremental on top of the existing view model.

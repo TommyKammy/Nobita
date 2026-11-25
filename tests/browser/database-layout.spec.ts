@@ -216,6 +216,19 @@ test('expands search from the toolbar and clears it', async ({ page }) => {
   await expect(wrap).toHaveAttribute('data-open', 'false');
 });
 
+test('clears an active search when the header becomes narrow', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-search-toggle').click();
+  await page.locator('.nb-db-search').fill('Ship');
+  await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(1);
+
+  await page.setViewportSize({ width: 390, height: 900 });
+  await expect(page.locator('.nb-db-search-wrap')).toBeHidden();
+  await expect(page.locator('.nb-db-search')).toHaveValue('');
+  await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(2);
+});
+
 test('keeps sort, properties and group in view settings', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);

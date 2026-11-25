@@ -327,7 +327,7 @@ Rendering lives in `SimpleTableView` (`packages/element/src/table-view.ts`) for 
 - Root data views use an 8px surface bleed with matching inner padding, so the table edge aligns with body text and the 24px row gutter indents column content (AFFiNE geometry).
 - The header is split into a title/count row and a viewbar/tools row. View tools fade in on hover or keyboard focus and stay visible while a popover is open; touch devices show them permanently.
 - The viewbar keeps view tabs and the add-view control. The hover toolbar exposes Filter, Search, View settings (`⋯`) and New Record. View settings contains view name, table/board layout, properties, filter, sort, group, view move, duplicate and delete.
-- Search expands from a 28px icon to a 168px field with a clear control and Escape handling. Below 560px it is hidden so view tabs and New Record keep their space.
+- Search expands from a 28px icon to a 168px field with a clear control and Escape handling. Below 560px it is hidden so view tabs and New Record keep their space; crossing that breakpoint clears an active query so filtered rows never outlive the visible clear control.
 - Filter builders support nested AND/OR groups, per-type operators and a chip summary. The chip bar stays hidden until the filter control opens it; readonly views show existing filters without the toggle. Sort supports multiple keys. Group settings persist order, visibility and collapsed state, and can hide empty groups.
 - Footer statistics stay hidden until the footer is hovered or focused; calculated statistics remain visible.
 - The add-column header stays pinned right and the New Record label stays pinned left while the table scrolls horizontally. Row actions overlay the title cell instead of reserving width.

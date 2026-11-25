@@ -372,6 +372,16 @@ export class DatabaseView {
   #searchQuery = '';
   #searchOpen = false;
   #searchFocusPending = false;
+  #narrowSearchMedia: MediaQueryList | null = null;
+  #onNarrowSearchMedia = (event: MediaQueryListEvent): void => {
+    if (!event.matches) return;
+    this.#searchOpen = false;
+    if (!this.#searchQuery) return;
+    this.#searchQuery = '';
+    this.#searchSelection = null;
+    this.#searchFocusPending = false;
+    this.render();
+  };
   #searchSelection: { start: number; end: number } | null = null;
 
   constructor(host: DatabaseHost, data: DatabaseData) {
@@ -388,6 +398,9 @@ export class DatabaseView {
     this.element.addEventListener('paste', this.#onPaste, true);
     this.element.addEventListener('click', this.#onClickCapture, true);
     this.element.addEventListener('keydown', this.#onDatabaseKeyDown, true);
+    const view = this.element.ownerDocument.defaultView;
+    this.#narrowSearchMedia = view?.matchMedia('(max-width: 560px)') ?? null;
+    this.#narrowSearchMedia?.addEventListener('change', this.#onNarrowSearchMedia);
     this.render();
   }
 
@@ -455,6 +468,8 @@ export class DatabaseView {
       this.#boardBlurTimer = null;
     }
     this.#events.abort();
+    this.#narrowSearchMedia?.removeEventListener('change', this.#onNarrowSearchMedia);
+    this.#narrowSearchMedia = null;
     this.#filterBarOpen.clear();
     this.#closePopover();
     this.#closeDetailPanel();
