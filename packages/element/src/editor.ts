@@ -2012,7 +2012,8 @@ export class NobitaEditor implements BlockHost {
       text === '[' &&
       block.type !== 'code' &&
       this.#options.pageProvider &&
-      before.endsWith('[') &&
+      point.offset > 0 &&
+      before[point.offset - 1] === '[' &&
       !this.#pageLink
     ) {
       void this.#openPageLinkMenu(point.blockId, point.offset - 1, 'inline');
@@ -3265,10 +3266,12 @@ export class NobitaEditor implements BlockHost {
       this.#menu.close();
       return;
     }
-    const queryChanged = query !== state.query;
-    state.query = query;
+    const searchQuery =
+      state.mode === 'inline' ? query.replace(/\]+$/u, '') : query;
+    const queryChanged = searchQuery !== state.query;
+    state.query = searchQuery;
     if (!this.#menu.isOpen) return;
-    this.#menu.setQuery(query);
+    this.#menu.setQuery(searchQuery);
     const provider = this.#options.pageProvider;
     if (!provider || (!forceSearch && !queryChanged)) {
       if (queryChanged) {
@@ -3278,7 +3281,7 @@ export class NobitaEditor implements BlockHost {
     }
     const token = ++this.#pageLinkQueryToken;
     const epoch = this.#docEpoch;
-    void Promise.resolve(provider.search(query))
+    void Promise.resolve(provider.search(searchQuery))
       .then(items => {
         if (
           this.#destroyed ||
@@ -3385,12 +3388,21 @@ export class NobitaEditor implements BlockHost {
   async #createAndInsertPage(state: PageLinkState, title: string): Promise<void> {
     const create = this.#options.pageProvider?.create;
     if (!create || this.#readonly) return;
+    const blockBefore = findBlock(this.store.doc.blocks, state.blockId);
+    if (!blockBefore) return;
+    const textBefore = plainText(blockBefore.text);
+    const snapshot: PageLinkState = {
+      ...state,
+      end: Math.min(state.end, textBefore.length),
+    };
     const epoch = this.#docEpoch;
     try {
       const created = await Promise.resolve(create(title));
       if (this.#destroyed || this.#readonly || epoch !== this.#docEpoch) return;
       if (!created?.id) return;
-      this.#insertPageLinkFromState(state, created);
+      const blockAfter = findBlock(this.store.doc.blocks, snapshot.blockId);
+      if (!blockAfter || plainText(blockAfter.text) !== textBefore) return;
+      this.#insertPageLinkFromState(snapshot, created);
     } catch {
       // Host creation errors leave the document unchanged.
     }
@@ -3399,11 +3411,23 @@ export class NobitaEditor implements BlockHost {
   async #createSlashPage(blockId: string, offset: number): Promise<void> {
     const create = this.#options.pageProvider?.create;
     if (!create || this.#readonly) return;
+    const blockBefore = findBlock(this.store.doc.blocks, blockId);
+    if (!blockBefore) return;
+    const textBefore = plainText(blockBefore.text);
+    const typeBefore = blockBefore.type;
     const epoch = this.#docEpoch;
     try {
       const created = await Promise.resolve(create('Untitled'));
       if (this.#destroyed || this.#readonly || epoch !== this.#docEpoch) return;
       if (!created?.id) return;
+      const blockAfter = findBlock(this.store.doc.blocks, blockId);
+      if (
+        !blockAfter ||
+        blockAfter.type !== typeBefore ||
+        plainText(blockAfter.text) !== textBefore
+      ) {
+        return;
+      }
       this.#insertPageLinkFromState(
         {
           blockId,

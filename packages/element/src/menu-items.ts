@@ -245,7 +245,7 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
       description: 'Insert a link to another page',
       icon: icon.page,
       group: 'Pages',
-      keywords: ['page', 'link', 'wiki', 'reference', 'subpage', '[['],
+      keywords: ['page', 'link', 'link-page', 'wiki', 'reference', 'subpage', '[['],
       action: () => context.linkPage?.(),
     });
   }
@@ -256,7 +256,7 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
       description: 'Create and link a new page',
       icon: icon.plus,
       group: 'Pages',
-      keywords: ['page', 'new', 'subpage', 'create', 'doc'],
+      keywords: ['page', 'new', 'new-page', 'subpage', 'create', 'doc'],
       action: () => context.createPage?.(),
     });
   }

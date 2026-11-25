@@ -496,3 +496,182 @@ test('inserts a block-level page card via /page and creates one via /new-page', 
   doc = await getDoc(page);
   expect(doc.blocks[1]?.props.pageId).toBe('p-created');
 });
+
+test('converts [[Exact Title]] with a filtering provider and triggers [[ mid-sentence', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'wiki-filter-mid',
+    title: '',
+    blocks: [
+      { id: 'b1', type: 'paragraph', text: [{ text: 'See  later' }], props: {}, children: [] },
+    ],
+  });
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        setPageProvider(provider: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    editor?.setPageProvider({
+      search: (query: string) => {
+        const pages = [
+          { id: 'p-road', title: 'Roadmap', icon: '🗺️' },
+          { id: 'p-spec', title: 'Spec', icon: '📐' },
+        ];
+        const needle = query.trim().toLowerCase();
+        return pages.filter(item => !needle || item.title.toLowerCase().includes(needle));
+      },
+    });
+    // Caret in the middle of the paragraph: between "See " and " later".
+    editor?.focus('b1', 4);
+  });
+
+  await page.keyboard.type('[[Roadmap]]');
+  await expect(page.locator('.nb-menu')).toHaveCount(0);
+  const block = blockById(await getDoc(page), 'b1');
+  expect(block?.text).toBe('See Roadmap later');
+  expect(block?.runs.some(run => run.marks?.page?.id === 'p-road')).toBe(true);
+});
+
+test('aborts stale async page creation if the triggering block was edited while pending', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'wiki-async-create',
+    title: '',
+    blocks: [{ id: 'b1', type: 'paragraph', text: [], props: {}, children: [] }],
+  });
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        setPageProvider(provider: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    editor?.setPageProvider({
+      search: () => [],
+      create: (title: string) =>
+        new Promise(resolve => {
+          (window as unknown as { __resolveCreate: () => void }).__resolveCreate = () =>
+            resolve({ id: 'p-late', title });
+        }),
+    });
+    editor?.focus('b1', 0);
+  });
+
+  await page.keyboard.type('[[Draft');
+  await expect(page.locator('.nb-menu-item', { hasText: 'Create "Draft"' })).toBeVisible();
+  await page.locator('.nb-menu-item', { hasText: 'Create "Draft"' }).click();
+
+  // User edits the block before the async create resolves.
+  await page.keyboard.type(' edited');
+  await page.evaluate(() => {
+    (window as unknown as { __resolveCreate?: () => void }).__resolveCreate?.();
+  });
+  await page.waitForTimeout(80);
+
+  const block = blockById(await getDoc(page), 'b1');
+  expect(block?.text).toBe('[[Draft edited');
+  expect(block?.runs.some(run => run.marks?.page)).toBe(false);
+});
+
+test('preserves model text and caret offset on DOM/IME input after a resolved inline chip', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'wiki-dom-input',
+    title: '',
+    blocks: [
+      {
+        id: 'b1',
+        type: 'paragraph',
+        text: [
+          { text: 'See ' },
+          { text: 'Road', marks: { page: { id: 'p1', title: 'Road', icon: '🗺️' } } },
+        ],
+        props: {},
+        children: [],
+      },
+    ],
+  });
+  await page.evaluate(() => {
+    const host = document.querySelector('nobita-editor') as HTMLElement & {
+      resolvePage?: (pageId: string) => { id: string; title: string; icon?: string } | null;
+    };
+    host.resolvePage = () => ({ id: 'p1', title: 'Much Longer Resolved Title', icon: '🚀' });
+  });
+  await expect(page.locator('.nb-m-page')).toHaveText('Much Longer Resolved Title');
+
+  // Simulate IME composition inserting text after the resolved chip.
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { domInput(blockId: string): void };
+    }).__editor;
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const textEl = root?.querySelector('[data-block-id="b1"] .nb-text');
+    if (!textEl || !root) return;
+    const composed = document.createTextNode('XYZ');
+    textEl.append(composed);
+    const sel = (root as ShadowRoot & { getSelection?: () => Selection | null }).getSelection?.() ?? window.getSelection();
+    const range = document.createRange();
+    range.setStart(composed, 3);
+    range.collapse(true);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    editor?.domInput('b1');
+  });
+
+  // Subsequent typing must land AFTER 'XYZ', not before it.
+  await page.keyboard.type('!');
+  const block = blockById(await getDoc(page), 'b1');
+  expect(block?.text).toBe('See RoadXYZ!');
+  expect(block?.runs[1]?.marks?.page?.id).toBe('p1');
+});
+
+test('matches documented /new-page and /link-page slash aliases', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'slash-aliases',
+    title: '',
+    blocks: [
+      { id: 'b1', type: 'paragraph', text: [], props: {}, children: [] },
+      { id: 'b2', type: 'paragraph', text: [], props: {}, children: [] },
+    ],
+  });
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        setPageProvider(provider: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    editor?.setPageProvider({
+      search: () => [{ id: 'p1', title: 'Guide' }],
+      create: () => ({ id: 'p2', title: 'Untitled' }),
+    });
+    editor?.focus('b1', 0);
+  });
+
+  await page.keyboard.type('/new-page');
+  await expect(page.locator('.nb-menu-item', { hasText: 'New page' })).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await getDoc(page)).blocks[0]?.type).toBe('page');
+
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { focus(blockId: string, offset?: number): void };
+    }).__editor;
+    editor?.focus('b2', 0);
+  });
+  await page.keyboard.type('/link-page');
+  await expect(page.locator('.nb-menu-item', { hasText: 'Link page' })).toBeVisible();
+});

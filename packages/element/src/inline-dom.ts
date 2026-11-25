@@ -342,6 +342,12 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
     if (isBlockElement(element) && lastChar && lastChar !== '\n') {
       append('\n', undefined);
     }
+    const modelText = element.getAttribute('data-model-text');
+    if (modelText !== null && nextMarks?.page) {
+      append(modelText, nextMarks);
+      flush();
+      return;
+    }
     for (let child = element.firstChild; child; child = child.nextSibling) {
       walk(child, nextMarks);
     }
@@ -428,6 +434,7 @@ export function renderInlineRuns(
         span.dataset.pageTitle = displayTitle;
         if (displayIcon) span.dataset.pageIcon = displayIcon;
         span.dataset.atomicLength = String(run.text.length);
+        span.dataset.modelText = run.text;
         span.textContent = displayTitle;
         span.title = displayTitle;
         span.setAttribute('role', 'link');
