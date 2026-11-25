@@ -435,6 +435,68 @@ test('formats number cells from column settings', async ({ page }) => {
   ).toHaveValue('10%');
 });
 
+test('shows and saves number format when switching a text column to number', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'text-to-number',
+    title: '',
+    blocks: [
+      {
+        id: 'db',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            titleColumnId: 'name',
+            columns: [
+              { id: 'name', name: 'Name', type: 'text' },
+              { id: 'amount', name: 'Amount', type: 'text' },
+            ],
+            rows: [
+              { id: 'r1', cells: { name: { text: 'One' }, amount: { text: '0.25' } } },
+            ],
+            views: [
+              {
+                id: 'v1',
+                name: 'Table',
+                type: 'table',
+                filters: [],
+                columns: [
+                  { id: 'name', width: 200 },
+                  { id: 'amount', width: 160 },
+                ],
+              },
+            ],
+            activeViewId: 'v1',
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+  await page.locator('.nb-db-th[data-column-id="amount"] .nb-db-col-head').click();
+  const popover = page.locator('.nb-db-column-popover');
+  await expect(popover.locator('.nb-db-number-format')).toBeHidden();
+  await popover.locator('select').first().selectOption('number');
+  await expect(popover.locator('.nb-db-number-format')).toBeVisible();
+  await popover.locator('.nb-db-number-format select').selectOption('percent');
+  await popover.locator('.nb-db-pop-actions button', { hasText: 'Done' }).click();
+
+  await expect(popover).toHaveCount(0);
+  await expect(
+    page.locator('.nb-db-cell[data-column-id="amount"] input')
+  ).toHaveValue('25%');
+
+  await page.locator('.nb-db-th[data-column-id="amount"] .nb-db-col-head').click();
+  await expect(page.locator('.nb-db-column-popover')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.nb-db-column-popover')).toHaveCount(0);
+});
+
 test('reads the current numeric value when refocusing a cell', async ({ page }) => {
   await openFixture(page);
   await setDoc(page, {

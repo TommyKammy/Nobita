@@ -853,13 +853,17 @@ export function duplicateDatabaseData(data: DatabaseData): DatabaseData {
   };
 }
 
+function rawCellText(cell: DatabaseCell): string {
+  return cell.text ?? (cell.runs ? plainText(cell.runs) : '');
+}
+
 export function databaseCellText(cell: DatabaseCell | undefined, type: DatabaseColumnType): string {
   if (!cell) return '';
   if (type === 'checkbox') return cell.checked ? 'true' : '';
   if (type === 'multi-select') return (cell.values ?? []).join(', ');
   if (type === 'files') return (cell.files ?? []).map(file => file.name).join(', ');
   if (type === 'people') return (cell.people ?? []).map(person => person.label).join(', ');
-  return cell.text ?? '';
+  return rawCellText(cell);
 }
 
 export function databaseCellDisplay(cell: DatabaseCell | undefined, type: DatabaseColumnType): string {
@@ -868,7 +872,7 @@ export function databaseCellDisplay(cell: DatabaseCell | undefined, type: Databa
   if (type === 'multi-select') return (cell.values ?? []).join(' · ');
   if (type === 'files') return (cell.files ?? []).map(file => file.name).join(' · ');
   if (type === 'people') return (cell.people ?? []).map(person => person.label).join(' · ');
-  return cell.text ?? '';
+  return rawCellText(cell);
 }
 
 function comparable(value: string, type: DatabaseColumnType): string | number {
@@ -1048,7 +1052,7 @@ function isEmptyCell(cell: DatabaseCell | undefined, column: DatabaseColumn): bo
   if (column.type === 'multi-select') return !cell.values?.length;
   if (column.type === 'files') return !cell.files?.length;
   if (column.type === 'people') return !cell.people?.length;
-  return !cell.text;
+  return !rawCellText(cell);
 }
 
 function filterValues(filter: DatabaseFilter): string[] {

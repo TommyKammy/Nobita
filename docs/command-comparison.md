@@ -147,9 +147,9 @@ in Nobita's toolbar or block menu.
 | Code bracket auto-pair | type brackets | ❌ | — |
 | Code block add paragraph after | `Mod-Enter` | ✅ | Generic add-after works |
 | Cell navigation in database | Tab/Shift-Tab, Enter, arrows | ✅ | DatabaseView |
-| Row/area selection in database | Shift+Arrows, `Mod-A`, `Delete`/`Backspace` | ❌ | Only cell-level navigation |
+| Row/area selection in database | Shift+Arrows, `Mod-A`, `Delete`/`Backspace` | 🟡 | Drag/Shift-click range and row checkbox selection with `Delete`/`Backspace`; no `Shift+Arrows` or `Mod-A` |
 | `/` row menu in database | `/` | ❌ | Column header and row handle menus exist |
-| Table cell context menu | right-click / menu | 🟡 | Simple table block not implemented; database has row/column menus |
+| Table cell context menu | right-click / menu | 🟡 | Simple table and database both have row/column menus; no right-click context menu |
 
 ## 4. Block toolbar and block menu
 
@@ -200,8 +200,8 @@ table/board views.
 
 | AFFiNE property | Nobita | Notes |
 | --- | --- | --- |
-| Title / page | ❌ | Rows are plain data, not pages |
-| Text / rich text | ✅ | Plain text only |
+| Title / page | 🟡 | Record page side panel with title, properties and rich-text body (`row.page.content`); rows are not standalone workspace pages |
+| Text / rich text | ✅ | Rich-text cells (`cell.runs`) with bold/italic/underline/strike/code toolbar and shortcuts; `cell.text` kept in sync |
 | Number | ✅ | Native number input |
 | Select | ✅ | Single-select with options |
 | Multi-select | ✅ | Comma-separated option editing |
@@ -213,15 +213,15 @@ table/board views.
 | Created time | ❌ | — |
 | Property colors / tags | 🟡 | Select dots colored; no custom tag colors |
 | Rename / change type / delete / insert / resize column | ✅ | Column popover and drag handle |
-| Move / duplicate / hide column | ❌ | — |
+| Move / duplicate / hide column | ✅ | Column popover (move left/right, duplicate, hide in view) and view properties menu |
 | Row insert / duplicate / delete | ✅ | Row handle menu |
-| Row detail / open as page | ❌ | — |
-| Row/area selection | 🟡 | Cell range selection; row selection only |
-| Delete selected rows (keyboard) | ❌ | Cell text deletion works |
-| Cell background color / merge | ❌ | Simple table feature in AFFiNE |
+| Row detail / open as page | ✅ | Row expand button, `Mod+Enter`, and board card click open record page side panel with rich-text body |
+| Row/area selection | 🟡 | Drag/Shift-click cell range selection and row checkbox selection |
+| Delete selected rows (keyboard) | ✅ | `Delete`/`Backspace` deletes selected rows or clears selected cell ranges |
+| Cell background color / merge | ❌ | Simple table block supports cell/row/column background colors; no cell merge |
 | Copy/paste cell ranges | ✅ | TSV copy/paste; files/people use pickers |
 | Undo / redo | ✅ | Cell edits merge into typing steps |
-| Readonly | ✅ | Controls disabled, actions hidden |
+| Readonly | ✅ | Edits disabled and write actions hidden; view switching and record page viewing remain available |
 | JSON / Markdown / HTML table round-trip | ✅ | JSON full; Markdown/HTML values and table structure |
 
 ### 5.3 AFFiNE simple-table-only commands
@@ -235,10 +235,12 @@ AFFiNE's separate table block additionally offers:
 - Cell/row/column background colors
 - Delete row/column
 
-Nobita's database table covers insert/duplicate/delete rows and insert/delete
-columns, but not cell colors, merges, row/column move, or clear-style actions.
-A separate simple table block is probably not worth the payload unless those
-table-specific actions become a priority.
+Nobita's separate `table` block covers row/column insert/move/duplicate/delete,
+clear row/column contents, cell range clear/copy/paste and cell/row/column
+background colors, while `database` covers row insert/duplicate/delete,
+column insert/move/duplicate/hide/delete, and board card reorder. Merged cells,
+row/column drag reorder and rich-text cells in the simple `table` block remain
+unimplemented.
 
 ## 6. Clipboard, import and export
 

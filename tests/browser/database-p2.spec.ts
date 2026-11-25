@@ -1501,3 +1501,67 @@ test('opens record page via Mod+Enter, traps Tab focus, and restores trigger foc
   await expect(page.locator('.nb-db-detail')).toHaveCount(0);
   await expect(triggerCell).toBeFocused();
 });
+
+test('cleans up popovers, record page modal, and inline toolbar when replacing the document', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+
+  await page.locator('.nb-db-th[data-column-id="status"] .nb-db-col-head').click();
+  await expect(page.locator('.nb-db-popover')).toBeVisible();
+
+  const secondDoc = p2Doc();
+  secondDoc.id = 'database-p2-other';
+  secondDoc.blocks[0]!.id = 'db2';
+  await setDoc(page, secondDoc);
+  await expect(page.locator('.nb-db-popover')).toHaveCount(0);
+
+  const row = page.locator('.nb-db-table tbody tr[data-row-id="r1"]');
+  await row.hover();
+  await row.locator('.nb-db-row-expand').click();
+  await expect(page.locator('.nb-db-detail')).toBeVisible();
+
+  const body = page.locator('.nb-db-detail .nb-db-page-text');
+  await body.click();
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const text = root?.querySelector('.nb-db-detail .nb-db-page-text');
+    const node = text ? document.createTreeWalker(text, NodeFilter.SHOW_TEXT).nextNode() : null;
+    if (!node) throw new Error('Missing record page text node');
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, (node.textContent ?? '').length);
+    const selection = root!.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await expect(page.locator('.nb-db-inline-toolbar')).toBeVisible();
+
+  await page.evaluate(() => {
+    const editor = (window as unknown as { __editor?: { setDoc(value: string): void } })
+      .__editor;
+    editor?.setDoc(
+      JSON.stringify({
+        version: 1,
+        id: 'plain-doc',
+        title: '',
+        blocks: [
+          {
+            id: 'p1',
+            type: 'paragraph',
+            text: [{ text: 'Replaced document' }],
+            props: {},
+            children: [],
+          },
+        ],
+      })
+    );
+  });
+
+  await expect(page.locator('.nb-block[data-type="paragraph"]')).toBeVisible();
+  await expect(page.locator('.nb-db-popover')).toHaveCount(0);
+  await expect(page.locator('.nb-db-detail')).toHaveCount(0);
+  await expect(page.locator('.nb-db-inline-toolbar')).toHaveCount(0);
+});

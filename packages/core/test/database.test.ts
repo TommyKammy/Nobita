@@ -3,6 +3,8 @@ import {
   createDatabaseColumn,
   createDatabaseData,
   createDatabaseRow,
+  databaseCellDisplay,
+  databaseCellText,
   databaseStatValue,
   databaseTitleColumn,
   databaseView,
@@ -783,5 +785,36 @@ describe('database P1 queries', () => {
     const sort = normalized.views?.[0]?.groupProperties?.[0]?.manuallyCardSort;
     expect(sort).toHaveLength(1200);
     expect(sort).toEqual(rowIds);
+  });
+
+  it('includes database row page content in countWords', () => {
+    const data = createDatabaseData({
+      variant: 'database',
+      columns: [createDatabaseColumn('Name')],
+      rows: [
+        {
+          id: 'r1',
+          cells: {},
+          page: {
+            content: [{ text: 'Page ' }, { text: 'body words', marks: { bold: true } }],
+          },
+        },
+      ],
+    });
+    data.rows[0]!.cells[data.columns[0]!.id] = { text: 'Row title' };
+    const doc = createDoc({ blocks: [createBlock('database', { props: { database: data } })] });
+    expect(countWords(doc)).toBe(5);
+  });
+
+  it('falls back to cell.runs in databaseCellText and databaseCellDisplay when cell.text is missing', () => {
+    const runsOnly = { runs: [{ text: 'Hello ' }, { text: 'world', marks: { bold: true } }] };
+    expect(databaseCellText(runsOnly, 'text')).toBe('Hello world');
+    expect(databaseCellDisplay(runsOnly, 'text')).toBe('Hello world');
+    expect(
+      databaseCellText({ text: 'Explicit', runs: [{ text: 'Runs' }] }, 'text')
+    ).toBe('Explicit');
+    expect(
+      databaseCellText({ text: '', runs: [{ text: 'Runs' }] }, 'text')
+    ).toBe('');
   });
 });

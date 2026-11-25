@@ -229,6 +229,29 @@ test('clears an active search when the header becomes narrow', async ({ page }) 
   await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(2);
 });
 
+test('hides and clears search when the database container narrows below 560px', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page);
+  await page.locator('.nb-db-search-toggle').click();
+  await page.locator('.nb-db-search').fill('Ship');
+  await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(1);
+
+  await page.evaluate(() => {
+    const editor = document.querySelector('nobita-editor') as HTMLElement | null;
+    if (editor) editor.style.width = '500px';
+  });
+  await expect(page.locator('.nb-db-search-wrap')).toBeHidden();
+  await expect(page.locator('.nb-db-search-wrap')).toHaveAttribute('data-open', 'false');
+  await expect(page.locator('.nb-db-search-toggle')).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  );
+  await expect(page.locator('.nb-db-search')).toHaveValue('');
+  await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(2);
+});
+
 test('keeps sort, properties and group in view settings', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
