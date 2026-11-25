@@ -87,8 +87,8 @@ in Nobita's toolbar or block menu.
 
 | AFFiNE command | Nobita | Notes |
 | --- | --- | --- |
-| New Doc | ❌ | Demo shell can create pages; not exposed from `/` |
-| Linked Doc | ◐ | Page reference block + host routing; no page registry or backlinks |
+| New Doc | ✅ | Exposed via `/new-page` and `[[` create-on-the-fly when `pageProvider.create` is set |
+| Linked Doc | ✅ | Block-level page cards (`/page`) + inline `[[` page chips (`marks.page`), live `resolvePage` refresh, and core backlinks/page-tree helpers |
 | Table (simple table block) | ✅ | Separate `table` block; AFFiNE-style hover handles, row/column drag reorder, rich-text cells, drag cell selection, row/column menus, colors, hover add controls and HTML/Markdown import |
 | Image | ✅ | URL-based |
 | Link (bookmark card) | 🟡 | Inline links work; no bookmark card |
@@ -123,7 +123,7 @@ in Nobita's toolbar or block menu.
 | Inline equation | Toolbar | ❌ | Needs a math renderer |
 | Auto-pair brackets | Type `(`, `[`, `{`, quotes | ❌ | Does not insert closing pair |
 | Backtick wraps selection in code | Select text + `` ` `` | ❌ | Inline code shortcut supports markdown only |
-| `[[` linked doc conversion | `[[` with selected text | ❌ | Page-level feature |
+| `[[` linked doc conversion | `[[` picker & `[[Title]]` | ✅ | Inline page link picker (`pageProvider`), create-on-the-fly, and exact-title `]]` auto-convert |
 | Markdown input rules | `# `, `- `, `1. `, `[] `, `> `, fences, divider | ✅ | Also inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, links |
 ## 3. Block editing and navigation hotkeys
 
@@ -266,12 +266,14 @@ implements a small subset deliberately.
 | AFFiNE | Nobita demo |
 | --- | --- |
 | New page / nested page | ✅ |
+| Drag-and-drop page tree / reparent | ✅ |
 | Favorites | ✅ |
-| Search pages | ✅ title search only |
+| Search pages | ✅ title + full-text block search with jump-to-block |
 | Duplicate / rename / delete page | ✅ |
 | Export Markdown / JSON | ✅ |
 | Theme | ✅ |
 | Embed/integration demo | ✅ (Nobita-specific) |
+| Backlinks | ✅ live collapsible backlinks panel with source snippet and jump-to-block |
 | Trash | ❌ |
 | Templates | ❌ |
 | Journals | ❌ |
@@ -341,7 +343,7 @@ the editor core just for parity:
 
 - Calendar database view (intentionally out of scope).
 - Database formulas and relations (progress/image properties and Board card covers are implemented).
-- Page workspace navigation, `[[`, backlinks.
+- ✅ **Page workspace primitives (`[[` links, backlinks, page tree)**: `PageProvider`, `[[` inline page picker with create-on-the-fly and `[[Title]]` conversion, `/page` and `/new-page` slash commands, atomic inline page chips (`marks.page`) with live `resolvePage` refresh, plus DOM-free `@nobita/core` backlink index, cycle-safe page tree, breadcrumbs, reparent validation and full-text search wired into the demo workspace.
 - Comments and collaboration.
 - Attachments/PDF, managed image hosting, bookmark previews, embeds.
 - LaTeX/equation blocks.

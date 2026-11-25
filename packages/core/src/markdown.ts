@@ -595,6 +595,7 @@ function escapeInline(text: string): string {
 function runStartsWithStar(run: InlineRun | undefined): boolean {
   const marks = run?.marks;
   if (!marks) return false;
+  if (marks.page) return false;
   if (marks.link && safeHref(marks.link)) return false;
   if (marks.strike) return false;
   return Boolean(marks.bold || marks.italic);
@@ -628,7 +629,12 @@ function serializeRunsToMarkdown(
           /[^ ]/u.test(body));
       body = needsPad ? `${fence} ${body} ${fence}` : `${fence}${body}${fence}`;
     }
-    const href = marks.link ? safeHref(marks.link) : null;
+    const pageHref = marks.page
+      ? `#page-${encodeURIComponent(marks.page.id)
+          .replace(/\(/gu, '%28')
+          .replace(/\)/gu, '%29')}`
+      : null;
+    const href = pageHref ?? (marks.link ? safeHref(marks.link) : null);
     const outerIsEmphasis = !href && !marks.strike;
     const prevEndsStar = out.endsWith('*');
     const prevEndsUnderscore = out.endsWith('_');

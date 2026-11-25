@@ -10,16 +10,24 @@ import {
   type NobitaOptions,
   type NobitaPageOpenDetail,
   type NobitaTheme,
+  type PageProvider,
 } from '@nobita/element';
 // @ts-expect-error - Menu is intentionally internal to @nobita/element
 import { Menu } from '@nobita/element';
 import {
   blocksToMarkdown,
+  buildBacklinkIndex,
+  buildPageTree,
+  canReparentPage,
   createBlock,
   createDoc,
   createTableData,
+  extractPageLinks,
+  getBacklinks,
+  getPageBreadcrumbs,
   markdownToBlocks,
   parseDoc,
+  searchWorkspacePages,
   type Doc,
   type EditorSelection,
   type PageInfo,
@@ -53,10 +61,22 @@ export function publicApiFixture(host: HTMLElement): void {
     },
     onOpenPage: pageId => void pageId,
     resolvePage: (pageId: string): PageInfo | null => ({ id: pageId, title: 'Page' }),
+    pageProvider: {
+      search: () => [{ id: 'p1', title: 'Page' }],
+      create: title => ({ id: 'p2', title }),
+    } satisfies PageProvider,
   };
   const editor = createEditor(host, options);
   void editor.insertPageLink({ id: 'p1', title: 'Page' });
+  void editor.insertInlinePageLink({ id: 'p1', title: 'Page' });
   editor.refreshPageLinks();
+  void extractPageLinks(doc);
+  void buildBacklinkIndex([doc]);
+  void getBacklinks([doc], 'p1');
+  void buildPageTree([{ id: 'p1', title: 'Page', parentId: null }]);
+  void getPageBreadcrumbs([{ id: 'p1', title: 'Page', parentId: null }], 'p1');
+  void canReparentPage([{ id: 'p1', title: 'Page', parentId: null }], 'p1', null);
+  void searchWorkspacePages([doc], 'Hello');
   const table: TableData = createTableData({ rows: 2, columns: 2 });
   void table;
   const element = new NobitaEditorElement();

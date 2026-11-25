@@ -5,7 +5,7 @@ import {
   normalizeRuns,
   safeHref,
 } from '@nobita/core';
-import type { InlineMark, InlineRun } from '@nobita/core';
+import type { InlineMark, InlineRun, PageInfo } from '@nobita/core';
 import { childIndex } from './dom.js';
 
 function marksFromElement(element: Element, inherited: InlineMark | undefined): InlineMark | undefined {
@@ -26,8 +26,29 @@ function marksFromElement(element: Element, inherited: InlineMark | undefined): 
     next = { ...(next ?? {}), strike: true };
   }
   if (tag === 'CODE') next = { ...(next ?? {}), code: true };
+  const pageId =
+    element.getAttribute('data-nb-page-id') ??
+    element.getAttribute('data-page-id');
+  if (pageId) {
+    const pageTitle =
+      element.getAttribute('data-nb-page-title') ??
+      element.getAttribute('data-page-title') ??
+      element.textContent?.trim() ??
+      'Untitled page';
+    const pageIcon =
+      element.getAttribute('data-nb-page-icon') ??
+      element.getAttribute('data-page-icon');
+    next = {
+      ...(next ?? {}),
+      page: {
+        id: pageId,
+        title: pageTitle || 'Untitled page',
+        ...(pageIcon ? { icon: pageIcon } : {}),
+      },
+    };
+  }
   const href = element.getAttribute('data-link') ?? element.getAttribute('href');
-  if (href) {
+  if (href && !pageId) {
     const safe = safeHref(href);
     if (safe) next = { ...(next ?? {}), link: safe };
   }
@@ -291,7 +312,10 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
         bufferMarks.color === marks.color &&
         bufferMarks.mention?.id === marks.mention?.id &&
         bufferMarks.mention?.label === marks.mention?.label &&
-        bufferMarks.mention?.kind === marks.mention?.kind);
+        bufferMarks.mention?.kind === marks.mention?.kind &&
+        bufferMarks.page?.id === marks.page?.id &&
+        bufferMarks.page?.title === marks.page?.title &&
+        bufferMarks.page?.icon === marks.page?.icon);
     if (!same) {
       flush();
       bufferMarks = marks;
@@ -327,8 +351,11 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
     const mentionLabel =
       element.getAttribute('data-nb-mention-label') ??
       element.getAttribute('data-mention-label');
-    // Distinct mention elements stay separate even when their metadata matches.
-    if (mentionId && mentionLabel) flush();
+    const pageId =
+      element.getAttribute('data-nb-page-id') ??
+      element.getAttribute('data-page-id');
+    // Distinct atomic reference elements stay separate even when metadata matches.
+    if ((mentionId && mentionLabel) || pageId) flush();
   };
 
   for (let child = root.firstChild; child; child = child.nextSibling) {
@@ -342,7 +369,8 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
 /** Render runs into a contenteditable host using the editor's inline markup. */
 export function renderInlineRuns(
   root: HTMLElement,
-  runs: readonly InlineRun[]
+  runs: readonly InlineRun[],
+  resolvePage?: (pageId: string) => PageInfo | null
 ): void {
   const fragment = document.createDocumentFragment();
   for (const run of runs) {
@@ -372,7 +400,7 @@ export function renderInlineRuns(
         classes.push('nb-m-code');
         tokens.push('code');
       }
-      if (marks.link) {
+      if (marks.link && !marks.page) {
         const safe = safeHref(marks.link);
         if (safe) {
           classes.push('nb-m-link');
@@ -387,6 +415,23 @@ export function renderInlineRuns(
         span.dataset.mentionId = marks.mention.id;
         span.dataset.mentionLabel = marks.mention.label;
         if (marks.mention.kind) span.dataset.mentionKind = marks.mention.kind;
+        span.dataset.atomicLength = String(run.text.length);
+        span.contentEditable = 'false';
+      }
+      if (marks.page) {
+        const info = resolvePage?.(marks.page.id) ?? null;
+        const displayTitle =
+          (info?.title ?? marks.page.title ?? run.text).trim() || 'Untitled page';
+        const displayIcon = (info?.icon ?? marks.page.icon ?? '').trim();
+        classes.push('nb-m-page');
+        span.dataset.pageId = marks.page.id;
+        span.dataset.pageTitle = displayTitle;
+        if (displayIcon) span.dataset.pageIcon = displayIcon;
+        span.dataset.atomicLength = String(run.text.length);
+        span.textContent = displayTitle;
+        span.title = displayTitle;
+        span.setAttribute('role', 'link');
+        span.setAttribute('aria-label', `Open page: ${displayTitle}`);
         span.contentEditable = 'false';
       }
       if (classes.length > 0) span.className = classes.join(' ');

@@ -13,6 +13,7 @@ import {
   type MentionProvider,
   type NobitaChangeDetail,
   type NobitaTheme,
+  type PageProvider,
 } from '@nobita/element';
 import type { Doc, EditorSelection, PageInfo } from '@nobita/core';
 
@@ -24,6 +25,7 @@ export interface NobitaReactHandle {
   getJSON(): string;
   setDoc(doc: Doc | string): void;
   insertPageLink(page: PageInfo, options?: { afterBlockId?: string }): string | null;
+  insertInlinePageLink(page: PageInfo): boolean;
   refreshPageLinks(): void;
   undo(): boolean;
   redo(): boolean;
@@ -40,6 +42,7 @@ export interface NobitaEditorProps {
   onChange?: (doc: Doc, meta: { source: string }) => void;
   onSelectionChange?: (selection: EditorSelection | null) => void;
   mentionProvider?: MentionProvider;
+  pageProvider?: PageProvider;
   uploadImage?: ImageUploadHandler;
   onOpenPage?: (pageId: string) => void;
   resolvePage?: (pageId: string) => PageInfo | null;
@@ -80,6 +83,12 @@ export const NobitaEditor = forwardRef<NobitaReactHandle, NobitaEditorProps>(
       if (!element) return;
       element.mentionProvider = props.mentionProvider;
     }, [props.mentionProvider]);
+
+    useLayoutEffect(() => {
+      const element = hostRef.current;
+      if (!element) return;
+      element.pageProvider = props.pageProvider;
+    }, [props.pageProvider]);
 
     useLayoutEffect(() => {
       const element = hostRef.current;
@@ -133,6 +142,8 @@ export const NobitaEditor = forwardRef<NobitaReactHandle, NobitaEditorProps>(
         },
         insertPageLink: (page: PageInfo, options?: { afterBlockId?: string }) =>
           hostRef.current?.insertPageLink(page, options) ?? null,
+        insertInlinePageLink: (page: PageInfo) =>
+          hostRef.current?.insertInlinePageLink(page) ?? false,
         refreshPageLinks: () => hostRef.current?.refreshPageLinks(),
         undo: () => hostRef.current?.undo() ?? false,
         redo: () => hostRef.current?.redo() ?? false,

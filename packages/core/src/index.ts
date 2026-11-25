@@ -174,6 +174,7 @@ export type { MergeResult, SplitResult } from './doc.js';
 export {
   MARK_KEYS,
   applyMarkPatch,
+  atomicRangeAt,
   cloneRuns,
   deleteTextRange,
   insertTextAt,
@@ -184,6 +185,7 @@ export {
   marksEqual,
   normalizeMark,
   normalizeRuns,
+  pageRangeAt,
   parseInlineRuns,
   plainText,
   runsFromText,
@@ -196,6 +198,26 @@ export {
   toggleMarkInRange,
 } from './text.js';
 export type { MarkPatch } from './text.js';
+
+export {
+  buildBacklinkIndex,
+  buildPageTree,
+  canReparentPage,
+  extractPageLinks,
+  flattenPageTree,
+  getBacklinks,
+  getPageBreadcrumbs,
+  getPageDescendantIds,
+  searchWorkspacePages,
+} from './workspace.js';
+export type {
+  BacklinkItem,
+  BacklinkOptions,
+  PageLinkReference,
+  PageSearchHit,
+  PageTreeInput,
+  PageTreeNode,
+} from './workspace.js';
 
 export { EditorStore, samePoint, sameSelection } from './store.js';
 export type { StoreOptions, UpdateOptions } from './store.js';

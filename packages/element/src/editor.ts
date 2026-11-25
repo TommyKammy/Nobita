@@ -1,6 +1,7 @@
 import {
   EditorStore,
   applyMarkPatch,
+  atomicRangeAt,
   blocksToHtml,
   blocksToMarkdown,
   createBlock,
@@ -21,7 +22,6 @@ import {
   markdownToBlocks,
   markStateInRange,
   marksAt,
-  mentionRangeAt,
   matchBlockMarkdown,
   matchInlineMarkdown,
   mergeBlockWithNext,
@@ -100,6 +100,13 @@ export interface MentionProvider {
   search(query: string): readonly MentionItem[] | Promise<readonly MentionItem[]>;
 }
 
+export interface PageProvider {
+  /** Search workspace pages matching `query` (used by `[[` and `/page`). */
+  search(query: string): readonly PageInfo[] | Promise<readonly PageInfo[]>;
+  /** Optional host callback to create a new page from `[[` or `/new-page`. */
+  create?(title: string): PageInfo | Promise<PageInfo>;
+}
+
 export interface ImageUploadResult {
   src: string;
   alt?: string;
@@ -122,6 +129,8 @@ export interface NobitaOptions {
   onSelectionChange?: (selection: EditorSelection | null) => void;
   /** Optional host-provided mention directory. */
   mentionProvider?: MentionProvider;
+  /** Optional host-provided page directory used by `[[` and `/page`. */
+  pageProvider?: PageProvider;
   /** Optional host-provided image uploader used by paste and drop. */
   uploadImage?: ImageUploadHandler;
   /** Navigate to a page reference. The host owns loading and routing. */
@@ -141,6 +150,16 @@ interface MentionState {
   start: number;
   end: number;
   query: string;
+}
+
+interface PageLinkState {
+  blockId: string;
+  start: number;
+  end: number;
+  query: string;
+  triggerLength: number;
+  mode: 'inline' | 'block';
+  items: readonly PageInfo[];
 }
 
 interface DragState {
@@ -216,6 +235,9 @@ export class NobitaEditor implements BlockHost {
   #mention: MentionState | null = null;
   #mentionQueryToken = 0;
   #mentionSyncQueued = false;
+  #pageLink: PageLinkState | null = null;
+  #pageLinkQueryToken = 0;
+  #pageLinkSyncQueued = false;
   #drag: DragState | null = null;
   #savedSelection: EditorSelection | null = null;
   #selectedBlockIds = new Set<string>();
@@ -247,6 +269,7 @@ export class NobitaEditor implements BlockHost {
     if (event.key !== 'Escape') return;
     const hadOverlay =
       this.#mention !== null ||
+      this.#pageLink !== null ||
       this.#menu.isOpen ||
       this.#toolbar.isVisible ||
       this.#linkPopover.element.parentNode !== null;
@@ -256,6 +279,7 @@ export class NobitaEditor implements BlockHost {
       this.#toolbarDismissedKey = sel ? this.#selectionKey(sel) : null;
     }
     this.#mention = null;
+    this.#pageLink = null;
     this.#menu.close();
     this.#toolbar.hide();
     this.#linkPopover.hide();
@@ -383,6 +407,20 @@ export class NobitaEditor implements BlockHost {
       : (({ mentionProvider: _mentionProvider, ...rest }) => rest)(this.#options);
   }
 
+  get pageProvider(): PageProvider | undefined {
+    return this.#options.pageProvider;
+  }
+
+  set pageProvider(provider: PageProvider | undefined) {
+    this.setPageProvider(provider);
+  }
+
+  setPageProvider(provider: PageProvider | undefined): void {
+    this.#options = provider
+      ? { ...this.#options, pageProvider: provider }
+      : (({ pageProvider: _pageProvider, ...rest }) => rest)(this.#options);
+  }
+
   get uploadImage(): ImageUploadHandler | undefined {
     return this.#options.uploadImage;
   }
@@ -491,9 +529,50 @@ export class NobitaEditor implements BlockHost {
     return block.id;
   }
 
-  /** Re-render page reference cards after host metadata changes. */
+  /** Re-render page reference cards and inline page chips after host metadata changes. */
   refreshPageLinks(): void {
     for (const view of this.#viewIndex.values()) view.refreshPageLink();
+  }
+
+  /** Insert an inline page link chip at the current text selection. */
+  insertInlinePageLink(page: PageInfo): boolean {
+    if (this.#readonly) return false;
+    const pageId = page.id.trim();
+    if (!pageId) return false;
+    const pageTitle = page.title.trim() || 'Untitled page';
+    const pageIcon = page.icon?.trim();
+    const selection = this.#currentSelection() ?? this.#lastSelection;
+    let doc = this.store.doc;
+    let point: Point | null = null;
+    if (selection) {
+      if (!this.#isCollapsed(selection)) {
+        const deleted = this.#applyDeletion(doc, selection);
+        doc = deleted.doc;
+        point = deleted.caret;
+      } else {
+        point = selection.focus;
+      }
+    } else if (this.#focusedBlockId) {
+      const focused = findBlock(doc.blocks, this.#focusedBlockId);
+      if (focused && isTextualBlock(focused)) {
+        point = { blockId: focused.id, offset: runsLength(focused.text) };
+      }
+    }
+    if (!point) return false;
+    const block = findBlock(doc.blocks, point.blockId);
+    if (!block || !isTextualBlock(block) || block.type === 'code') return false;
+    const nextRuns = insertTextAt(block.text, point.offset, pageTitle, {
+      page: {
+        id: pageId,
+        title: pageTitle,
+        ...(pageIcon ? { icon: pageIcon } : {}),
+      },
+    });
+    const next = replaceBlockText(doc, block.id, nextRuns);
+    const caret: Point = { blockId: block.id, offset: point.offset + pageTitle.length };
+    this.#commit(next, { anchor: caret, focus: caret });
+    this.#focusBlock(block.id, caret.offset);
+    return true;
   }
 
   get onOpenPage(): ((pageId: string) => void) | undefined {
@@ -524,6 +603,8 @@ export class NobitaEditor implements BlockHost {
     this.#menu.close();
     this.#toolbar.hide();
     this.#slash = null;
+    this.#mention = null;
+    this.#pageLink = null;
     this.#title.blur();
     this.store.replaceDoc(parsed, options);
     this.#syncBody(this.store.doc.blocks);
@@ -567,6 +648,9 @@ export class NobitaEditor implements BlockHost {
     this.#body.contentEditable = readonly ? 'false' : 'true';
     if (readonly) {
       this.#menu.close();
+      this.#slash = null;
+      this.#mention = null;
+      this.#pageLink = null;
       this.#toolbar.hide();
       this.#linkPopover.hide();
     }
@@ -644,6 +728,7 @@ export class NobitaEditor implements BlockHost {
     window.removeEventListener('keydown', this.#onWindowKeyDown, true);
     this.#menu.close(false);
     this.#mention = null;
+    this.#pageLink = null;
     this.#toolbar.hide();
     this.#linkPopover.hide();
     this.#endDrag();
@@ -1349,6 +1434,16 @@ export class NobitaEditor implements BlockHost {
           }
           return;
         }
+        const inlinePage = target.closest<HTMLElement>('.nb-m-page');
+        if (inlinePage) {
+          const pageId = inlinePage.dataset.pageId;
+          if (pageId) {
+            event.preventDefault();
+            event.stopPropagation();
+            this.openPage(pageId);
+          }
+          return;
+        }
         const link = target.closest<HTMLElement>('[data-link]');
         if (link) {
           const href = safeHref(link.dataset.link);
@@ -1358,6 +1453,18 @@ export class NobitaEditor implements BlockHost {
             if (this.#viewIndex.has(blockId) || findBlock(this.store.doc.blocks, blockId)) {
               this.#focusBlock(blockId, 0);
             }
+            return;
+          }
+          if (href?.startsWith('#page-')) {
+            event.preventDefault();
+            const raw = href.slice('#page-'.length);
+            let pageId = raw;
+            try {
+              pageId = decodeURIComponent(raw);
+            } catch {
+              // Keep raw fragment if malformed.
+            }
+            if (pageId) this.openPage(pageId);
             return;
           }
           if (event.metaKey || event.ctrlKey) {
@@ -1901,10 +2008,20 @@ export class NobitaEditor implements BlockHost {
       this.#isSlashPosition(before, point.offset)
     ) {
       void this.#openMentionMenu(point.blockId, point.offset);
+    } else if (
+      text === '[' &&
+      block.type !== 'code' &&
+      this.#options.pageProvider &&
+      before.endsWith('[') &&
+      !this.#pageLink
+    ) {
+      void this.#openPageLinkMenu(point.blockId, point.offset - 1, 'inline');
     } else if (this.#slash) {
       this.#syncSlashMenu();
     } else if (this.#mention) {
       this.#syncMentionMenu();
+    } else if (this.#pageLink) {
+      this.#syncPageLinkMenu();
     }
   }
 
@@ -1958,6 +2075,7 @@ export class NobitaEditor implements BlockHost {
 
   #deleteSelection(): void {
     this.#scheduleMentionSync();
+    this.#schedulePageLinkSync();
     const selection = this.#currentSelection();
     if (!selection || this.#isCollapsed(selection)) return;
     const { doc, caret } = this.#applyDeletion(this.store.doc, selection);
@@ -2027,6 +2145,7 @@ export class NobitaEditor implements BlockHost {
 
   #onBackspace(blockId: string): void {
     this.#scheduleMentionSync();
+    this.#schedulePageLinkSync();
     const selection = this.#currentSelection();
     if (selection && !this.#isCollapsed(selection)) {
       this.#deleteSelection();
@@ -2036,9 +2155,9 @@ export class NobitaEditor implements BlockHost {
     const block = findBlock(this.store.doc.blocks, blockId);
     if (!block) return;
     if (point.offset > 0) {
-      const mention = mentionRangeAt(block.text, point.offset - 1);
-      const start = mention?.start ?? point.offset - 1;
-      const end = mention?.end ?? point.offset;
+      const atomic = atomicRangeAt(block.text, point.offset - 1);
+      const start = atomic?.start ?? point.offset - 1;
+      const end = atomic?.end ?? point.offset;
       const runs = deleteTextRange(block.text, start, end);
       const caret: Point = { blockId, offset: start };
       this.#commit(replaceBlockText(this.store.doc, blockId, runs), { anchor: caret, focus: caret }, {
@@ -2080,6 +2199,7 @@ export class NobitaEditor implements BlockHost {
 
   #onDelete(blockId: string): void {
     this.#scheduleMentionSync();
+    this.#schedulePageLinkSync();
     const selection = this.#currentSelection();
     if (selection && !this.#isCollapsed(selection)) {
       this.#deleteSelection();
@@ -2090,9 +2210,9 @@ export class NobitaEditor implements BlockHost {
     if (!block) return;
     const length = runsLength(block.text);
     if (point.offset < length) {
-      const mention = mentionRangeAt(block.text, point.offset);
-      const start = mention?.start ?? point.offset;
-      const end = mention?.end ?? point.offset + 1;
+      const atomic = atomicRangeAt(block.text, point.offset);
+      const start = atomic?.start ?? point.offset;
+      const end = atomic?.end ?? point.offset + 1;
       const runs = deleteTextRange(block.text, start, end);
       const caret: Point = { blockId, offset: start };
       this.#commit(replaceBlockText(this.store.doc, blockId, runs), { anchor: caret, focus: caret }, {
@@ -2841,8 +2961,9 @@ export class NobitaEditor implements BlockHost {
       if (!block) return;
       const base = this.#pendingMarks ?? marksAt(block.text, selection.anchor.offset) ?? {};
       const next: InlineMark = { ...base };
-      // Typing after a mention must not extend the atomic reference.
+      // Typing after an atomic chip must not extend the reference.
       delete next.mention;
+      delete next.page;
       if (next[key]) delete next[key];
       else next[key] = true;
       this.#pendingMarks = next;
@@ -2915,6 +3036,8 @@ export class NobitaEditor implements BlockHost {
   async #openMentionMenu(blockId: string, offset: number): Promise<void> {
     const provider = this.#options.mentionProvider;
     if (!provider || this.#readonly) return;
+    this.#slash = null;
+    this.#pageLink = null;
     const mention: MentionState = {
       blockId,
       start: offset,
@@ -3038,15 +3161,278 @@ export class NobitaEditor implements BlockHost {
     this.#focusBlock(mention.blockId, caret.offset);
   }
 
+  /** ---- page links (`[[` & `/page`) ---- */
+
+  async #openPageLinkMenu(
+    blockId: string,
+    startOffset: number,
+    mode: 'inline' | 'block'
+  ): Promise<void> {
+    const provider = this.#options.pageProvider;
+    if (!provider || this.#readonly) return;
+    const triggerLength = mode === 'inline' ? 2 : 0;
+    const state: PageLinkState = {
+      blockId,
+      start: startOffset,
+      end: startOffset + triggerLength,
+      query: '',
+      triggerLength,
+      mode,
+      items: [],
+    };
+    this.#slash = null;
+    this.#mention = null;
+    this.#pageLink = state;
+    const epoch = this.#docEpoch;
+    let items: readonly PageInfo[];
+    try {
+      items = await Promise.resolve(provider.search(''));
+    } catch {
+      if (this.#pageLink === state) this.#pageLink = null;
+      return;
+    }
+    if (this.#destroyed || this.#readonly || epoch !== this.#docEpoch || this.#pageLink !== state) {
+      return;
+    }
+    const selection = this.#currentSelection();
+    const active = this.root.activeElement;
+    if (
+      !active ||
+      !this.#body.contains(active) ||
+      !selection ||
+      !this.#isCollapsed(selection) ||
+      selection.anchor.blockId !== blockId ||
+      selection.anchor.offset < state.start + state.triggerLength
+    ) {
+      this.#pageLink = null;
+      return;
+    }
+    state.items = items;
+    this.#menu.open({
+      items: this.#pageLinkMenuItems(items, state),
+      anchor: rectAnchor(this.#caretRect(blockId)),
+      filterable: true,
+      query: state.query,
+      width: 300,
+      onClose: () => {
+        if (this.#pageLink === state) this.#pageLink = null;
+      },
+    });
+    if (state.query.length > 0) this.#syncPageLinkMenu(true);
+  }
+
+  #schedulePageLinkSync(): void {
+    if (!this.#pageLink || this.#pageLinkSyncQueued) return;
+    this.#pageLinkSyncQueued = true;
+    queueMicrotask(() => {
+      this.#pageLinkSyncQueued = false;
+      if (this.#pageLink) this.#syncPageLinkMenu();
+    });
+  }
+
+  #syncPageLinkMenu(forceSearch = false): void {
+    const state = this.#pageLink;
+    if (!state) return;
+    const selection = this.#currentSelection();
+    const valid =
+      selection !== null &&
+      this.#isCollapsed(selection) &&
+      selection.anchor.blockId === state.blockId;
+    const block = valid ? findBlock(this.store.doc.blocks, state.blockId) : undefined;
+    const end = valid ? selection.anchor.offset : -1;
+    const minEnd = state.start + state.triggerLength;
+    const text = block ? plainText(block.text) : '';
+    const triggerOk =
+      state.triggerLength === 0 || text.slice(state.start, state.start + 2) === '[[';
+    const query = block && end >= minEnd ? text.slice(minEnd, end) : '';
+    if (!block || !triggerOk || end < minEnd || query.includes('\n')) {
+      if (this.#pageLink === state) this.#pageLink = null;
+      this.#menu.close();
+      return;
+    }
+    state.end = end;
+    if (state.mode === 'inline' && query.endsWith(']]')) {
+      const target = query.slice(0, -2).trim().toLowerCase();
+      const exact = target
+        ? state.items.find(item => (item.title.trim() || 'Untitled page').toLowerCase() === target)
+        : undefined;
+      if (exact) {
+        this.#menu.close(false);
+        this.#insertPageLinkFromState(state, exact);
+        return;
+      }
+      if (this.#pageLink === state) this.#pageLink = null;
+      this.#menu.close();
+      return;
+    }
+    const queryChanged = query !== state.query;
+    state.query = query;
+    if (!this.#menu.isOpen) return;
+    this.#menu.setQuery(query);
+    const provider = this.#options.pageProvider;
+    if (!provider || (!forceSearch && !queryChanged)) {
+      if (queryChanged) {
+        this.#menu.setItems(this.#pageLinkMenuItems(state.items, state));
+      }
+      return;
+    }
+    const token = ++this.#pageLinkQueryToken;
+    const epoch = this.#docEpoch;
+    void Promise.resolve(provider.search(query))
+      .then(items => {
+        if (
+          this.#destroyed ||
+          this.#readonly ||
+          epoch !== this.#docEpoch ||
+          this.#pageLink !== state ||
+          token !== this.#pageLinkQueryToken
+        ) {
+          return;
+        }
+        state.items = items;
+        this.#menu.setItems(this.#pageLinkMenuItems(items, state));
+      })
+      .catch(() => undefined);
+  }
+
+  #pageLinkMenuItems(items: readonly PageInfo[], state: PageLinkState): MenuItem[] {
+    const out: MenuItem[] = items.map(page => {
+      const title = page.title.trim() || 'Untitled page';
+      const iconHtml = page.icon?.trim()
+        ? `<span>${escapeMenuText(page.icon.trim())}</span>`
+        : icon.page;
+      return {
+        id: `page-${page.id}`,
+        label: title,
+        icon: iconHtml,
+        group: 'Pages',
+        keywords: [page.id, title],
+        action: () => this.#insertPageLinkFromState(state, page),
+      };
+    });
+    const provider = this.#options.pageProvider;
+    const trimmed = state.query.trim();
+    const hasExact =
+      trimmed.length > 0 &&
+      items.some(item => (item.title.trim() || 'Untitled page').toLowerCase() === trimmed.toLowerCase());
+    if (provider?.create && trimmed.length > 0 && !hasExact) {
+      out.push({
+        id: `page-create-${trimmed}`,
+        label: `Create "${trimmed}"`,
+        description: 'New page',
+        icon: icon.plus,
+        group: 'Create',
+        keywords: [trimmed, 'create', 'new'],
+        action: () => void this.#createAndInsertPage(state, trimmed),
+      });
+    }
+    return out;
+  }
+
+  #insertPageLinkFromState(state: PageLinkState, page: PageInfo): void {
+    const pageId = page.id.trim();
+    if (!pageId) return;
+    const pageTitle = page.title.trim() || 'Untitled page';
+    const pageIcon = page.icon?.trim();
+    const block = findBlock(this.store.doc.blocks, state.blockId);
+    if (!block) return;
+    const end = Math.min(state.end, runsLength(block.text));
+    const runs = deleteTextRange(block.text, state.start, end);
+    this.#pageLink = null;
+    if (state.mode === 'block') {
+      const cleaned = replaceBlockText(this.store.doc, state.blockId, runs);
+      const updatedBlock = findBlock(cleaned.blocks, state.blockId);
+      if (updatedBlock && updatedBlock.type === 'paragraph' && runsLength(updatedBlock.text) === 0) {
+        const next = setBlockType(cleaned, state.blockId, 'page', {
+          pageId,
+          pageTitle,
+          ...(pageIcon ? { pageIcon } : {}),
+        });
+        const point: Point = { blockId: state.blockId, offset: 0 };
+        this.#commit(next, { anchor: point, focus: point }, { restore: false });
+        this.#focusBlock(state.blockId, 0);
+      } else {
+        const pageBlock = createBlock('page', {
+          props: {
+            pageId,
+            pageTitle,
+            ...(pageIcon ? { pageIcon } : {}),
+          },
+        });
+        const next = insertBlockRelative(cleaned, state.blockId, pageBlock, 'after');
+        const point: Point = { blockId: pageBlock.id, offset: 0 };
+        this.#commit(next, { anchor: point, focus: point }, { restore: false });
+        this.#focusBlock(pageBlock.id, 0);
+      }
+      return;
+    }
+    const nextRuns = insertTextAt(runs, state.start, pageTitle, {
+      page: {
+        id: pageId,
+        title: pageTitle,
+        ...(pageIcon ? { icon: pageIcon } : {}),
+      },
+    });
+    const next = replaceBlockText(this.store.doc, state.blockId, nextRuns);
+    const caret: Point = {
+      blockId: state.blockId,
+      offset: state.start + pageTitle.length,
+    };
+    this.#commit(next, { anchor: caret, focus: caret });
+    this.#focusBlock(state.blockId, caret.offset);
+  }
+
+  async #createAndInsertPage(state: PageLinkState, title: string): Promise<void> {
+    const create = this.#options.pageProvider?.create;
+    if (!create || this.#readonly) return;
+    const epoch = this.#docEpoch;
+    try {
+      const created = await Promise.resolve(create(title));
+      if (this.#destroyed || this.#readonly || epoch !== this.#docEpoch) return;
+      if (!created?.id) return;
+      this.#insertPageLinkFromState(state, created);
+    } catch {
+      // Host creation errors leave the document unchanged.
+    }
+  }
+
+  async #createSlashPage(blockId: string, offset: number): Promise<void> {
+    const create = this.#options.pageProvider?.create;
+    if (!create || this.#readonly) return;
+    const epoch = this.#docEpoch;
+    try {
+      const created = await Promise.resolve(create('Untitled'));
+      if (this.#destroyed || this.#readonly || epoch !== this.#docEpoch) return;
+      if (!created?.id) return;
+      this.#insertPageLinkFromState(
+        {
+          blockId,
+          start: offset,
+          end: offset,
+          query: '',
+          triggerLength: 0,
+          mode: 'block',
+          items: [],
+        },
+        created
+      );
+    } catch {
+      // Host creation errors leave the document unchanged.
+    }
+  }
+
   /** ---- slash menu ---- */
 
   #openSlashMenu(blockId: string, slashOffset: number): void {
+    this.#mention = null;
+    this.#pageLink = null;
     const slash = { blockId, start: slashOffset, end: slashOffset + 1 };
     this.#slash = slash;
     const removeSlash = (): void => {
       this.#removeSlashQuery(slash);
     };
     const rect = this.#caretRect(blockId);
+    const pageProvider = this.#options.pageProvider;
     const items = buildSlashMenuItems({
       convert: (type, props) => {
         removeSlash();
@@ -3065,6 +3451,23 @@ export class NobitaEditor implements BlockHost {
         removeSlash();
         this.#copyBlockToClipboard(blockId, slashOffset);
       },
+      ...(pageProvider
+        ? {
+            linkPage: () => {
+              removeSlash();
+              this.#focusBlock(blockId, slashOffset);
+              void this.#openPageLinkMenu(blockId, slashOffset, 'block');
+            },
+          }
+        : {}),
+      ...(pageProvider?.create
+        ? {
+            createPage: () => {
+              removeSlash();
+              void this.#createSlashPage(blockId, slashOffset);
+            },
+          }
+        : {}),
     });
     this.#menu.open({
       items,
@@ -3231,6 +3634,7 @@ export class NobitaEditor implements BlockHost {
     this.#updateToolbar();
     this.#syncSlashMenu();
     this.#syncMentionMenu();
+    this.#syncPageLinkMenu();
     this.#syncPlaceholders();
     this.#options.onSelectionChange?.(selection);
   }
@@ -3375,6 +3779,14 @@ export class NobitaEditor implements BlockHost {
 }
 
 /** ---- helpers without DOM ---- */
+
+function escapeMenuText(text: string): string {
+  return text
+    .replace(/&/gu, '&amp;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+    .replace(/"/gu, '&quot;');
+}
 
 
 

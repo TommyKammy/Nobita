@@ -344,7 +344,7 @@ export class BlockView {
   #renderRuns(): void {
     const text = this.#text;
     if (!text) return;
-    renderInlineRuns(text, this.block.text);
+    renderInlineRuns(text, this.block.text, pageId => this.#host.pageInfo(pageId));
   }
 
   #openPage(): void {
@@ -375,7 +375,29 @@ export class BlockView {
   }
 
   refreshPageLink(): void {
-    if (this.block.type === 'page') this.#syncPageLink(this.block);
+    if (this.block.type === 'page') {
+      this.#syncPageLink(this.block);
+      return;
+    }
+    if (!this.#text) return;
+    const chips = this.#text.querySelectorAll<HTMLElement>('.nb-m-page');
+    if (chips.length === 0) return;
+    let chipIndex = 0;
+    for (const run of this.block.text) {
+      if (!run.marks?.page) continue;
+      const chip = chips[chipIndex++];
+      if (!chip) break;
+      const info = this.#host.pageInfo(run.marks.page.id);
+      const displayTitle =
+        (info?.title ?? run.marks.page.title ?? run.text).trim() || 'Untitled page';
+      const displayIcon = (info?.icon ?? run.marks.page.icon ?? '').trim();
+      chip.textContent = displayTitle;
+      chip.dataset.pageTitle = displayTitle;
+      if (displayIcon) chip.dataset.pageIcon = displayIcon;
+      else delete chip.dataset.pageIcon;
+      chip.title = displayTitle;
+      chip.setAttribute('aria-label', `Open page: ${displayTitle}`);
+    }
   }
 
   focusPageLink(): void {

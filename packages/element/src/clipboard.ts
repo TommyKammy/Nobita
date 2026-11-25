@@ -194,6 +194,24 @@ function marksForElement(element: Element, inherited: InlineMark | undefined): I
       ...(kind ? { kind } : {}),
     };
   }
+  const pageId =
+    element.getAttribute('data-nb-page-id') ??
+    element.getAttribute('data-page-id');
+  if (pageId) {
+    const pageTitle =
+      element.getAttribute('data-nb-page-title') ??
+      element.getAttribute('data-page-title') ??
+      element.textContent?.trim() ??
+      'Untitled page';
+    const pageIcon =
+      element.getAttribute('data-nb-page-icon') ??
+      element.getAttribute('data-page-icon');
+    next.page = {
+      id: pageId,
+      title: pageTitle || 'Untitled page',
+      ...(pageIcon ? { icon: pageIcon } : {}),
+    };
+  }
   switch (tag(element)) {
     case 'STRONG':
     case 'B':
@@ -216,7 +234,7 @@ function marksForElement(element: Element, inherited: InlineMark | undefined): I
       break;
     case 'A': {
       const href = element.getAttribute('href');
-      if (href && /^(https?:|mailto:|#|\/)/iu.test(href)) next.link = href;
+      if (!pageId && href && /^(https?:|mailto:|#|\/)/iu.test(href)) next.link = href;
       break;
     }
     default:
