@@ -18,7 +18,9 @@ import type {
   DatabaseView,
   DatabaseViewColumn,
   DatabaseViewType,
+  InlineRun,
 } from './types.js';
+import { cloneRuns, parseInlineRuns, plainText } from './text.js';
 import { safeHref, safeImageSrc } from './url.js';
 
 export const DATABASE_COLUMN_TYPES: readonly DatabaseColumnType[] = [
@@ -236,13 +238,18 @@ function parsePeople(value: unknown): DatabasePerson[] | undefined {
 
 function parseCell(value: unknown): DatabaseCell {
   if (!isRecord(value)) return {};
-  const text = typeof value.text === 'string' ? value.text.replace(/\r\n?/gu, '\n') : '';
+  const runs = parseInlineRuns(value.runs);
+  const plain = runs.length > 0 ? plainText(runs) : '';
+  const text =
+    plain ||
+    (typeof value.text === 'string' ? value.text.replace(/\r\n?/gu, '\n') : '');
   const checked = value.checked === true;
   const values = parseStringList(value.values);
   const files = parseFiles(value.files);
   const people = parsePeople(value.people);
   return {
     ...(text ? { text } : {}),
+    ...(runs.length > 0 ? { runs } : {}),
     ...(checked ? { checked: true } : {}),
     ...(values ? { values } : {}),
     ...(files ? { files } : {}),
@@ -302,7 +309,14 @@ function parseRow(
     const cell = parseCell(rawCells[column.id]);
     if (Object.keys(cell).length > 0) cells[column.id] = cell;
   }
-  return { id, cells };
+  const pageContent = isRecord(value.page)
+    ? parseInlineRuns(value.page.content)
+    : [];
+  return {
+    id,
+    cells,
+    ...(pageContent.length > 0 ? { page: { content: pageContent } } : {}),
+  };
 }
 
 function parseSort(value: unknown, columns: readonly DatabaseColumn[]): DatabaseSort | undefined {
@@ -607,10 +621,17 @@ export function normalizeDatabaseData(value: unknown, fallbackVariant: DatabaseV
 function cloneCell(cell: DatabaseCell): DatabaseCell {
   return {
     ...cell,
+    ...(cell.runs ? { runs: cloneRuns(cell.runs) } : {}),
     ...(cell.values ? { values: [...cell.values] } : {}),
     ...(cell.files ? { files: cell.files.map(file => ({ ...file })) } : {}),
     ...(cell.people ? { people: cell.people.map(person => ({ ...person })) } : {}),
   };
+}
+
+function cloneRowPage(
+  page: NonNullable<DatabaseRow['page']>
+): NonNullable<DatabaseRow['page']> {
+  return { content: cloneRuns(page.content) };
 }
 
 function cloneFilterNode(node: DatabaseFilterNode): DatabaseFilterNode {
@@ -757,6 +778,7 @@ export function cloneDatabaseData(data: DatabaseData): DatabaseData {
       cells: Object.fromEntries(
         Object.entries(row.cells).map(([key, cell]) => [key, cloneCell(cell)])
       ),
+      ...(row.page ? { page: cloneRowPage(row.page) } : {}),
     })),
     ...(data.sort ? { sort: { ...data.sort } } : {}),
     ...(data.view ? { view: cloneView(data.view) } : {}),
@@ -787,7 +809,7 @@ export function duplicateDatabaseData(data: DatabaseData): DatabaseData {
     }
     const id = createId('r');
     rowMap.set(row.id, id);
-    return { id, cells };
+    return { id, cells, ...(row.page ? { page: cloneRowPage(row.page) } : {}) };
   });
   const view = data.view ? remapView(data.view, columnMap, undefined, rowMap) : undefined;
   const viewIdMap = new Map<string, string>();

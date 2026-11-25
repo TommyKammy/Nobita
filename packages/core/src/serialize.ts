@@ -1,6 +1,6 @@
 import { createBlock, createDoc } from './doc.js';
 import { cloneDatabaseData, databaseCellDisplay, normalizeDatabaseData, sortedDatabaseRows } from './database.js';
-import { normalizeMark, normalizeRuns, runsToHtml } from './text.js';
+import { parseInlineRuns, runsToHtml } from './text.js';
 import { cloneTableData, normalizeTableData, tableToTsv } from './table.js';
 import type {
   Block,
@@ -9,7 +9,6 @@ import type {
   CalloutTone,
   Doc,
   HeadingLevel,
-  InlineMark,
   InlineRun,
   TextAlign,
 } from './types.js';
@@ -36,24 +35,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const asString = (value: unknown, fallback = ''): string =>
   typeof value === 'string' ? value : fallback;
-
-function parseMark(value: unknown): InlineMark | undefined {
-  if (!isRecord(value)) return undefined;
-  return normalizeMark(value as unknown as InlineMark);
-}
-
-function parseRuns(value: unknown): InlineRun[] {
-  if (!Array.isArray(value)) return [];
-  const runs: InlineRun[] = [];
-  for (const item of value) {
-    if (!isRecord(item)) continue;
-    const text = typeof item.text === 'string' ? item.text.replace(/\r\n?/gu, '\n') : '';
-    if (!text) continue;
-    const marks = parseMark(item.marks);
-    runs.push(marks ? { text, marks } : { text });
-  }
-  return normalizeRuns(runs);
-}
 
 function parseProps(value: unknown): BlockProps {
   if (!isRecord(value)) return {};
@@ -100,7 +81,7 @@ function parseBlock(value: unknown, seen: Set<string>): Block | null {
   const type = (BLOCK_TYPES as readonly string[]).includes(rawType)
     ? (rawType as BlockType)
     : 'paragraph';
-  const text = parseRuns(value.text);
+  const text = parseInlineRuns(value.text);
   const props = parseProps(value.props);
   if (type === 'database') {
     const rawProps = isRecord(value.props) ? value.props : {};
@@ -321,6 +302,9 @@ function databaseToHtml(data: NonNullable<Block['props']['database']>): string {
           const cell = row.cells[column.id];
           if (column.type === 'checkbox') {
             return `<td><input type="checkbox" disabled${cell?.checked ? ' checked' : ''}></td>`;
+          }
+          if (column.type === 'text' && cell?.runs && cell.runs.length > 0) {
+            return `<td>${runsToInlineHtml(cell.runs)}</td>`;
           }
           return `<td>${escapeHtml(databaseCellDisplay(cell, column.type))}</td>`;
         })

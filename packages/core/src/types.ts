@@ -83,6 +83,8 @@ export interface DatabasePerson {
 
 export interface DatabaseCell {
   text?: string;
+  /** Rich-text runs for text columns; `text` remains the plain projection. */
+  runs?: InlineRun[];
   checked?: boolean;
   /** Values for a multi-select column. */
   values?: string[];
@@ -92,10 +94,17 @@ export interface DatabaseCell {
   people?: DatabasePerson[];
 }
 
+export interface DatabaseRowPage {
+  /** Rich-text body shown in the row detail page. */
+  content: InlineRun[];
+}
+
 export interface DatabaseRow {
   id: string;
   /** Keyed by column id. Missing cells are empty. */
   cells: Record<string, DatabaseCell>;
+  /** Optional rich-text page body for the row detail view. */
+  page?: DatabaseRowPage;
 }
 
 export interface DatabaseSort {

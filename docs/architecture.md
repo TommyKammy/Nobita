@@ -282,11 +282,12 @@ interface DatabaseData {
   rows: {
     id;
     cells: Record<columnId, {
-      text?; checked?;
+      text?; runs?: InlineRun[]; checked?;
       values?: string[];
       files?: { name; url }[];
       people?: { id; label }[];
     }>;
+    page?: { content: InlineRun[] };
   }[];
   views: DatabaseView[];
   activeViewId?: string;
@@ -312,7 +313,8 @@ type FilterNode =
 
 - `table` defaults to a 3×3 plain-text grid; `database` defaults to Name / Status / Due / Done.
 - Column types are text, number, select, multi-select, date, checkbox, URL, files and people.
-- Empty cells are omitted, so row data stays compact. `parseDoc` normalizes table grids, database columns, view ids/names, nested filters, view columns, group settings and title columns.
+- Text cells can carry rich `runs`; `text` remains the plain projection used by filters, search, statistics, TSV and exports. Row pages store a rich-text `page.content` body.
+- Empty cells are omitted, so row data stays compact. `parseDoc` normalizes table grids, database columns, rich runs, row pages, view ids/names, nested filters, view columns, group settings and title columns.
 - Legacy `filters` / `filterMode` / `hiddenColumns` / `stats` fields are accepted and converted to the v2 view shape. Writers keep `filters` and `filterMode` as compatibility aliases for flat roots.
 - `duplicateBlockTree` remaps every row, column, filter and view id, so duplicated pages and pasted blocks never share database identity.
 - The table consumes view columns in their saved order and width; the title column is explicit (`titleColumnId`) but falls back to the first column for older documents.
@@ -322,7 +324,9 @@ Rendering lives in `SimpleTableView` (`packages/element/src/table-view.ts`) for 
 - The card container disables editing so the table structure cannot be typed into.
 - Table cells support click, Shift+click and drag range selection. Drag the fill handle to copy the focused cell down a single column.
 - The row gutter exposes hover row selection and dragging; selected rows can be copied, cut or deleted.
-- The row expand control opens a record detail panel with previous/next navigation, inline title/property editing and Add Property.
+- The row expand control opens a record page with previous/next navigation, inline title/property editing, Add Property and a persistent rich-text page body.
+- Text cells store rich runs plus a plain text projection. A floating B/I/U/S/code toolbar and keyboard shortcuts edit marks; filters, search, statistics, TSV and exports keep using the plain text.
+- Board cards can be added from group headers or the group footer, opened from card actions, reordered within a group, moved between groups and deleted from the group menu. Manual card order is stored per group.
 - Column headers open the AFFiNE-style menu: number format, hide in view, filter, sort, insert, move, duplicate and delete. Headers can be resized and reordered.
 - Root data views use an 8px surface bleed with matching inner padding, so the table edge aligns with body text and the 24px row gutter indents column content (AFFiNE geometry).
 - The header is split into a title/count row and a viewbar/tools row. View tools fade in on hover or keyboard focus and stay visible while a popover is open; touch devices show them permanently.
@@ -334,7 +338,7 @@ Rendering lives in `SimpleTableView` (`packages/element/src/table-view.ts`) for 
 - Cell edits commit through `updateDatabase`/`updateTable` without restoring the body selection, which would steal focus from the cell. Text commits use a `mergeKey`, so one typing burst is one undo step.
 - A cell write does not rebuild the grid. Both views compare a structural key (title column, columns, view columns, filters, groups, sorts, readonly). Values are synced in place; structure changes re-render and restore focus to the active cell when possible.
 - Sorting, filtering, search and grouping are derived at render time (`filteredDatabaseRows`, `searchDatabaseRows`, `groupedDatabaseRows`), so the underlying row order is never mutated.
-- A database can hold multiple named views. Each view owns its table/board mode, nested filters, sort keys, grouping, view columns, hidden columns and footer statistics. Board cards can be dragged between select, multi-select and checkbox groups.
+- A database can hold multiple named views. Each view owns its table/board mode, nested filters, sort keys, grouping, view columns, hidden columns and footer statistics. Board cards can be dragged between select, multi-select and checkbox groups and reordered within a group.
 - Select/multi-select/files/people cells open pickers. Copy/paste uses TSV and can import spreadsheet ranges.
 - Readonly mode disables controls, removes row/column actions and leaves plain text cells non-editable.
 
@@ -387,10 +391,11 @@ changing the document format.
 - The optional D1 adapter stores the whole document as one JSON row. D1 caps a
   row at 2 MB, so images belong in R2 and very large documents need splitting or
   a different backend.
-- Data views support multiple named table/board views, nested per-view filters, multi-sort, search, per-view column order/widths/visibility, footer statistics and table grouping with persisted group order/collapse. Calendar view, rich-text cells, formulas/relations and full board card parity are not implemented yet. Date cells store ISO strings and are edited with a date input.
+- Data views support multiple named table/board views, nested per-view filters, multi-sort, search, per-view column order/widths/visibility, footer statistics and table grouping with persisted group order/collapse. Text cells store rich runs plus a plain text projection, and a floating B/I/U/S/code toolbar and keyboard shortcuts edit marks. Row pages persist a rich-text body below the property fields. Board cards can be added, opened, reordered and deleted from group menus, with manual order saved per group. Calendar view, formulas/relations, progress/image properties and AFFiNE card covers remain out of scope. Date cells store ISO strings and are edited with a date input.
 - Simple tables follow AFFiNE's interaction model: hover row/column handles are overlaid on the first row/column cells, dragging across cells selects a range for copy/cut/paste/clear, handles open AFFiNE-style row/column menus, hover plus controls add rows/columns (including drag-to-add), and row/column background colors are stored on the grid and adapt to the dark theme. Cell text keeps Shift+Enter line breaks, and Markdown export/import round-trips multiline and literal `<br>` text. Text cells, column resize and Markdown/HTML/TSV import are implemented; rich-text cells, merged cells and drag reorder are not yet implemented.
 - No synced blocks, comments, math or embeds. Mentions are represented as inline marks with a host-provided provider.
 - Page links are references to host-owned documents; there is no page registry, backlink index, page tree or in-editor router.
+- Row pages are an embedded rich-text body in the record panel. Nested block documents and host-page routing for individual records remain future work.
 - Images support URL insertion plus a host-provided `uploadImage` adapter for pasted/dropped files; Nobita does not host storage.
 - Code language and callout tone are editable from the block UI.
 - Very large documents need virtualized rendering.

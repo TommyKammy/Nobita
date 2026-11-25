@@ -59,6 +59,85 @@ describe('database model', () => {
     expect(normalized.sort).toBeUndefined();
   });
 
+  it('normalizes rich text cells and row pages', () => {
+    const normalized = normalizeDatabaseData({
+      variant: 'database',
+      columns: [
+        { id: 'name', name: 'Name', type: 'text' },
+        { id: 'score', name: 'Score', type: 'number' },
+      ],
+      rows: [
+        {
+          id: 'r1',
+          cells: {
+            name: {
+              text: 'stale',
+              runs: [
+                { text: 'Hello ', marks: { bold: true } },
+                { text: 'world' },
+              ],
+            },
+            score: { text: '4' },
+          },
+          page: {
+            content: [
+              { text: 'Page ', marks: { italic: true } },
+              { text: 'body' },
+            ],
+          },
+        },
+      ],
+      views: [],
+    });
+    const row = normalized.rows[0]!;
+    expect(row.cells.name).toEqual({
+      text: 'Hello world',
+      runs: [
+        { text: 'Hello ', marks: { bold: true } },
+        { text: 'world' },
+      ],
+    });
+    expect(row.page?.content).toEqual([
+      { text: 'Page ', marks: { italic: true } },
+      { text: 'body' },
+    ]);
+
+    const copy = duplicateDatabaseData(normalized);
+    expect(copy.rows[0]?.page).toEqual(row.page);
+    expect(copy.rows[0]?.page).not.toBe(row.page);
+    expect(copy.rows[0]?.cells[copy.columns[0]!.id]?.runs).toEqual(
+      row.cells.name?.runs
+    );
+  });
+
+  it('exports rich text cells to HTML and Markdown', () => {
+    const data = normalizeDatabaseData({
+      variant: 'database',
+      columns: [{ id: 'name', name: 'Name', type: 'text' }],
+      rows: [
+        {
+          id: 'r1',
+          cells: {
+            name: {
+              text: 'Hello world',
+              runs: [
+                { text: 'Hello', marks: { bold: true } },
+                { text: ' world' },
+              ],
+            },
+          },
+        },
+      ],
+      views: [],
+    });
+    const block = createBlock('database', { props: { database: data } });
+    const html = blocksToHtml([block]);
+    expect(html).toContain('<strong>Hello</strong>');
+    expect(
+      blocksToMarkdown(createDoc({ title: '', blocks: [block] }))
+    ).toContain('**Hello** world');
+  });
+
   it('duplicates with fresh row and column ids and remapped cells', () => {
     const data = createDatabaseData({
       variant: 'table',

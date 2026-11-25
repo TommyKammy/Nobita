@@ -45,6 +45,7 @@ Covered today:
 - simple table rendering, editing, hover handles, drag cell selection, row/column menus, colors, drag-to-add and HTML import
 - database multi-view, multi-sort, nested filters, search, per-view columns, statistics, table grouping, drag selection/fill, row detail, column menus and view settings
 - database surface geometry, hover/focus toolbar visibility, filter-bar toggling, hidden statistics, expandable search, view-settings consolidation, sticky add/new-record controls, row-action overlays and narrow-width header overflow
+- database rich-text cells (rendering, inline toolbar, run persistence), editable row pages, board card add/open/reorder and group add/delete actions
 
 Add a test when changing toolbar, menus, selection, clipboard, drag, data views
 or mobile layout. Prefer `data-*` selectors over UI copy.

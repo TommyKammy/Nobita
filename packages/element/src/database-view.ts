@@ -1,4 +1,5 @@
 import {
+  cloneRuns,
   createDatabaseColumn,
   createDatabaseRow,
   createId,
@@ -19,6 +20,9 @@ import {
   databaseVisibleColumns,
   filteredDatabaseRows,
   groupedDatabaseRows,
+  normalizeRuns,
+  parseInlineRuns,
+  plainText,
   safeHref,
   searchDatabaseRows,
 } from '@nobita/core';
@@ -37,10 +41,12 @@ import type {
   DatabaseStatType,
   DatabaseView as DatabaseViewConfig,
   DatabaseViewColumn,
+  InlineRun,
 } from '@nobita/core';
 import { nativeSelection, placeCaret } from './dom.js';
 import { dismissFloating, placeFloating } from './floating.js';
 import { icon } from './icons.js';
+import { readRunsFromDom, renderInlineRuns } from './inline-dom.js';
 import { parseTsv, tsvCell } from './tsv.js';
 
 export interface DatabaseHost {
@@ -340,6 +346,7 @@ export class DatabaseView {
   #titleInput: HTMLInputElement | null = null;
   #active: { rowId: string; columnId: string; groupKey?: string } | null = null;
   #pendingFocus: { rowId: string; columnId: string; at: 'start' | 'end' } | null = null;
+  #pendingBoardFocus: string | null = null;
   #popoverCleanup: (() => void) | null = null;
   #countElement: HTMLElement | null = null;
   #colElements: HTMLTableColElement[] = [];
@@ -372,6 +379,14 @@ export class DatabaseView {
   #searchQuery = '';
   #searchOpen = false;
   #searchFocusPending = false;
+  #cellToolbar: HTMLElement | null = null;
+  #globalEvents = new AbortController();
+  #onDocumentSelectionChange = (): void => {
+    this.#syncCellToolbar();
+  };
+  #hideCellToolbar = (): void => {
+    if (this.#cellToolbar) this.#cellToolbar.hidden = true;
+  };
   #narrowSearchMedia: MediaQueryList | null = null;
   #onNarrowSearchMedia = (event: MediaQueryListEvent): void => {
     if (!event.matches) return;
@@ -401,6 +416,15 @@ export class DatabaseView {
     const view = this.element.ownerDocument.defaultView;
     this.#narrowSearchMedia = view?.matchMedia('(max-width: 560px)') ?? null;
     this.#narrowSearchMedia?.addEventListener('change', this.#onNarrowSearchMedia);
+    const doc = this.element.ownerDocument;
+    doc.addEventListener('selectionchange', this.#onDocumentSelectionChange, {
+      signal: this.#globalEvents.signal,
+    });
+    view?.addEventListener('scroll', this.#hideCellToolbar, {
+      capture: true,
+      passive: true,
+      signal: this.#globalEvents.signal,
+    });
     this.render();
   }
 
@@ -468,9 +492,11 @@ export class DatabaseView {
       this.#boardBlurTimer = null;
     }
     this.#events.abort();
+    this.#globalEvents.abort();
     this.#narrowSearchMedia?.removeEventListener('change', this.#onNarrowSearchMedia);
     this.#narrowSearchMedia = null;
     this.#filterBarOpen.clear();
+    this.#cellToolbar = null;
     this.#closePopover();
     this.#closeDetailPanel();
     this.element.remove();
@@ -746,6 +772,7 @@ export class DatabaseView {
     this.element.dataset.readonly = String(this.#readonly);
     this.element.dataset.view = view.type;
     this.element.replaceChildren();
+    this.#cellToolbar = null;
 
     const head = document.createElement('div');
     head.className = 'nb-db-head';
@@ -849,6 +876,17 @@ export class DatabaseView {
       this.focusCell(pending.rowId, pending.columnId, pending.at);
     } else if (view.type === 'table' && hadFocus && this.#active) {
       this.focusCell(this.#active.rowId, this.#active.columnId, 'end');
+    } else if (view.type === 'board' && this.#pendingBoardFocus) {
+      const rowId = this.#pendingBoardFocus;
+      this.#pendingBoardFocus = null;
+      requestAnimationFrame(() => {
+        const title = this.element.querySelector<HTMLElement>(
+          `.nb-db-card[data-row-id="${CSS.escape(rowId)}"] .nb-db-card-title`
+        );
+        if (!title || title.contentEditable !== 'true') return;
+        title.focus();
+        placeCaret(title, 'end');
+      });
     }
     this.#syncDetailPanel();
     this.#syncRowSelection();
@@ -1969,19 +2007,65 @@ export class DatabaseView {
               return;
             }
             const rowId = event.dataTransfer?.getData('text/nobita-row');
-            if (rowId) this.#moveCardToGroup(rowId, view.groupBy!, group.key);
+            if (rowId) {
+              this.#moveBoardCard(
+                rowId,
+                group.key,
+                undefined,
+                false,
+                event.dataTransfer?.getData('text/nobita-group')
+              );
+            }
           },
           { signal: this.#events.signal }
         );
       }
       const heading = document.createElement('div');
       heading.className = 'nb-db-board-heading';
+      const titleWrap = document.createElement('div');
+      titleWrap.className = 'nb-db-board-group-title';
+      const groupColumn = view.groupBy
+        ? this.#data.columns.find(column => column.id === view.groupBy)
+        : undefined;
+      const groupIcon = document.createElement('span');
+      groupIcon.className = 'nb-db-board-group-icon';
+      groupIcon.innerHTML = groupColumn
+        ? TYPE_ICON[groupColumn.type] ?? icon.text
+        : icon.database;
       const label = document.createElement('span');
+      label.className = 'nb-db-board-group-label';
       label.textContent = group.label;
       const count = document.createElement('span');
       count.className = 'nb-db-board-count';
       count.textContent = String(group.rows.length);
-      heading.append(label, count);
+      titleWrap.append(groupIcon, label, count);
+      heading.append(titleWrap);
+      if (!this.#readonly) {
+        const ops = document.createElement('div');
+        ops.className = 'nb-db-board-group-ops';
+        const add = document.createElement('button');
+        add.type = 'button';
+        add.className = 'nb-db-board-group-op';
+        add.innerHTML = icon.plus;
+        add.title = 'Add card';
+        add.setAttribute('aria-label', 'Add card');
+        add.addEventListener('click', event => {
+          event.stopPropagation();
+          this.#addBoardCard(view, view.groupBy ? group.key : undefined, 'start');
+        }, { signal: this.#events.signal });
+        const more = document.createElement('button');
+        more.type = 'button';
+        more.className = 'nb-db-board-group-op';
+        more.innerHTML = icon.more;
+        more.title = 'Group actions';
+        more.setAttribute('aria-label', 'Group actions');
+        more.addEventListener('click', event => {
+          event.stopPropagation();
+          this.#openBoardGroupMenu(more, view, group.key, group.rows);
+        }, { signal: this.#events.signal });
+        ops.append(add, more);
+        heading.append(ops);
+      }
       column.append(heading);
 
       const cards = document.createElement('div');
@@ -1994,6 +2078,16 @@ export class DatabaseView {
         empty.className = 'nb-db-board-empty';
         empty.textContent = 'No cards';
         cards.append(empty);
+      }
+      if (!this.#readonly) {
+        const add = document.createElement('button');
+        add.type = 'button';
+        add.className = 'nb-db-board-add';
+        add.innerHTML = `${icon.plus}<span>Add</span>`;
+        add.addEventListener('click', () => {
+          this.#addBoardCard(view, view.groupBy ? group.key : undefined, 'end');
+        }, { signal: this.#events.signal });
+        cards.append(add);
       }
       column.append(cards);
       board.append(column);
@@ -2017,11 +2111,72 @@ export class DatabaseView {
         event => {
           event.dataTransfer?.setData('text/nobita-db', this.#instanceId);
           event.dataTransfer?.setData('text/nobita-row', row.id);
+          event.dataTransfer?.setData(
+            'text/nobita-group',
+            card.closest<HTMLElement>('.nb-db-board-column')?.dataset.group ?? ''
+          );
           event.dataTransfer?.setData('text/plain', row.id);
+          card.classList.add('is-dragging');
+        },
+        { signal: this.#events.signal }
+      );
+      card.addEventListener(
+        'dragend',
+        () => {
+          card.classList.remove('is-dragging');
+          card.classList.remove('is-drop-before', 'is-drop-after');
+        },
+        { signal: this.#events.signal }
+      );
+      card.addEventListener(
+        'dragover',
+        event => {
+          event.preventDefault();
+          event.stopPropagation();
+          const rect = card.getBoundingClientRect();
+          const before = event.clientY < rect.top + rect.height / 2;
+          card.classList.toggle('is-drop-before', before);
+          card.classList.toggle('is-drop-after', !before);
+        },
+        { signal: this.#events.signal }
+      );
+      card.addEventListener(
+        'dragleave',
+        () => card.classList.remove('is-drop-before', 'is-drop-after'),
+        { signal: this.#events.signal }
+      );
+      card.addEventListener(
+        'drop',
+        event => {
+          event.preventDefault();
+          event.stopPropagation();
+          card.classList.remove('is-drop-before', 'is-drop-after');
+          if (event.dataTransfer?.getData('text/nobita-db') !== this.#instanceId) {
+            return;
+          }
+          const sourceId = event.dataTransfer?.getData('text/nobita-row');
+          if (!sourceId || sourceId === row.id) return;
+          const rect = card.getBoundingClientRect();
+          const before = event.clientY < rect.top + rect.height / 2;
+          const targetGroup = card.closest<HTMLElement>('.nb-db-board-column')?.dataset.group;
+          if (targetGroup !== undefined) {
+            this.#moveBoardCard(
+              sourceId,
+              targetGroup,
+              row.id,
+              before,
+              event.dataTransfer?.getData('text/nobita-group')
+            );
+          }
         },
         { signal: this.#events.signal }
       );
     }
+    card.addEventListener('click', event => {
+      const target = event.target as HTMLElement;
+      if (target.closest('.nb-db-card-title, .nb-db-card-ops')) return;
+      this.#openDetailPanel(row.id);
+    }, { signal: this.#events.signal });
     const title = document.createElement('div');
     title.className = 'nb-db-card-title';
     const cell = titleColumn ? row.cells[titleColumn.id] : undefined;
@@ -2125,6 +2280,32 @@ export class DatabaseView {
     card.append(title);
     const fields = this.#boardFields(row, titleColumn, view, columns);
     if (fields) card.append(fields);
+    if (!this.#readonly) {
+      const ops = document.createElement('div');
+      ops.className = 'nb-db-card-ops';
+      const expand = document.createElement('button');
+      expand.type = 'button';
+      expand.className = 'nb-db-card-op';
+      expand.innerHTML = icon.expand;
+      expand.title = 'Open record';
+      expand.setAttribute('aria-label', 'Open record');
+      expand.addEventListener('click', event => {
+        event.stopPropagation();
+        this.#openDetailPanel(row.id);
+      }, { signal: this.#events.signal });
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'nb-db-card-op';
+      more.innerHTML = icon.more;
+      more.title = 'Card actions';
+      more.setAttribute('aria-label', 'Card actions');
+      more.addEventListener('click', event => {
+        event.stopPropagation();
+        this.#openRowPopover(row.id, more);
+      }, { signal: this.#events.signal });
+      ops.append(expand, more);
+      card.append(ops);
+    }
     return card;
   }
 
@@ -2145,7 +2326,13 @@ export class DatabaseView {
       if (!display) continue;
       const field = document.createElement('span');
       field.className = 'nb-db-card-field';
-      field.textContent = `${column.name}: ${display}`;
+      field.title = `${column.name}: ${display}`;
+      const fieldIcon = document.createElement('span');
+      fieldIcon.className = 'nb-db-card-field-icon';
+      fieldIcon.innerHTML = TYPE_ICON[column.type] ?? icon.text;
+      const fieldValue = document.createElement('span');
+      fieldValue.textContent = display;
+      field.append(fieldIcon, fieldValue);
       fields.append(field);
     }
     return fields.childElementCount > 0 ? fields : null;
@@ -2712,6 +2899,7 @@ export class DatabaseView {
   }
 
   #closeDetailPanel(): void {
+    this.#hideCellToolbar();
     this.#detail?.remove();
     this.#detail = null;
     this.#detailRowId = null;
@@ -2733,7 +2921,7 @@ export class DatabaseView {
     panel.className = 'nb-db-detail';
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'true');
-    panel.setAttribute('aria-label', 'Record detail');
+    panel.setAttribute('aria-label', 'Record page');
     const bar = document.createElement('div');
     bar.className = 'nb-db-detail-bar';
     const nav = document.createElement('div');
@@ -2764,7 +2952,7 @@ export class DatabaseView {
     close.type = 'button';
     close.className = 'nb-db-detail-close';
     close.innerHTML = icon.x;
-    close.setAttribute('aria-label', 'Close record detail');
+    close.setAttribute('aria-label', 'Close record page');
     close.addEventListener('click', () => this.#closeDetailPanel());
     bar.append(nav, close);
     panel.append(bar);
@@ -2788,10 +2976,7 @@ export class DatabaseView {
     add.addEventListener('click', () => this.#openAddPropertyMenu(add));
     panel.append(add);
 
-    const note = document.createElement('div');
-    note.className = 'nb-db-detail-note';
-    note.textContent = 'Add a note or linked document for this record.';
-    panel.append(note);
+    panel.append(this.#renderDetailPage(row));
 
     backdrop.append(panel);
     backdrop.addEventListener('pointerdown', event => {
@@ -2848,7 +3033,7 @@ export class DatabaseView {
         this.#commitCell(
           row.id,
           titleColumn.id,
-          { ...(row.cells[titleColumn.id] ?? {}), text: value },
+          this.#withText(this.#currentCell(row.id, titleColumn.id), value),
           `db:${row.id}:${titleColumn.id}`
         );
       }, { signal: this.#detailEvents.signal });
@@ -2869,6 +3054,85 @@ export class DatabaseView {
       title.dataset.readonly = 'true';
     }
     return title;
+  }
+
+  #renderDetailPage(row: DatabaseRow): HTMLElement {
+    const section = document.createElement('section');
+    section.className = 'nb-db-detail-page';
+    const head = document.createElement('div');
+    head.className = 'nb-db-detail-page-head';
+    const pageIcon = document.createElement('span');
+    pageIcon.innerHTML = icon.page;
+    const pageLabel = document.createElement('span');
+    pageLabel.textContent = 'Page';
+    head.append(pageIcon, pageLabel);
+    const body = document.createElement('div');
+    body.className = 'nb-db-page-text nb-db-rich-text';
+    body.contentEditable = this.#readonly ? 'false' : 'true';
+    body.spellcheck = false;
+    body.dataset.placeholder = 'Write about this record…';
+    body.setAttribute('role', 'textbox');
+    body.setAttribute('aria-label', 'Record page body');
+    this.#renderPageContent(body, row);
+    if (!this.#readonly) {
+      body.addEventListener(
+        'input',
+        () => {
+          const runs = normalizeRuns(readRunsFromDom(body));
+          body.dataset.runs = this.#runsSignature(runs);
+          this.#commitRowPage(row.id, runs, `db:${row.id}:page`);
+        },
+        { signal: this.#detailEvents.signal }
+      );
+      body.addEventListener(
+        'keydown',
+        event => {
+          const mod = event.metaKey || event.ctrlKey;
+          if (!mod) return;
+          const key = event.key.toLowerCase();
+          const tag =
+            key === 'b'
+              ? 'strong'
+              : key === 'i'
+                ? 'em'
+                : key === 'u'
+                  ? 'u'
+                  : key === 'e'
+                    ? 'code'
+                    : key === 's' && event.shiftKey
+                      ? 's'
+                      : null;
+          if (!tag) return;
+          event.preventDefault();
+          this.#toggleInlineTag(tag);
+        },
+        { signal: this.#detailEvents.signal }
+      );
+    }
+    section.append(head, body);
+    return section;
+  }
+
+  #renderPageContent(element: HTMLElement, row: DatabaseRow): void {
+    const runs = row.page?.content ?? [];
+    element.dataset.runs = this.#runsSignature(runs);
+    if (runs.length > 0) renderInlineRuns(element, runs);
+    else element.replaceChildren();
+  }
+
+  #commitRowPage(rowId: string, runs: readonly InlineRun[], mergeKey?: string): void {
+    const rows = this.#data.rows.map(row => {
+      if (row.id !== rowId) return row;
+      if (runs.length === 0) {
+        const { page: _page, ...rest } = row;
+        return rest;
+      }
+      return {
+        ...row,
+        page: { content: cloneRuns(runs) },
+      };
+    });
+    this.#host.commit({ ...this.#data, rows }, mergeKey ? { mergeKey } : undefined);
   }
 
   #renderDetailField(row: DatabaseRow, column: DatabaseColumn): HTMLElement {
@@ -2964,7 +3228,7 @@ export class DatabaseView {
           this.#commitCell(
             row.id,
             column.id,
-            { ...(cell ?? {}), text: input.value },
+            this.#withText(this.#currentCell(row.id, column.id), input.value),
             `db:${row.id}:${column.id}`
           );
         }, { signal: this.#detailEvents.signal });
@@ -2995,17 +3259,37 @@ export class DatabaseView {
     }
 
     const text = document.createElement('div');
-    text.className = 'nb-db-detail-input nb-db-detail-text';
+    text.className = 'nb-db-detail-input nb-db-detail-text nb-db-rich-text';
     text.contentEditable = this.#readonly ? 'false' : 'true';
     text.spellcheck = false;
-    text.textContent = cell?.text ?? '';
+    text.dataset.richText = 'true';
+    this.#renderTextCellContent(text, cell);
     text.addEventListener('input', () => {
-      this.#commitCell(
-        row.id,
-        column.id,
-        { ...(cell ?? {}), text: text.textContent ?? '' },
-        `db:${row.id}:${column.id}`
+      const runs = this.#readCellRuns(text);
+      text.dataset.runs = this.#runsSignature(
+        runs.some(run => run.marks) ? runs : undefined
       );
+      this.#commitTextRuns(row.id, column.id, runs, `db:${row.id}:${column.id}`);
+    }, { signal: this.#detailEvents.signal });
+    text.addEventListener('keydown', event => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (!mod) return;
+      const key = event.key.toLowerCase();
+      const tag =
+        key === 'b'
+          ? 'strong'
+          : key === 'i'
+            ? 'em'
+            : key === 'u'
+              ? 'u'
+              : key === 'e'
+                ? 'code'
+                : key === 's' && event.shiftKey
+                  ? 's'
+                  : null;
+      if (!tag) return;
+      event.preventDefault();
+      this.#toggleInlineTag(tag);
     }, { signal: this.#detailEvents.signal });
     field.append(text);
     return field;
@@ -3251,22 +3535,216 @@ export class DatabaseView {
     });
   }
 
-  #moveCardToGroup(rowId: string, columnId: string, groupKey: string): void {
-    const column = this.#data.columns.find(item => item.id === columnId);
-    const row = this.#data.rows.find(item => item.id === rowId);
-    if (!column || !row) return;
-    const current = row.cells[columnId] ?? {};
-    let next: DatabaseCell;
+  #cellForGroupValue(
+    column: DatabaseColumn,
+    cell: DatabaseCell | undefined,
+    groupKey: string
+  ): DatabaseCell {
+    const current = cell ?? {};
     if (column.type === 'checkbox') {
-      next = { ...current, checked: groupKey === 'true' };
-    } else if (column.type === 'multi-select') {
-      next = groupKey
-        ? { ...current, values: [groupKey] }
-        : { ...current, values: [] };
-    } else {
-      next = { ...current, text: groupKey };
+      const next = { ...current };
+      if (groupKey === 'true') next.checked = true;
+      else delete next.checked;
+      return next;
     }
-    this.#commitCell(rowId, columnId, next, `db:${rowId}:${columnId}`);
+    if (column.type === 'multi-select') {
+      const next = { ...current };
+      if (groupKey) next.values = [groupKey];
+      else delete next.values;
+      return next;
+    }
+    const next = { ...current };
+    delete next.runs;
+    if (groupKey) next.text = groupKey;
+    else delete next.text;
+    return next;
+  }
+
+  #addBoardCard(
+    view: DatabaseViewConfig,
+    groupKey: string | undefined,
+    position: 'start' | 'end'
+  ): void {
+    if (this.#readonly) return;
+    const viewId = this.#activeView().id;
+    const row = createDatabaseRow();
+    const groupColumn = view.groupBy
+      ? this.#data.columns.find(column => column.id === view.groupBy)
+      : undefined;
+    if (groupColumn && groupKey !== undefined) {
+      row.cells[groupColumn.id] = this.#cellForGroupValue(
+        groupColumn,
+        undefined,
+        groupKey
+      );
+    }
+    const rows = [...this.#data.rows, row];
+    let views = this.#views();
+    if (
+      groupColumn &&
+      groupKey !== undefined &&
+      databaseSorts(view).length === 0
+    ) {
+      const groups = this.#groupsFor(view);
+      const group = groups.find(item => item.key === groupKey);
+      const visible = group?.rows.map(item => item.id) ?? [];
+      const order =
+        position === 'start' ? [row.id, ...visible] : [...visible, row.id];
+      const settings = seedGroupSettings(
+        view.groupProperties ?? [],
+        groups.map(item => item.key)
+      );
+      const groupProperties = settings.map(setting =>
+        setting.key === groupKey
+          ? {
+              ...setting,
+              manuallyCardSort: mergeOrder(
+                setting.manuallyCardSort ?? [],
+                order
+              ),
+            }
+          : setting
+      );
+      views = views.map(item =>
+        item.id === viewId ? { ...item, groupProperties } : item
+      );
+    }
+    this.#pendingBoardFocus = row.id;
+    this.#host.commit({
+      ...this.#data,
+      rows,
+      views,
+      activeViewId: viewId,
+    });
+  }
+
+  #openBoardGroupMenu(
+    anchor: HTMLElement,
+    view: DatabaseViewConfig,
+    groupKey: string,
+    rows: readonly DatabaseRow[]
+  ): void {
+    const content = document.createElement('div');
+    content.className = 'nb-db-pop-actions nb-db-board-group-menu';
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.textContent = 'Add card';
+    add.addEventListener('click', () => {
+      this.#closePopover();
+      this.#addBoardCard(view, view.groupBy ? groupKey : undefined, 'end');
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'danger';
+    remove.textContent = 'Delete cards';
+    remove.addEventListener('click', () => {
+      this.#closePopover();
+      const ids = new Set(rows.map(row => row.id));
+      this.#host.commit({
+        ...this.#data,
+        rows: this.#data.rows.filter(row => !ids.has(row.id)),
+      });
+    });
+    content.append(add, remove);
+    this.#showPopover(anchor, content);
+  }
+
+  #moveBoardCard(
+    rowId: string,
+    targetGroupKey: string,
+    targetRowId?: string,
+    before = false,
+    sourceGroupKey?: string
+  ): void {
+    const view = this.#activeView();
+    if (view.type !== 'board' || !view.groupBy) return;
+    const groupColumn = this.#data.columns.find(
+      column => column.id === view.groupBy
+    );
+    const row = this.#data.rows.find(item => item.id === rowId);
+    if (!groupColumn || !row) return;
+    const groups = this.#groupsFor(view);
+    const sourceGroup =
+      (sourceGroupKey !== undefined
+        ? groups.find(group => group.key === sourceGroupKey)
+        : undefined) ??
+      groups.find(group => group.rows.some(item => item.id === rowId));
+    if (!sourceGroup) return;
+    const sorts = databaseSorts(view).length > 0;
+    const sameGroup = sourceGroup.key === targetGroupKey;
+    if (sameGroup && sorts) return;
+    if (sameGroup && targetRowId === rowId) return;
+
+    let targetOrder = (
+      groups.find(group => group.key === targetGroupKey)?.rows ?? []
+    ).map(item => item.id);
+    targetOrder = targetOrder.filter(id => id !== rowId);
+    if (targetRowId) {
+      const index = targetOrder.indexOf(targetRowId);
+      if (index >= 0) targetOrder.splice(before ? index : index + 1, 0, rowId);
+      else targetOrder.push(rowId);
+    } else {
+      targetOrder.push(rowId);
+    }
+
+    let sourceOrder = sourceGroup.rows.map(item => item.id).filter(
+      id => id !== rowId
+    );
+
+    let rows = this.#data.rows;
+    if (!sameGroup) {
+      const cells = { ...row.cells };
+      const next = this.#cellForGroupValue(
+        groupColumn,
+        row.cells[groupColumn.id],
+        targetGroupKey
+      );
+      if (Object.keys(next).length > 0) cells[groupColumn.id] = next;
+      else delete cells[groupColumn.id];
+      rows = rows.map(item =>
+        item.id === rowId ? { ...item, cells } : item
+      );
+    }
+
+    let views = this.#views();
+    if (!sorts) {
+      const settings = seedGroupSettings(
+        view.groupProperties ?? [],
+        groups.map(group => group.key)
+      );
+      const groupProperties = settings.map(setting => {
+        if (setting.key === targetGroupKey) {
+          return {
+            ...setting,
+            manuallyCardSort: mergeOrder(
+              (setting.manuallyCardSort ?? []).filter(id => id !== rowId),
+              targetOrder
+            ),
+          };
+        }
+        if (!sameGroup && setting.key === sourceGroup.key) {
+          return {
+            ...setting,
+            manuallyCardSort: mergeOrder(
+              (setting.manuallyCardSort ?? []).filter(id => id !== rowId),
+              sourceOrder
+            ),
+          };
+        }
+        return setting;
+      });
+      views = views.map(item =>
+        item.id === view.id ? { ...item, groupProperties } : item
+      );
+    }
+
+    const { view: _legacyView, sort: _legacySort, ...rest } = this.#data;
+    this.#host.commit({
+      ...rest,
+      rows,
+      views,
+      activeViewId: view.id,
+    });
   }
 
   #updateCount(view: DatabaseViewConfig = this.#activeView()): void {
@@ -3366,7 +3844,18 @@ export class DatabaseView {
         const cell = row.cells[column.id];
         const value = column.type === 'checkbox' ? '' : cell?.text ?? '';
         for (const nodes of copies) {
-          if (nodes.text && nodes.text.textContent !== value) nodes.text.textContent = value;
+          if (nodes.text) {
+            if (nodes.text.dataset.richText === 'true') {
+              const signature = this.#runsSignature(cell?.runs);
+              if (nodes.text.dataset.runs !== signature) {
+                this.#renderTextCellContent(nodes.text, cell);
+              } else if (!cell?.runs && nodes.text.textContent !== value) {
+                nodes.text.textContent = value;
+              }
+            } else if (nodes.text.textContent !== value) {
+              nodes.text.textContent = value;
+            }
+          }
           if (nodes.input) {
             const inputValue =
               column.type === 'number' && !nodes.input.matches(':focus')
@@ -3412,6 +3901,16 @@ export class DatabaseView {
       '.nb-db-detail-navbtn[data-nav="next"]'
     );
     if (prev && next) this.#syncDetailNav(prev, next, rowId);
+    const pageBody = detail.querySelector<HTMLElement>('.nb-db-page-text');
+    if (pageBody) {
+      const root = this.element.getRootNode() as ShadowRoot;
+      const signature = this.#runsSignature(row.page?.content ?? []);
+      if (pageBody.dataset.runs !== signature) {
+        const focused = root.activeElement === pageBody;
+        this.#renderPageContent(pageBody, row);
+        if (focused) placeCaret(pageBody, 'end');
+      }
+    }
     const view = this.#activeView();
     const titleColumn = this.#titleColumn(view);
     const fields = detail.querySelector<HTMLElement>('.nb-db-detail-fields');
@@ -3541,7 +4040,24 @@ export class DatabaseView {
       }
       const text = field.querySelector<HTMLElement>('.nb-db-detail-text');
       const textValue = cell?.text ?? '';
-      if (text && text.textContent !== textValue) {
+      if (text && text.dataset.richText === 'true') {
+        const signature = this.#runsSignature(cell?.runs);
+        if (
+          text.dataset.runs !== signature ||
+          text.textContent !== textValue
+        ) {
+          const focused = text.matches(':focus');
+          const offsets = focused ? selectionOffsets(text) : null;
+          this.#renderTextCellContent(text, cell);
+          if (offsets) {
+            setSelectionOffsets(
+              text,
+              Math.min(offsets.start, textValue.length),
+              Math.min(offsets.end, textValue.length)
+            );
+          }
+        }
+      } else if (text && text.textContent !== textValue) {
         if (text.matches(':focus')) {
           const offsets = selectionOffsets(text);
           text.textContent = textValue;
@@ -3826,20 +4342,34 @@ export class DatabaseView {
     text.contentEditable = this.#readonly ? 'false' : 'true';
     text.spellcheck = false;
     text.dataset.placeholder = column.type === 'url' ? 'https://…' : 'Empty';
+    text.dataset.richText = String(column.type === 'text');
     text.setAttribute('role', 'textbox');
     text.setAttribute('aria-label', column.name);
-    text.textContent = cell?.text ?? '';
+    if (column.type === 'text') {
+      text.classList.add('nb-db-rich-text');
+      this.#renderTextCellContent(text, cell);
+    } else {
+      text.textContent = cell?.text ?? '';
+    }
     if (!this.#readonly) {
       text.addEventListener(
         'input',
         () => {
-          const value = (text.textContent ?? '').replace(/\r?\n/gu, ' ');
-          this.#commitCell(
-            row.id,
-            column.id,
-            this.#withText(this.#currentCell(row.id, column.id), value),
-            `db:${row.id}:${column.id}`
+          if (column.type !== 'text') {
+            const value = (text.textContent ?? '').replace(/\r?\n/gu, ' ');
+            this.#commitCell(
+              row.id,
+              column.id,
+              this.#withText(this.#currentCell(row.id, column.id), value),
+              `db:${row.id}:${column.id}`
+            );
+            return;
+          }
+          const runs = this.#readCellRuns(text);
+          text.dataset.runs = this.#runsSignature(
+            runs.some(run => run.marks) ? runs : undefined
           );
+          this.#commitTextRuns(row.id, column.id, runs, `db:${row.id}:${column.id}`);
         },
         { signal: this.#events.signal }
       );
@@ -3866,6 +4396,46 @@ export class DatabaseView {
     }
     td.append(text);
     nodes.text = text;
+  }
+
+  #runsSignature(runs: readonly InlineRun[] | undefined): string {
+    return JSON.stringify(runs ?? []);
+  }
+
+  #renderTextCellContent(element: HTMLElement, cell: DatabaseCell | undefined): void {
+    const runs = cell?.runs;
+    element.dataset.runs = this.#runsSignature(runs);
+    if (runs && runs.length > 0) {
+      renderInlineRuns(element, runs);
+    } else {
+      element.textContent = cell?.text ?? '';
+    }
+  }
+
+  #readCellRuns(element: HTMLElement): InlineRun[] {
+    return normalizeRuns(
+      readRunsFromDom(element).map(run => ({
+        ...run,
+        text: run.text.replace(/\r?\n/gu, ' '),
+        ...(run.marks ? { marks: { ...run.marks } } : {}),
+      }))
+    );
+  }
+
+  #commitTextRuns(
+    rowId: string,
+    columnId: string,
+    runs: readonly InlineRun[],
+    mergeKey?: string
+  ): void {
+    const current = this.#currentCell(rowId, columnId);
+    const cell: DatabaseCell = { ...(current ?? {}) };
+    const text = plainText(runs);
+    if (text) cell.text = text;
+    else delete cell.text;
+    if (runs.some(run => run.marks)) cell.runs = cloneRuns(runs);
+    else delete cell.runs;
+    this.#commitCell(rowId, columnId, cell, mergeKey);
   }
 
   #applySelectLabel(button: HTMLButtonElement, value: string, options: string[] = []): void {
@@ -3945,6 +4515,7 @@ export class DatabaseView {
     const next: DatabaseCell = { ...(cell ?? {}) };
     if (value) next.text = value;
     else delete next.text;
+    delete next.runs;
     return next;
   }
 
@@ -4066,7 +4637,14 @@ export class DatabaseView {
     if (!row) return;
     const copy: DatabaseRow = {
       id: createDatabaseRow().id,
-      cells: Object.fromEntries(Object.entries(row.cells).map(([key, cell]) => [key, { ...cell }])),
+      cells: Object.fromEntries(
+        Object.entries(row.cells).map(([key, cell]) => [key, this.#cloneCell(cell)])
+      ),
+      ...(row.page
+        ? {
+            page: { content: cloneRuns(row.page.content) },
+          }
+        : {}),
     };
     const index = this.#data.rows.findIndex(item => item.id === rowId);
     const rows = [...this.#data.rows];
@@ -4334,6 +4912,26 @@ export class DatabaseView {
       this.#host.redo();
       return;
     }
+    if (mod && kind === 'text') {
+      const key = event.key.toLowerCase();
+      const tag =
+        key === 'b'
+          ? 'strong'
+          : key === 'i'
+            ? 'em'
+            : key === 'u'
+              ? 'u'
+              : key === 'e'
+                ? 'code'
+                : key === 's' && event.shiftKey
+                  ? 's'
+                  : null;
+      if (tag) {
+        event.preventDefault();
+        this.#toggleInlineTag(tag);
+        return;
+      }
+    }
     if (mod && ['b', 'i', 'u', 'e', 'k'].includes(event.key.toLowerCase())) {
       event.preventDefault();
       return;
@@ -4386,6 +4984,257 @@ export class DatabaseView {
         this.#moveHorizontal(rowId, columnId, 1);
       }
     }
+  }
+
+  /** ---- inline formatting ---- */
+
+  #syncCellToolbar(): void {
+    if (this.#readonly) {
+      this.#hideCellToolbar();
+      return;
+    }
+    const root = this.element.getRootNode() as ShadowRoot;
+    const active = root.activeElement as HTMLElement | null;
+    if (
+      active &&
+      active.isContentEditable !== true &&
+      !active.closest('.nb-db-rich-text')
+    ) {
+      this.#hideCellToolbar();
+      return;
+    }
+    const selection = nativeSelection(root);
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      this.#hideCellToolbar();
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    const node = range.commonAncestorContainer;
+    const element =
+      node.nodeType === Node.ELEMENT_NODE
+        ? (node as HTMLElement)
+        : node.parentElement;
+    const target = element?.closest<HTMLElement>('.nb-db-rich-text') ?? null;
+    if (
+      !target ||
+      target.isContentEditable !== true ||
+      (!this.element.contains(target) && !this.#detail?.contains(target))
+    ) {
+      this.#hideCellToolbar();
+      return;
+    }
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      this.#hideCellToolbar();
+      return;
+    }
+    const toolbar = this.#ensureCellToolbar();
+    toolbar.hidden = false;
+    placeFloating(toolbar, rect, {
+      align: 'center',
+      side: 'above',
+      gap: 8,
+      margin: 8,
+    });
+  }
+
+  #ensureCellToolbar(): HTMLElement {
+    if (this.#cellToolbar?.isConnected) return this.#cellToolbar;
+    const toolbar = document.createElement('div');
+    toolbar.className = 'nb-db-inline-toolbar';
+    toolbar.setAttribute('role', 'toolbar');
+    toolbar.setAttribute('aria-label', 'Text formatting');
+    toolbar.hidden = true;
+    const commands: Array<{ tag: string; label: string; glyph: string }> = [
+      { tag: 'strong', label: 'Bold', glyph: icon.bold },
+      { tag: 'em', label: 'Italic', glyph: icon.italic },
+      { tag: 'u', label: 'Underline', glyph: icon.underline },
+      { tag: 's', label: 'Strikethrough', glyph: icon.strike },
+      { tag: 'code', label: 'Inline code', glyph: icon.inlineCode },
+    ];
+    for (const command of commands) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'nb-db-inline-tool';
+      button.title = command.label;
+      button.setAttribute('aria-label', command.label);
+      button.dataset.tag = command.tag;
+      button.innerHTML = command.glyph;
+      button.addEventListener('mousedown', event => event.preventDefault(), {
+        signal: this.#events.signal,
+      });
+      button.addEventListener('click', () => {
+        this.#toggleInlineTag(command.tag);
+      }, { signal: this.#events.signal });
+      toolbar.append(button);
+    }
+    this.element.append(toolbar);
+    this.#cellToolbar = toolbar;
+    return toolbar;
+  }
+
+  #toggleInlineTag(tag: string): void {
+    const root = this.element.getRootNode() as ShadowRoot;
+    const selection = nativeSelection(root);
+    if (!selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    const node = range.commonAncestorContainer;
+    const element =
+      node.nodeType === Node.ELEMENT_NODE
+        ? (node as HTMLElement)
+        : node.parentElement;
+    const target = element?.closest<HTMLElement>('.nb-db-rich-text') ?? null;
+    if (
+      !target ||
+      target.isContentEditable !== true ||
+      (!this.element.contains(target) && !this.#detail?.contains(target))
+    ) {
+      return;
+    }
+    const tagName = tag.toUpperCase();
+    const markKeyName =
+      tag === 'strong'
+        ? 'bold'
+        : tag === 'em'
+          ? 'italic'
+          : tag === 'u'
+            ? 'underline'
+            : tag === 's'
+              ? 'strike'
+              : 'code';
+    let ancestor: HTMLElement | null = element;
+    let marked: HTMLElement | null = null;
+    let existing: HTMLElement | null = null;
+    while (ancestor && ancestor !== target) {
+      const tokens = (ancestor.dataset.mark ?? '').split(/\s+/u);
+      if (tokens.includes(markKeyName)) {
+        marked = ancestor;
+        break;
+      }
+      if (ancestor.tagName === tagName) {
+        existing = ancestor;
+        break;
+      }
+      ancestor = ancestor.parentElement;
+    }
+    if (range.collapsed && (marked || existing)) {
+      const pending = marked ?? existing;
+      if (!pending) return;
+      if (
+        pending.parentElement &&
+        (pending.textContent ?? '').replace(/\u200B/gu, '') === ''
+      ) {
+        const parent = pending.parentElement;
+        const index = Array.from(parent.childNodes).indexOf(pending);
+        pending.remove();
+        const caret = document.createRange();
+        caret.setStart(parent, Math.max(0, index));
+        caret.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(caret);
+        this.#syncCellToolbar();
+      }
+      return;
+    }
+    const markedElement = marked ?? existing;
+    if (
+      markedElement &&
+      !range.collapsed &&
+      markedElement.contains(range.endContainer) &&
+      markedElement.childNodes.length === 1 &&
+      markedElement.firstChild?.nodeType === Node.TEXT_NODE &&
+      markedElement.isContentEditable
+    ) {
+      const targetOffsets = selectionOffsets(target);
+      const local = selectionOffsets(markedElement);
+      const text = markedElement.textContent ?? '';
+      if (targetOffsets && local && local.end > local.start) {
+        const build = (value: string, keep: boolean): Node | null => {
+          if (!value) return null;
+          if (markedElement.tagName === 'SPAN') {
+            const clone = markedElement.cloneNode(false) as HTMLElement;
+            if (!keep) {
+              const tokens = new Set(
+                (clone.dataset.mark ?? '').split(/\s+/u)
+              );
+              tokens.delete(markKeyName);
+              if (tokens.size > 0) clone.dataset.mark = [...tokens].join(' ');
+              else delete clone.dataset.mark;
+              clone.classList.remove(`nb-m-${markKeyName}`);
+            }
+            clone.textContent = value;
+            return clone;
+          }
+          if (!keep) return document.createTextNode(value);
+          const clone = document.createElement(markedElement.tagName.toLowerCase());
+          clone.textContent = value;
+          return clone;
+        };
+        const nodes = [
+          build(text.slice(0, local.start), true),
+          build(text.slice(local.start, local.end), false),
+          build(text.slice(local.end), true),
+        ].filter((item): item is Node => item !== null);
+        markedElement.replaceWith(...nodes);
+        setSelectionOffsets(
+          target,
+          Math.min(targetOffsets.start, target.textContent?.length ?? 0),
+          Math.min(targetOffsets.end, target.textContent?.length ?? 0)
+        );
+        target.dispatchEvent(
+          new InputEvent('input', { bubbles: true, inputType: 'format' })
+        );
+        this.#syncCellToolbar();
+        return;
+      }
+    }
+    if (marked) {
+      const tokens = new Set((marked.dataset.mark ?? '').split(/\s+/u));
+      tokens.delete(markKeyName);
+      if (tokens.size > 0) marked.dataset.mark = [...tokens].join(' ');
+      else delete marked.dataset.mark;
+      marked.classList.remove(`nb-m-${markKeyName}`);
+    } else if (existing) {
+      const parent = existing.parentNode;
+      if (!parent) return;
+      const first = existing.firstChild;
+      const last = existing.lastChild;
+      while (existing.firstChild) parent.insertBefore(existing.firstChild, existing);
+      existing.remove();
+      if (first && last) {
+        const next = document.createRange();
+        next.setStartBefore(first);
+        next.setEndAfter(last);
+        selection.removeAllRanges();
+        selection.addRange(next);
+      }
+    } else if (range.collapsed) {
+      const wrapper = document.createElement(tag);
+      wrapper.append(document.createTextNode('\u200B'));
+      range.insertNode(wrapper);
+      const caret = document.createRange();
+      const text = wrapper.firstChild;
+      if (text) {
+        caret.setStart(text, 1);
+        caret.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(caret);
+      }
+      this.#syncCellToolbar();
+      return;
+    } else {
+      const wrapper = document.createElement(tag);
+      wrapper.append(range.extractContents());
+      range.insertNode(wrapper);
+      const next = document.createRange();
+      next.selectNodeContents(wrapper);
+      selection.removeAllRanges();
+      selection.addRange(next);
+    }
+    target.dispatchEvent(
+      new InputEvent('input', { bubbles: true, inputType: 'format' })
+    );
+    this.#syncCellToolbar();
   }
 
   /** ---- popovers ---- */
@@ -4733,6 +5582,7 @@ export class DatabaseView {
   #cloneCell(cell: DatabaseCell): DatabaseCell {
     return {
       ...cell,
+      ...(cell.runs ? { runs: cloneRuns(cell.runs) } : {}),
       ...(cell.values ? { values: [...cell.values] } : {}),
       ...(cell.files ? { files: cell.files.map(file => ({ ...file })) } : {}),
       ...(cell.people ? { people: cell.people.map(person => ({ ...person })) } : {}),
@@ -4848,7 +5698,7 @@ export class DatabaseView {
         } else if (column.type === 'files' || column.type === 'people') {
           if (clearReferences) delete cells[column.id];
         } else if (value) {
-          cells[column.id] = { ...(cell ?? {}), text: value };
+          cells[column.id] = this.#withText(cell, value);
         } else {
           delete cells[column.id];
         }
@@ -4974,7 +5824,10 @@ export class DatabaseView {
         name: column.name,
         type: column.type,
       })),
-      rows: this.#selectedVisibleRows().map(row => ({ cells: row.cells })),
+      rows: this.#selectedVisibleRows().map(row => ({
+        cells: row.cells,
+        ...(row.page ? { page: row.page } : {}),
+      })),
     });
   }
 
@@ -5059,7 +5912,10 @@ export class DatabaseView {
             name?: unknown;
             type?: unknown;
           }>;
-          rows?: Array<{ cells?: Record<string, DatabaseCell> }>;
+          rows?: Array<{
+            cells?: Record<string, DatabaseCell>;
+            page?: { content?: unknown };
+          }>;
         };
         const sourceColumns = Array.isArray(parsed.columns)
           ? parsed.columns
@@ -5124,7 +5980,14 @@ export class DatabaseView {
                   );
             if (next) cells[mapping.id] = next;
           }
-          return { id: createId('r'), cells };
+          const pageContent = Array.isArray(item.page?.content)
+            ? parseInlineRuns(item.page.content)
+            : [];
+          return {
+            id: createId('r'),
+            cells,
+            ...(pageContent.length > 0 ? { page: { content: pageContent } } : {}),
+          };
         });
         if (rows.length > 0 && columnMap.size > 0) {
           event.preventDefault();

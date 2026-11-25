@@ -3,6 +3,7 @@ import {
   isHighlightColor,
   isTextColor,
   normalizeRuns,
+  safeHref,
 } from '@nobita/core';
 import type { InlineMark, InlineRun } from '@nobita/core';
 
@@ -16,8 +17,19 @@ function marksFromElement(element: Element, inherited: InlineMark | undefined): 
       next = { ...(next ?? {}), [token]: true };
     }
   }
-  const href = element.getAttribute('data-link');
-  if (href) next = { ...(next ?? {}), link: href };
+  const tag = element.tagName;
+  if (tag === 'STRONG' || tag === 'B') next = { ...(next ?? {}), bold: true };
+  if (tag === 'EM' || tag === 'I') next = { ...(next ?? {}), italic: true };
+  if (tag === 'U') next = { ...(next ?? {}), underline: true };
+  if (tag === 'S' || tag === 'STRIKE' || tag === 'DEL') {
+    next = { ...(next ?? {}), strike: true };
+  }
+  if (tag === 'CODE') next = { ...(next ?? {}), code: true };
+  const href = element.getAttribute('data-link') ?? element.getAttribute('href');
+  if (href) {
+    const safe = safeHref(href);
+    if (safe) next = { ...(next ?? {}), link: safe };
+  }
   const mentionId =
     element.getAttribute('data-nb-mention-id') ??
     element.getAttribute('data-mention-id');
@@ -127,4 +139,62 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
   }
   flush();
   return normalizeRuns(runs);
+}
+
+/** Render runs into a contenteditable host using the editor's inline markup. */
+export function renderInlineRuns(
+  root: HTMLElement,
+  runs: readonly InlineRun[]
+): void {
+  const fragment = document.createDocumentFragment();
+  for (const run of runs) {
+    const span = document.createElement('span');
+    span.textContent = run.text;
+    const marks = run.marks;
+    if (marks) {
+      const classes: string[] = [];
+      const tokens: string[] = [];
+      if (marks.bold) {
+        classes.push('nb-m-bold');
+        tokens.push('bold');
+      }
+      if (marks.italic) {
+        classes.push('nb-m-italic');
+        tokens.push('italic');
+      }
+      if (marks.underline) {
+        classes.push('nb-m-underline');
+        tokens.push('underline');
+      }
+      if (marks.strike) {
+        classes.push('nb-m-strike');
+        tokens.push('strike');
+      }
+      if (marks.code) {
+        classes.push('nb-m-code');
+        tokens.push('code');
+      }
+      if (marks.link) {
+        const safe = safeHref(marks.link);
+        if (safe) {
+          classes.push('nb-m-link');
+          span.dataset.link = safe;
+          span.title = safe;
+        }
+      }
+      if (marks.highlight) span.dataset.highlight = marks.highlight;
+      if (marks.color) span.dataset.textColor = marks.color;
+      if (marks.mention) {
+        classes.push('nb-m-mention');
+        span.dataset.mentionId = marks.mention.id;
+        span.dataset.mentionLabel = marks.mention.label;
+        if (marks.mention.kind) span.dataset.mentionKind = marks.mention.kind;
+        span.contentEditable = 'false';
+      }
+      if (classes.length > 0) span.className = classes.join(' ');
+      if (tokens.length > 0) span.dataset.mark = tokens.join(' ');
+    }
+    fragment.append(span);
+  }
+  root.replaceChildren(fragment);
 }
