@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { getDoc, openFixture } from './helpers';
+import { getDoc, openDatabaseViewSetting, openFixture } from './helpers';
 
 const p1Doc = () => ({
   version: 1,
@@ -71,7 +71,7 @@ test('sorts, filters and searches rows', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
 
-  await page.locator('.nb-db-btn', { hasText: 'Sort' }).click();
+  await openDatabaseViewSetting(page, /^Sort/);
   await page.getByRole('button', { name: '+ Add sort' }).click();
   await page.locator('.nb-db-sort-popover .nb-db-filter-row select').nth(0).selectOption('score');
   await page.locator('.nb-db-sort-popover .nb-db-filter-row select').nth(1).selectOption('desc');
@@ -86,6 +86,7 @@ test('sorts, filters and searches rows', async ({ page }) => {
   await page.getByRole('button', { name: 'Apply' }).click();
   await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(2);
 
+  await page.locator('.nb-db-search-toggle').click();
   await page.locator('.nb-db-search').fill('amm');
   await expect(page.locator('.nb-db-table tbody tr')).toHaveCount(1);
   await expect(page.locator('.nb-db-search')).toHaveValue('amm');
@@ -95,9 +96,11 @@ test('hides columns and calculates footer statistics', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
 
-  await page.locator('.nb-db-btn', { hasText: 'Columns' }).click();
-  await page.locator('.nb-db-column-toggle', { hasText: 'Status' }).locator('input').uncheck();
-  await page.getByRole('button', { name: 'Apply' }).click();
+  await openDatabaseViewSetting(page, /^Properties/);
+  await page
+    .locator('.nb-db-property-row', { hasText: 'Status' })
+    .getByRole('button', { name: 'Hide property' })
+    .click();
   await expect(page.locator('.nb-db-th[data-column-id="status"]')).toHaveCount(0);
 
   const scoreStat = page.locator('.nb-db-foot .nb-db-stat').nth(1);
@@ -138,7 +141,7 @@ test('groups a table and collapses groups', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
 
-  await page.locator('.nb-db-btn', { hasText: 'Group' }).click();
+  await openDatabaseViewSetting(page, /^Group/);
   await page.locator('.nb-db-popover select').selectOption('status');
   await expect(page.locator('.nb-db-group')).toHaveCount(2);
   await expect(page.locator('.nb-db-group-label').first()).toHaveText('Todo');
@@ -226,6 +229,7 @@ test('keeps the search caret while refreshing results', async ({ page }) => {
   await openFixture(page);
   await setDoc(page);
   const search = page.locator('.nb-db-search');
+  await page.locator('.nb-db-search-toggle').click();
   await search.fill('ac');
   await page.evaluate(
     () =>
@@ -265,6 +269,7 @@ test('leaves header input paste to the input', async ({ page }) => {
   });
   expect(titlePaste).toBe(false);
 
+  await page.locator('.nb-db-search-toggle').click();
   await page.locator('.nb-db-search').click();
   const searchPaste = await page.evaluate(() => {
     const data = new DataTransfer();

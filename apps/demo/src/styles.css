@@ -592,7 +592,7 @@ svg {
 
 #editor-host {
   min-height: 100%;
-  --nb-db-bleed: 32px;
+  --nb-db-bleed: 8px;
 }
 
 @media (max-width: 720px) {

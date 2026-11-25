@@ -324,8 +324,13 @@ Rendering lives in `SimpleTableView` (`packages/element/src/table-view.ts`) for 
 - The row gutter exposes hover row selection and dragging; selected rows can be copied, cut or deleted.
 - The row expand control opens a record detail panel with previous/next navigation, inline title/property editing and Add Property.
 - Column headers open the AFFiNE-style menu: number format, hide in view, filter, sort, insert, move, duplicate and delete. Headers can be resized and reordered.
-- Active view tabs and the toolbar `⋯` open View Settings: view name, table/board layout, properties, filter, sort, group, view move, duplicate and delete.
-- Filter builders support nested AND/OR groups, per-type operators and a chip toolbar summary. Sort supports multiple keys. Group settings persist order, visibility and collapsed state, and can hide empty groups.
+- Root data views use an 8px surface bleed with matching inner padding, so the table edge aligns with body text and the 24px row gutter indents column content (AFFiNE geometry).
+- The header is split into a title/count row and a viewbar/tools row. View tools fade in on hover or keyboard focus and stay visible while a popover is open; touch devices show them permanently.
+- The viewbar keeps view tabs and the add-view control. The hover toolbar exposes Filter, Search, View settings (`⋯`) and New Record. View settings contains view name, table/board layout, properties, filter, sort, group, view move, duplicate and delete.
+- Search expands from a 28px icon to a 168px field with a clear control and Escape handling.
+- Filter builders support nested AND/OR groups, per-type operators and a chip summary. The chip bar stays hidden until the filter control opens it; readonly views show existing filters without the toggle. Sort supports multiple keys. Group settings persist order, visibility and collapsed state, and can hide empty groups.
+- Footer statistics stay hidden until the footer is hovered or focused; calculated statistics remain visible.
+- The add-column header stays pinned right and the New Record label stays pinned left while the table scrolls horizontally. Row actions overlay the title cell instead of reserving width.
 - Cell edits commit through `updateDatabase`/`updateTable` without restoring the body selection, which would steal focus from the cell. Text commits use a `mergeKey`, so one typing burst is one undo step.
 - A cell write does not rebuild the grid. Both views compare a structural key (title column, columns, view columns, filters, groups, sorts, readonly). Values are synced in place; structure changes re-render and restore focus to the active cell when possible.
 - Sorting, filtering, search and grouping are derived at render time (`filteredDatabaseRows`, `searchDatabaseRows`, `groupedDatabaseRows`), so the underlying row order is never mutated.
