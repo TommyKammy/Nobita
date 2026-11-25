@@ -11,11 +11,7 @@ function withMark(run: InlineRun, patch: InlineMark): InlineRun {
   return { text: run.text, marks: { ...(run.marks ?? {}), ...patch } };
 }
 
-/**
- * Parse the inline markdown subset Nobita understands. Unknown syntax is kept
- * literally. This is intentionally forgiving: pasted prose should never break.
- */
-export function parseInlineMarkdown(text: string): InlineRun[] {
+function parseInline(text: string, allowLinks: boolean): InlineRun[] {
   if (!text) return [];
   const runs: InlineRun[] = [];
   let buffer = '';
@@ -58,12 +54,17 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
       }
     }
 
-    if (char === '[') {
-      const match = /^\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/u.exec(text.slice(index));
+    if (allowLinks && char === '[') {
+      const match = /^\[((?:\\.|[^\]\\])*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/u.exec(
+        text.slice(index)
+      );
       if (match?.[2]) {
         flush();
-        const label = match[1] ?? match[2];
-        runs.push({ text: label, marks: { link: match[2] } });
+        const rawLabel = match[1] ?? '';
+        const href = match[2];
+        for (const run of parseInline(rawLabel, false)) {
+          runs.push(withMark(run, { link: href }));
+        }
         index += match[0].length;
         continue;
       }
@@ -76,7 +77,7 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
       if (close > index + 3) {
         flush();
         const inner = text.slice(index + 3, close);
-        for (const run of parseInlineMarkdown(inner)) {
+        for (const run of parseInline(inner, allowLinks)) {
           runs.push(withMark(withMark(run, { bold: true }), { italic: true }));
         }
         index = close + 3;
@@ -91,7 +92,7 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
       if (close > index + 2) {
         flush();
         const inner = text.slice(index + 2, close);
-        for (const run of parseInlineMarkdown(inner)) runs.push(withMark(run, { bold: true }));
+        for (const run of parseInline(inner, allowLinks)) runs.push(withMark(run, { bold: true }));
         index = close + 2;
         continue;
       }
@@ -102,7 +103,7 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
       if (close > index + 2) {
         flush();
         const inner = text.slice(index + 2, close);
-        for (const run of parseInlineMarkdown(inner)) runs.push(withMark(run, { strike: true }));
+        for (const run of parseInline(inner, allowLinks)) runs.push(withMark(run, { strike: true }));
         index = close + 2;
         continue;
       }
@@ -114,7 +115,7 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
         flush();
         const inner = text.slice(index + 1, close);
         if (inner.trim().length > 0) {
-          for (const run of parseInlineMarkdown(inner)) runs.push(withMark(run, { italic: true }));
+          for (const run of parseInline(inner, allowLinks)) runs.push(withMark(run, { italic: true }));
           index = close + 1;
           continue;
         }
@@ -127,6 +128,14 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
 
   flush();
   return normalizeRuns(runs);
+}
+
+/**
+ * Parse the inline markdown subset Nobita understands. Unknown syntax is kept
+ * literally. This is intentionally forgiving: pasted prose should never break.
+ */
+export function parseInlineMarkdown(text: string): InlineRun[] {
+  return parseInline(text, true);
 }
 
 interface ListFrame {

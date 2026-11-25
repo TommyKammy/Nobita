@@ -532,4 +532,40 @@ describe('simple table', () => {
       ],
     });
   });
+
+  it('round-trips formatted links inside table cells through Markdown', () => {
+    const table = createTableData({ rows: 1, columns: 2 });
+    const [c1, c2] = table.columns;
+    const [r1] = table.rows;
+    let edited = setTableCellRuns(table, r1!.id, c1!.id, [
+      { text: 'hello', marks: { bold: true, link: 'https://example.com' } },
+    ]);
+    edited = setTableCellRuns(edited, r1!.id, c2!.id, [
+      { text: 'api', marks: { code: true, italic: true, link: 'https://example.com/api' } },
+    ]);
+
+    const block = createBlock('table', { id: 't', props: { table: edited } });
+    const markdown = blocksToMarkdown(createDoc({ blocks: [block] }), { title: false });
+    expect(markdown).toContain(
+      '| [**hello**](https://example.com) | [*`api`*](https://example.com/api) |'
+    );
+
+    const imported = markdownToBlocks(markdown, { extractTitle: false }).blocks.find(
+      item => item.type === 'table'
+    );
+    const impTable = imported?.props.table!;
+    const [ic1, ic2] = impTable.columns;
+    const [ir1] = impTable.rows;
+
+    expect(ir1?.cells[ic1!.id]).toEqual({
+      text: 'hello',
+      runs: [{ text: 'hello', marks: { bold: true, link: 'https://example.com' } }],
+    });
+    expect(ir1?.cells[ic2!.id]).toEqual({
+      text: 'api',
+      runs: [
+        { text: 'api', marks: { code: true, italic: true, link: 'https://example.com/api' } },
+      ],
+    });
+  });
 });

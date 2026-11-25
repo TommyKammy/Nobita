@@ -27,6 +27,17 @@ describe('inline markdown', () => {
       { text: 'wow', marks: { bold: true, italic: true } },
     ]);
   });
+
+  it('parses inline formatting and escapes inside link labels', () => {
+    expect(
+      parseInlineMarkdown('[**bold** and `code` \\[1\\]](https://example.com)')
+    ).toEqual([
+      { text: 'bold', marks: { bold: true, link: 'https://example.com' } },
+      { text: ' and ', marks: { link: 'https://example.com' } },
+      { text: 'code', marks: { code: true, link: 'https://example.com' } },
+      { text: ' [1]', marks: { link: 'https://example.com' } },
+    ]);
+  });
 });
 
 describe('markdown documents', () => {
