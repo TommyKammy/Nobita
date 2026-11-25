@@ -2398,6 +2398,10 @@ select.nb-db-detail-input {
 .nb-db-filter-add:hover { background: var(--nb-hover); color: var(--nb-text); }
 .nb-db-filter-empty { padding: 8px 4px; color: var(--nb-text-tertiary); font-size: 12px; }
 
+@media (max-width: 560px) {
+  .nb-db-search-wrap { display: none; }
+}
+
 @media (hover: none) {
   .nb-db-tools { opacity: 1; }
   .nb-db-foot .nb-db-stat,

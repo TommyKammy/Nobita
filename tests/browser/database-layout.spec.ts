@@ -303,9 +303,25 @@ test.describe('touch viewport', () => {
     await openFixture(page);
     await setDoc(page);
     await expect(page.locator('.nb-db-tools')).toHaveCSS('opacity', '1');
+    await expect(page.locator('.nb-db-search-wrap')).toBeHidden();
     await expect(page.locator('.nb-db-foot .nb-db-stat').first()).toHaveCSS(
       'opacity',
       '1'
     );
+
+    const layout = await page.evaluate(() => {
+      const root = document.querySelector('nobita-editor')?.shadowRoot;
+      const bar = root?.querySelector('.nb-db-bar');
+      const viewbar = root?.querySelector('.nb-db-viewbar');
+      const tools = root?.querySelector('.nb-db-tools');
+      if (!bar || !viewbar || !tools) throw new Error('Missing database header');
+      return {
+        barRight: bar.getBoundingClientRect().right,
+        viewbarWidth: viewbar.getBoundingClientRect().width,
+        toolsRight: tools.getBoundingClientRect().right,
+      };
+    });
+    expect(layout.viewbarWidth).toBeGreaterThan(80);
+    expect(layout.toolsRight).toBeLessThanOrEqual(layout.barRight + 1);
   });
 });
