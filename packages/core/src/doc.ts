@@ -145,7 +145,7 @@ export function countWords(doc: Doc): number {
     if (table) {
       for (const row of table.rows) {
         for (const cell of Object.values(row.cells)) {
-          const value = cell.text.trim();
+          const value = (cell.text ?? (cell.runs ? plainText(cell.runs) : '')).trim();
           if (value) words += value.split(/\s+/u).length;
         }
       }
@@ -455,7 +455,7 @@ export function blockPlainText(block: Block): string {
   if (block.type === 'table') {
     return block.props.table?.rows
       .flatMap(row => Object.values(row.cells))
-      .map(cell => cell.text)
+      .map(cell => cell.text ?? (cell.runs ? plainText(cell.runs) : ''))
       .filter(Boolean)
       .join(' ') ?? '';
   }

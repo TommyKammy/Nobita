@@ -1,14 +1,65 @@
 import { createId } from './id.js';
-import type { TableCell, TableColumn, TableData, TableRow } from './types.js';
+import {
+  cloneRuns,
+  marksEqual,
+  normalizeRuns,
+  parseInlineRuns,
+  plainText,
+  runsLength,
+  sliceRuns,
+} from './text.js';
+import type { InlineRun, TableCell, TableColumn, TableData, TableRow } from './types.js';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const asString = (value: unknown): string =>
-  typeof value === 'string' ? value.replace(/\r\n?/gu, '\n').slice(0, 10000) : '';
-
+const MAX_CELL_TEXT_LENGTH = 10000;
 const MAX_TABLE_COLUMNS = 100;
 const MAX_TABLE_ROWS = 1000;
+
+const asString = (value: unknown): string =>
+  typeof value === 'string' ? value.replace(/\r\n?/gu, '\n').slice(0, MAX_CELL_TEXT_LENGTH) : '';
+
+/** Return true if any run carries an inline formatting mark or mention. */
+export function hasRichMarks(runs: readonly InlineRun[]): boolean {
+  return runs.some(run =>
+    Boolean(
+      run.marks &&
+        (run.marks.bold ||
+          run.marks.italic ||
+          run.marks.underline ||
+          run.marks.strike ||
+          run.marks.code ||
+          run.marks.link ||
+          run.marks.highlight ||
+          run.marks.color ||
+          run.marks.mention)
+    )
+  );
+}
+
+function clampRuns(runs: readonly InlineRun[]): InlineRun[] {
+  const cleaned = runs.some(run => run.text.includes('\r'))
+    ? runs.map(run =>
+        run.text.includes('\r') ? { ...run, text: run.text.replace(/\r\n?/gu, '\n') } : run
+      )
+    : runs;
+  const normalized = normalizeRuns(cleaned);
+  return runsLength(normalized) > MAX_CELL_TEXT_LENGTH
+    ? sliceRuns(normalized, 0, MAX_CELL_TEXT_LENGTH)
+    : normalized;
+}
+
+function runsEqual(a: readonly InlineRun[], b: readonly InlineRun[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const left = a[i];
+    const right = b[i];
+    if (!left || !right) return false;
+    if (left.text !== right.text || !marksEqual(left.marks, right.marks)) return false;
+  }
+  return true;
+}
 
 export function createTableColumn(init?: { id?: string; width?: number; backgroundColor?: string }): TableColumn {
   return {
@@ -37,6 +88,17 @@ export function createTableData(options: { rows?: number; columns?: number } = {
 
 function parseCell(value: unknown): TableCell | undefined {
   if (!isRecord(value)) return undefined;
+  if (value.runs !== undefined) {
+    const parsed = parseInlineRuns(value.runs);
+    const runs =
+      runsLength(parsed) > MAX_CELL_TEXT_LENGTH
+        ? sliceRuns(parsed, 0, MAX_CELL_TEXT_LENGTH)
+        : parsed;
+    if (runs.length > 0) {
+      const text = plainText(runs);
+      return hasRichMarks(runs) ? { text, runs } : { text };
+    }
+  }
   const text = asString(value.text);
   return text ? { text } : undefined;
 }
@@ -105,14 +167,25 @@ export function normalizeTableData(value: unknown): TableData {
 }
 
 export function tableCellText(row: TableRow | undefined, columnId: string): string {
-  return row?.cells[columnId]?.text ?? '';
+  const cell = row?.cells[columnId];
+  if (!cell) return '';
+  return cell.text ?? (cell.runs ? plainText(cell.runs) : '');
+}
+
+function cloneTableCell(cell: TableCell): TableCell {
+  const text = cell.text ?? (cell.runs ? plainText(cell.runs) : '');
+  return cell.runs && cell.runs.length > 0
+    ? { text, runs: cloneRuns(cell.runs) }
+    : { text };
 }
 
 function cloneCells(cells: Record<string, TableCell>, columns: readonly TableColumn[]): Record<string, TableCell> {
   const out: Record<string, TableCell> = {};
   for (const column of columns) {
     const cell = cells[column.id];
-    if (cell?.text) out[column.id] = { text: cell.text };
+    if (cell && (cell.text || (cell.runs && cell.runs.length > 0))) {
+      out[column.id] = cloneTableCell(cell);
+    }
   }
   return out;
 }
@@ -144,7 +217,9 @@ export function duplicateTableData(data: TableData): TableData {
     const cells: Record<string, TableCell> = {};
     for (const [oldId, cell] of Object.entries(row.cells)) {
       const nextId = columnMap.get(oldId);
-      if (nextId && cell.text) cells[nextId] = { text: cell.text };
+      if (nextId && (cell.text || (cell.runs && cell.runs.length > 0))) {
+        cells[nextId] = cloneTableCell(cell);
+      }
     }
     return {
       id: createId('tr'),
@@ -161,11 +236,12 @@ export function setTableCellText(
   columnId: string,
   text: string
 ): TableData {
-  const value = text.replace(/\r\n?/gu, '\n').slice(0, 10000);
+  const value = text.replace(/\r\n?/gu, '\n').slice(0, MAX_CELL_TEXT_LENGTH);
   const row = data.rows.find(item => item.id === rowId);
   if (!row) return data;
-  const current = row.cells[columnId]?.text ?? '';
-  if (current === value) return data;
+  const current = row.cells[columnId];
+  const currentText = current?.text ?? '';
+  if (currentText === value && !current?.runs) return data;
   return {
     ...data,
     rows: data.rows.map(item => {
@@ -174,6 +250,51 @@ export function setTableCellText(
       if (value) cells[columnId] = { text: value };
       else delete cells[columnId];
       return { ...item, cells };
+    }),
+  };
+}
+
+/** Set rich-text runs on a cell, maintaining `text` projection and omitting `runs` when plain. */
+export function setTableCellRuns(
+  data: TableData,
+  rowId: string,
+  columnId: string,
+  runs: readonly InlineRun[]
+): TableData {
+  const row = data.rows.find(item => item.id === rowId);
+  if (!row) return data;
+  const normalized = clampRuns(runs);
+  const text = plainText(normalized);
+  const current = row.cells[columnId];
+  if (!text) {
+    if (!current) return data;
+    return {
+      ...data,
+      rows: data.rows.map(item => {
+        if (item.id !== rowId) return item;
+        const cells = { ...item.cells };
+        delete cells[columnId];
+        return { ...item, cells };
+      }),
+    };
+  }
+  const rich = hasRichMarks(normalized);
+  if (
+    current &&
+    current.text === text &&
+    (rich ? Boolean(current.runs && runsEqual(current.runs, normalized)) : !current.runs)
+  ) {
+    return data;
+  }
+  const nextCell: TableCell = rich ? { text, runs: normalized } : { text };
+  return {
+    ...data,
+    rows: data.rows.map(item => {
+      if (item.id !== rowId) return item;
+      return {
+        ...item,
+        cells: { ...item.cells, [columnId]: nextCell },
+      };
     }),
   };
 }
@@ -238,7 +359,7 @@ export function setTableColumnWidth(data: TableData, columnId: string, width: nu
 export function tableToTsv(data: TableData): string {
   const rows = data.rows.map(row =>
     data.columns
-      .map(column => row.cells[column.id]?.text ?? '')
+      .map(column => tableCellText(row, column.id))
       .map(value => (/[\t\n\r"]/u.test(value) ? `"${value.replace(/"/gu, '""')}"` : value))
       .join('\t')
   );
@@ -257,7 +378,7 @@ export function duplicateTableRow(
     id: createId('tr'),
     ...(source.backgroundColor ? { backgroundColor: source.backgroundColor } : {}),
     cells: Object.fromEntries(
-      Object.entries(source.cells).map(([columnId, cell]) => [columnId, { text: cell.text }])
+      Object.entries(source.cells).map(([columnId, cell]) => [columnId, cloneTableCell(cell)])
     ),
   };
   const rows = data.rows.slice();
@@ -288,7 +409,7 @@ export function duplicateTableColumn(
         if (!cell) return row;
         return {
           ...row,
-          cells: { ...row.cells, [column.id]: { text: cell.text } },
+          cells: { ...row.cells, [column.id]: cloneTableCell(cell) },
         };
       }),
     },
@@ -324,6 +445,48 @@ export function moveTableColumn(
   if (!column) return data;
   columns.splice(target, 0, column);
   return { ...data, columns };
+}
+
+function moveItemTo<T extends { id: string }>(
+  items: readonly T[],
+  sourceId: string,
+  targetId: string,
+  position: 'before' | 'after'
+): T[] | null {
+  if (sourceId === targetId) return null;
+  const sourceIndex = items.findIndex(item => item.id === sourceId);
+  const targetIndex = items.findIndex(item => item.id === targetId);
+  if (sourceIndex < 0 || targetIndex < 0) return null;
+  const adjustedTarget = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+  const insertIndex = position === 'before' ? adjustedTarget : adjustedTarget + 1;
+  if (insertIndex === sourceIndex) return null;
+  const next = items.slice();
+  const [moved] = next.splice(sourceIndex, 1);
+  if (!moved) return null;
+  next.splice(insertIndex, 0, moved);
+  return next;
+}
+
+/** Move a row immediately before or after `targetRowId` for drag reordering. */
+export function moveTableRowTo(
+  data: TableData,
+  rowId: string,
+  targetRowId: string,
+  position: 'before' | 'after' = 'before'
+): TableData {
+  const rows = moveItemTo(data.rows, rowId, targetRowId, position);
+  return rows ? { ...data, rows } : data;
+}
+
+/** Move a column immediately before or after `targetColumnId` for drag reordering. */
+export function moveTableColumnTo(
+  data: TableData,
+  columnId: string,
+  targetColumnId: string,
+  position: 'before' | 'after' = 'before'
+): TableData {
+  const columns = moveItemTo(data.columns, columnId, targetColumnId, position);
+  return columns ? { ...data, columns } : data;
 }
 
 export function clearTableRow(data: TableData, rowId: string): TableData {

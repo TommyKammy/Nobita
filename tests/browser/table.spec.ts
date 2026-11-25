@@ -518,3 +518,493 @@ test('adds multiple rows by dragging the hover add control', async ({ page }) =>
   await expect(page.locator('.nb-table-grid tbody tr')).toHaveCount(4);
   await expect(page.locator('.nb-table-add-tip')).toHaveCount(0);
 });
+
+async function selectCellRange(
+  page: Page,
+  selector: string,
+  start: number,
+  end: number
+): Promise<void> {
+  await page.evaluate(
+    ({ sel, from, to }) => {
+      const root = document.querySelector('nobita-editor')?.shadowRoot;
+      const cell = root?.querySelector<HTMLElement>(sel);
+      if (!cell) throw new Error(`Missing cell: ${sel}`);
+      const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+      let cursor = 0;
+      let startNode: Node | null = null;
+      let startOffset = 0;
+      let endNode: Node | null = null;
+      let endOffset = 0;
+      let node = walker.nextNode();
+      while (node) {
+        const len = (node.textContent ?? '').length;
+        if (!startNode && from <= cursor + len) {
+          startNode = node;
+          startOffset = Math.max(0, from - cursor);
+        }
+        if (!endNode && to <= cursor + len) {
+          endNode = node;
+          endOffset = Math.max(0, to - cursor);
+          break;
+        }
+        cursor += len;
+        node = walker.nextNode();
+      }
+      if (!startNode || !endNode) throw new Error('Selection offsets out of range');
+      const range = document.createRange();
+      range.setStart(startNode, startOffset);
+      range.setEnd(endNode, endOffset);
+      const selection = root?.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    },
+    { sel: selector, from: start, to: end }
+  );
+}
+
+test('formats simple table cells via floating toolbar, shortcuts, and collapsed caret', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'table-rich-format',
+    title: '',
+    blocks: [
+      {
+        id: 't1',
+        type: 'table',
+        text: [],
+        props: {
+          table: {
+            columns: [{ id: 'c1', width: 200 }, { id: 'c2', width: 200 }],
+            rows: [{ id: 'r1', cells: { c1: { text: 'Hello world' } } }],
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+
+  const c1Selector = '.nb-table-cell[data-row-id="r1"][data-column-id="c1"]';
+  const c1 = page.locator(c1Selector);
+  await c1.click();
+  await selectCellRange(page, c1Selector, 0, 5);
+
+  const toolbar = page.locator('.nb-db-inline-toolbar');
+  await expect(toolbar).toBeVisible();
+  const boldBtn = toolbar.locator('.nb-db-inline-tool[data-tag="strong"]');
+  await expect(boldBtn).toHaveAttribute('data-active', 'false');
+  await expect(boldBtn).toHaveAttribute('aria-pressed', 'false');
+  await boldBtn.click();
+  await expect(boldBtn).toHaveAttribute('data-active', 'true');
+  await expect(boldBtn).toHaveAttribute('aria-pressed', 'true');
+
+  let doc = await getDoc(page);
+  type CellShape = { text?: string; runs?: Array<{ text: string; marks?: Record<string, unknown> }> };
+  let cellData = (
+    doc.blocks[0]?.props.table as { rows: Array<{ cells: Record<string, CellShape> }> }
+  ).rows[0]?.cells.c1;
+  expect(cellData).toEqual({
+    text: 'Hello world',
+    runs: [{ text: 'Hello', marks: { bold: true } }, { text: ' world' }],
+  });
+
+  // Shortcuts toggle italic, underline, code, strike, and remove bold on partial range
+  for (const [shortcut, mark] of [
+    ['Control+i', 'italic'],
+    ['Control+u', 'underline'],
+    ['Control+e', 'code'],
+    ['Control+Shift+s', 'strike'],
+  ] as const) {
+    await page.keyboard.press(shortcut);
+    doc = await getDoc(page);
+    cellData = (
+      doc.blocks[0]?.props.table as { rows: Array<{ cells: Record<string, CellShape> }> }
+    ).rows[0]?.cells.c1;
+    expect(cellData?.runs?.[0]?.marks?.[mark]).toBe(true);
+    await page.keyboard.press(shortcut);
+  }
+  await page.keyboard.press('Control+b');
+  doc = await getDoc(page);
+  cellData = (
+    doc.blocks[0]?.props.table as { rows: Array<{ cells: Record<string, CellShape> }> }
+  ).rows[0]?.cells.c1;
+  expect(cellData).toEqual({ text: 'Hello world' });
+
+  // Collapsed-caret pending formatting
+  const c2 = page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c2"]');
+  await c2.click();
+  await page.keyboard.press('Control+b');
+  await page.keyboard.type('Bold');
+  await page.keyboard.press('Control+b');
+  await page.keyboard.type('Plain');
+  await expect(c2).toHaveText('BoldPlain');
+  doc = await getDoc(page);
+  const c2Data = (
+    doc.blocks[0]?.props.table as { rows: Array<{ cells: Record<string, CellShape> }> }
+  ).rows[0]?.cells.c2;
+  expect(c2Data).toEqual({
+    text: 'BoldPlain',
+    runs: [{ text: 'Bold', marks: { bold: true } }, { text: 'Plain' }],
+  });
+});
+
+test('preserves caret position and formatting across inline Undo/Redo in table cells', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'table-rich-undo',
+    title: '',
+    blocks: [
+      {
+        id: 't1',
+        type: 'table',
+        text: [],
+        props: {
+          table: {
+            columns: [{ id: 'c1', width: 220 }],
+            rows: [
+              {
+                id: 'r1',
+                cells: {
+                  c1: {
+                    text: 'Hello world',
+                    runs: [{ text: 'Hello', marks: { bold: true } }, { text: ' world' }],
+                  },
+                },
+              },
+            ],
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+
+  const c1Selector = '.nb-table-cell[data-row-id="r1"][data-column-id="c1"]';
+  const c1 = page.locator(c1Selector);
+  await c1.click();
+  await selectCellRange(page, c1Selector, 5, 5);
+  await page.keyboard.type('!');
+  await expect(c1).toHaveText('Hello! world');
+
+  await page.keyboard.press('Control+z');
+  await expect(c1).toBeFocused();
+  await expect(c1).toHaveText('Hello world');
+  await expect(c1.locator('.nb-m-bold')).toHaveText('Hello');
+
+  // Verify caret stayed in the middle of the cell (offset 6, neither 0 nor end 11) by typing '?'
+  await page.keyboard.type('?');
+  await expect(c1).toHaveText('Hello ?world');
+
+  await page.keyboard.press('Control+z');
+  await expect(c1).toHaveText('Hello world');
+  await page.keyboard.press('Control+Shift+z');
+  await expect(c1).toHaveText('Hello ?world');
+});
+
+test('guards IME composition and sanitizes single-cell HTML paste', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, tableDoc());
+
+  const c1Selector = '.nb-table-cell[data-row-id="r1"][data-column-id="c1"]';
+  const c1 = page.locator(c1Selector);
+  await c1.click();
+  await page.keyboard.press('End');
+
+  await page.evaluate(sel => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const cell = root?.querySelector<HTMLElement>(sel);
+    if (!cell) throw new Error('Missing cell');
+    cell.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    cell.textContent = 'Aあ';
+    cell.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+    cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  }, c1Selector);
+
+  // Enter during composition did not move focus to row 2, and mid-composition input did not commit
+  await expect(c1).toBeFocused();
+  let doc = await getDoc(page);
+  expect(
+    (doc.blocks[0]?.props.table as { rows: Array<{ cells: Record<string, { text?: string }> }> })
+      .rows[0]?.cells.c1?.text
+  ).toBe('A');
+
+  await page.evaluate(sel => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const cell = root?.querySelector<HTMLElement>(sel);
+    cell?.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'あ' }));
+  }, c1Selector);
+
+  doc = await getDoc(page);
+  expect(
+    (doc.blocks[0]?.props.table as { rows: Array<{ cells: Record<string, { text?: string }> }> })
+      .rows[0]?.cells.c1?.text
+  ).toBe('Aあ');
+
+  // Single-cell paste with raw HTML + plain text inserts sanitized plain text only
+  const c2Selector = '.nb-table-cell[data-row-id="r1"][data-column-id="c2"]';
+  const c2 = page.locator(c2Selector);
+  await c2.click();
+  await page.keyboard.press('End');
+  await page.evaluate(sel => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const cell = root?.querySelector<HTMLElement>(sel);
+    const data = new DataTransfer();
+    data.setData('text/html', '<b>Hi</b><img src=x><table><tr><td>bad</td></tr></table>');
+    data.setData('text/plain', 'Hi');
+    cell?.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: data }));
+  }, c2Selector);
+
+  await expect(c2).toHaveText('BHi');
+  await expect(c2.locator('img, table, b')).toHaveCount(0);
+});
+
+test('preserves rich-text marks when pasting an HTML table', async ({ page }) => {
+  await openFixture(page);
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData(
+      'text/html',
+      '<table><tr><td><strong>Bold</strong> and <code>code</code></td><td>Plain</td></tr></table>'
+    );
+    document
+      .querySelector('nobita-editor')
+      ?.shadowRoot?.querySelector('[data-block-id="b1"] .nb-text')
+      ?.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: data }));
+  });
+  await expect(page.locator('.nb-table-grid')).toBeVisible();
+  const doc = await getDoc(page);
+  const table = doc.blocks.find(block => block.type === 'table')?.props.table as {
+    columns: Array<{ id: string }>;
+    rows: Array<{
+      cells: Record<string, { text?: string; runs?: Array<{ text: string; marks?: Record<string, unknown> }> }>;
+    }>;
+  };
+  const [c1, c2] = table.columns;
+  expect(table.rows[0]?.cells[c1!.id]).toEqual({
+    text: 'Bold and code',
+    runs: [
+      { text: 'Bold', marks: { bold: true } },
+      { text: ' and ' },
+      { text: 'code', marks: { code: true } },
+    ],
+  });
+  expect(table.rows[0]?.cells[c2!.id]).toEqual({ text: 'Plain' });
+});
+
+test('preserves Shift+Enter line breaks alongside rich-text marks', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, tableDoc());
+  const c2 = page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c2"]');
+  await c2.click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Control+b');
+  await page.keyboard.type('Top');
+  await page.keyboard.press('Shift+Enter');
+  await page.keyboard.type('Bottom');
+
+  const doc = await getDoc(page);
+  const cellData = (
+    doc.blocks[0]?.props.table as {
+      rows: Array<{
+        cells: Record<string, { text?: string; runs?: Array<{ text: string; marks?: Record<string, unknown> }> }>;
+      }>;
+    }
+  ).rows[0]?.cells.c2;
+  expect(cellData?.text).toBe('BTop\nBottom');
+  expect(cellData?.runs).toEqual([
+    { text: 'B' },
+    { text: 'Top\nBottom', marks: { bold: true } },
+  ]);
+});
+
+test('renders highlight and text-color marks inside simple table cells', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'table-colors',
+    title: '',
+    blocks: [
+      {
+        id: 't1',
+        type: 'table',
+        text: [],
+        props: {
+          table: {
+            columns: [{ id: 'c1', width: 180 }],
+            rows: [
+              {
+                id: 'r1',
+                cells: {
+                  c1: {
+                    text: 'Colored',
+                    runs: [{ text: 'Colored', marks: { highlight: 'yellow', color: 'red' } }],
+                  },
+                },
+              },
+            ],
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+
+  const span = page.locator('.nb-table-cell [data-highlight="yellow"][data-text-color="red"]');
+  await expect(span).toHaveText('Colored');
+  const styles = await span.evaluate(el => {
+    const cs = getComputedStyle(el);
+    return { bg: cs.backgroundColor, color: cs.color };
+  });
+  expect(styles.bg).not.toBe('rgba(0, 0, 0, 0)');
+  expect(styles.color).not.toBe('rgb(0, 0, 0)');
+});
+
+test('reorders rows and columns via drag handles with drop-line indicator, Undo, and click menu fallback', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'table-drag-reorder',
+    title: '',
+    blocks: [
+      {
+        id: 't1',
+        type: 'table',
+        text: [],
+        props: {
+          table: {
+            columns: [
+              { id: 'c1', width: 110, backgroundColor: '#fef3c7' },
+              { id: 'c2', width: 150 },
+              { id: 'c3', width: 190 },
+            ],
+            rows: [
+              {
+                id: 'r1',
+                cells: {
+                  c1: { text: 'R1C1', runs: [{ text: 'R1C1', marks: { bold: true } }] },
+                  c2: { text: 'R1C2' },
+                  c3: { text: 'R1C3' },
+                },
+              },
+              { id: 'r2', cells: { c1: { text: 'R2C1' } } },
+              { id: 'r3', cells: { c1: { text: 'R3C1' } } },
+            ],
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+
+  // Drag row 1 handle below row 3
+  await page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c1"]').hover();
+  const rowHandle = page.locator('.nb-table-row-handle[data-row-id="r1"]');
+  const rowHandleBox = await rowHandle.boundingBox();
+  const r3Box = await page.locator('.nb-table-cell[data-row-id="r3"][data-column-id="c1"]').boundingBox();
+  if (!rowHandleBox || !r3Box) throw new Error('Missing row drag boxes');
+
+  await page.mouse.move(rowHandleBox.x + rowHandleBox.width / 2, rowHandleBox.y + rowHandleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(r3Box.x + r3Box.width / 2, r3Box.y + r3Box.height - 2, { steps: 8 });
+  await expect(page.locator('.nb-table-drop-line')).toHaveAttribute('data-axis', 'row');
+  await expect(page.locator('.nb-table-drop-line')).toHaveAttribute('data-visible', 'true');
+  await page.mouse.up();
+
+  await expect(page.locator('.nb-table-menu')).toHaveCount(0);
+  await expect(page.locator('.nb-table-drop-line')).toHaveAttribute('data-visible', 'false');
+  let doc = await getDoc(page);
+  type ReorderTable = {
+    columns: Array<{ id: string; width?: number; backgroundColor?: string }>;
+    rows: Array<{ id: string; cells: Record<string, { text?: string; runs?: unknown[] }> }>;
+  };
+  let table = doc.blocks[0]?.props.table as ReorderTable;
+  expect(table.rows.map(r => r.id)).toEqual(['r2', 'r3', 'r1']);
+  expect(table.rows[2]?.cells.c1?.runs).toEqual([{ text: 'R1C1', marks: { bold: true } }]);
+
+  // Undo restores original row order
+  await page.evaluate(() => {
+    (window as unknown as { __editor?: { undo(): boolean } }).__editor?.undo();
+  });
+  doc = await getDoc(page);
+  table = doc.blocks[0]?.props.table as ReorderTable;
+  expect(table.rows.map(r => r.id)).toEqual(['r1', 'r2', 'r3']);
+
+  // Drag column 1 handle past column 3
+  await page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c1"]').hover();
+  const colHandle = page.locator('.nb-table-column-handle[data-column-id="c1"]');
+  const colHandleBox = await colHandle.boundingBox();
+  const c3Box = await page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c3"]').boundingBox();
+  if (!colHandleBox || !c3Box) throw new Error('Missing column drag boxes');
+
+  await page.mouse.move(colHandleBox.x + colHandleBox.width / 2, colHandleBox.y + colHandleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(c3Box.x + c3Box.width - 2, c3Box.y + c3Box.height / 2, { steps: 8 });
+  await expect(page.locator('.nb-table-drop-line')).toHaveAttribute('data-axis', 'column');
+  await expect(page.locator('.nb-table-drop-line')).toHaveAttribute('data-visible', 'true');
+  await page.mouse.up();
+
+  await expect(page.locator('.nb-table-menu')).toHaveCount(0);
+  doc = await getDoc(page);
+  table = doc.blocks[0]?.props.table as ReorderTable;
+  expect(table.columns.map(c => c.id)).toEqual(['c2', 'c3', 'c1']);
+  expect(table.columns[2]).toMatchObject({ id: 'c1', width: 110, backgroundColor: '#fef3c7' });
+  expect(table.rows[0]?.cells.c1?.runs).toEqual([{ text: 'R1C1', marks: { bold: true } }]);
+
+  // Undo restores original column order
+  await page.evaluate(() => {
+    (window as unknown as { __editor?: { undo(): boolean } }).__editor?.undo();
+  });
+  doc = await getDoc(page);
+  table = doc.blocks[0]?.props.table as ReorderTable;
+  expect(table.columns.map(c => c.id)).toEqual(['c1', 'c2', 'c3']);
+
+  // Normal click without drag still opens row & column menus
+  await page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c1"]').hover();
+  await page.locator('.nb-table-row-handle[data-row-id="r1"]').click();
+  await expect(page.locator('.nb-table-menu')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await page.locator('.nb-table-cell[data-row-id="r1"][data-column-id="c1"]').hover();
+  await page.locator('.nb-table-column-handle[data-column-id="c1"]').click();
+  await expect(page.locator('.nb-table-menu')).toHaveCount(1);
+});
+
+test('blocks handles, shortcuts, and paste in readonly simple tables', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, tableDoc());
+  await page.evaluate(() => {
+    (window as unknown as { __editor?: { setReadonly(value: boolean): void } }).__editor?.setReadonly(
+      true
+    );
+  });
+
+  await expect(page.locator('.nb-table-row-handle')).toHaveCount(0);
+  await expect(page.locator('.nb-table-column-handle')).toHaveCount(0);
+
+  const c1Selector = '.nb-table-cell[data-row-id="r1"][data-column-id="c1"]';
+  const c1 = page.locator(c1Selector);
+  await expect(c1).toHaveAttribute('contenteditable', 'false');
+  await c1.click();
+  await page.keyboard.press('Control+b');
+  await page.evaluate(sel => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const cell = root?.querySelector<HTMLElement>(sel);
+    const data = new DataTransfer();
+    data.setData('text/plain', 'Injected');
+    cell?.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: data }));
+  }, c1Selector);
+
+  const doc = await getDoc(page);
+  expect(
+    (doc.blocks[0]?.props.table as { rows: Array<{ cells: Record<string, { text?: string; runs?: unknown[] }> }> })
+      .rows[0]?.cells.c1
+  ).toEqual({ text: 'A' });
+});

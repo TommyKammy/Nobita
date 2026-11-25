@@ -281,7 +281,11 @@ function tableToHtml(block: Block): string {
           const style = color
             ? ` style="background-color:${escapeHtml(color)}"`
             : '';
-          return `<td${style}>${escapeHtml(cell?.text ?? '')}</td>`;
+          const content =
+            cell?.runs && cell.runs.length > 0
+              ? runsToInlineHtml(cell.runs)
+              : escapeHtml(cell?.text ?? '');
+          return `<td${style}>${content}</td>`;
         })
         .join('');
       return `<tr>${cells}</tr>`;

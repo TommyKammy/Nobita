@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createBlock, createDoc, duplicateBlockTree } from '../src/doc.js';
+import { countWords, createBlock, createDoc, duplicateBlockTree } from '../src/doc.js';
 import { blocksToMarkdown, markdownToBlocks } from '../src/markdown.js';
 import { blocksToHtml, cloneDoc, parseDoc } from '../src/serialize.js';
 import {
   clearTableColumn,
   clearTableRow,
+  cloneTableData,
   createTableData,
   deleteTableColumn,
   deleteTableRow,
@@ -13,9 +14,12 @@ import {
   duplicateTableRow,
   insertTableColumn,
   insertTableRow,
-  normalizeTableData,
   moveTableColumn,
+  moveTableColumnTo,
   moveTableRow,
+  moveTableRowTo,
+  normalizeTableData,
+  setTableCellRuns,
   setTableCellText,
   setTableColumnColor,
   setTableRowColor,
@@ -233,5 +237,241 @@ describe('simple table', () => {
     const copy = duplicateBlockTree(block);
     expect(copy.props.table?.rows[0]?.id).not.toBe(block.props.table?.rows[0]?.id);
     expect(copy.props.table?.columns[0]?.id).not.toBe(block.props.table?.columns[0]?.id);
+  });
+
+  it('sets rich-text cell runs, omits runs for plain text, deletes empty cells, and keeps no-op identity', () => {
+    const table = createTableData({ rows: 1, columns: 2 });
+    const r1 = table.rows[0]!.id;
+    const c1 = table.columns[0]!.id;
+
+    const rich = setTableCellRuns(table, r1, c1, [
+      { text: 'He', marks: { bold: true } },
+      { text: 'llo', marks: { bold: true } },
+      { text: ' world' },
+    ]);
+    expect(rich.rows[0]?.cells[c1]).toEqual({
+      text: 'Hello world',
+      runs: [{ text: 'Hello', marks: { bold: true } }, { text: ' world' }],
+    });
+    expect(tableCellText(rich.rows[0], c1)).toBe('Hello world');
+
+    // No-op returns exact same table reference.
+    expect(
+      setTableCellRuns(rich, r1, c1, [
+        { text: 'Hello', marks: { bold: true } },
+        { text: ' world' },
+      ])
+    ).toBe(rich);
+    expect(setTableCellRuns(rich, 'missing', c1, [{ text: 'x' }])).toBe(rich);
+
+    // Setting plain runs omits `runs`.
+    const plain = setTableCellRuns(rich, r1, c1, [{ text: 'Plain' }]);
+    expect(plain.rows[0]?.cells[c1]).toEqual({ text: 'Plain' });
+    expect('runs' in (plain.rows[0]?.cells[c1] ?? {})).toBe(false);
+    expect(setTableCellRuns(plain, r1, c1, [{ text: 'Plain' }])).toBe(plain);
+
+    // Overwriting a rich-text cell with setTableCellText strips runs even when text matches.
+    const stripped = setTableCellText(rich, r1, c1, 'Hello world');
+    expect(stripped.rows[0]?.cells[c1]).toEqual({ text: 'Hello world' });
+    expect('runs' in (stripped.rows[0]?.cells[c1] ?? {})).toBe(false);
+    expect(setTableCellText(stripped, r1, c1, 'Hello world')).toBe(stripped);
+
+    // Empty runs delete the cell; deleting an already empty cell is a no-op.
+    const cleared = setTableCellRuns(rich, r1, c1, [{ text: '' }]);
+    expect(cleared.rows[0]?.cells[c1]).toBeUndefined();
+    expect(setTableCellRuns(cleared, r1, c1, [])).toBe(cleared);
+
+    // Clamps to 10,000 characters.
+    const longTable = setTableCellRuns(table, r1, c1, [
+      { text: 'a'.repeat(9995), marks: { bold: true } },
+      { text: 'b'.repeat(20), marks: { italic: true } },
+    ]);
+    expect(longTable.rows[0]?.cells[c1]?.text).toHaveLength(10000);
+    expect(longTable.rows[0]?.cells[c1]?.runs?.[1]?.text).toBe('bbbbb');
+  });
+
+  it('normalizes rich-text cells, syncs plain text projection, and omits plain runs', () => {
+    const normalized = normalizeTableData({
+      columns: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }],
+      rows: [
+        {
+          id: 'r1',
+          cells: {
+            c1: {
+              text: 'stale',
+              runs: [
+                { text: 'Bo', marks: { bold: true } },
+                { text: 'ld', marks: { bold: true } },
+                { text: '!' },
+              ],
+            },
+            c2: {
+              text: 'plain',
+              runs: [{ text: 'plain' }],
+            },
+            c3: {
+              runs: [{ text: 'runs-only', marks: { code: true } }],
+            },
+          },
+        },
+        {
+          id: 'r2',
+          cells: {
+            c1: { runs: [{ text: 'only-plain-runs' }] },
+            c2: { runs: [] },
+          },
+        },
+      ],
+    });
+
+    expect(normalized.rows[0]?.cells.c1).toEqual({
+      text: 'Bold!',
+      runs: [{ text: 'Bold', marks: { bold: true } }, { text: '!' }],
+    });
+    expect(normalized.rows[0]?.cells.c2).toEqual({ text: 'plain' });
+    expect('runs' in (normalized.rows[0]?.cells.c2 ?? {})).toBe(false);
+    expect(normalized.rows[0]?.cells.c3).toEqual({
+      text: 'runs-only',
+      runs: [{ text: 'runs-only', marks: { code: true } }],
+    });
+    expect(normalized.rows[1]?.cells.c1).toEqual({ text: 'only-plain-runs' });
+    expect('runs' in (normalized.rows[1]?.cells.c1 ?? {})).toBe(false);
+    expect(normalized.rows[1]?.cells.c2).toBeUndefined();
+
+    const doc = createDoc({
+      blocks: [createBlock('table', { id: 't', props: { table: normalized } })],
+    });
+    expect(countWords(doc)).toBe(4);
+  });
+
+  it('deep-clones cell runs across cloneTableData and duplicate helpers', () => {
+    const base = createTableData({ rows: 2, columns: 2 });
+    const [r1] = base.rows;
+    const [c1] = base.columns;
+    const table = setTableCellRuns(base, r1!.id, c1!.id, [
+      { text: '@Ada', marks: { bold: true, mention: { id: 'u1', label: 'Ada', kind: 'user' } } },
+    ]);
+
+    const cloned = cloneTableData(table);
+    cloned.rows[0]!.cells[c1!.id]!.runs![0]!.text = 'Mutated';
+    cloned.rows[0]!.cells[c1!.id]!.runs![0]!.marks!.mention!.label = 'Mutated';
+
+    const dupTable = duplicateTableData(table);
+    const dupColId = dupTable.columns[0]!.id;
+    dupTable.rows[0]!.cells[dupColId]!.runs![0]!.text = 'DupTable';
+
+    const dupRow = duplicateTableRow(table, r1!.id);
+    dupRow.data.rows[1]!.cells[c1!.id]!.runs![0]!.marks!.bold = undefined;
+
+    const dupCol = duplicateTableColumn(table, c1!.id);
+    dupCol.data.rows[0]!.cells[dupCol.columnId]!.runs![0]!.text = 'DupCol';
+
+    expect(table.rows[0]?.cells[c1!.id]?.runs).toEqual([
+      { text: '@Ada', marks: { bold: true, mention: { id: 'u1', label: 'Ada', kind: 'user' } } },
+    ]);
+  });
+
+  it('moves rows and columns to target before/after positions immutably', () => {
+    const table = createTableData({ rows: 4, columns: 4 });
+    const [r0, r1, r2, r3] = table.rows.map(r => r.id);
+    const [c0, c1, c2, c3] = table.columns.map(c => c.id);
+
+    // Forward moves
+    expect(moveTableRowTo(table, r0!, r2!, 'before').rows.map(r => r.id)).toEqual([r1, r0, r2, r3]);
+    expect(moveTableRowTo(table, r0!, r2!, 'after').rows.map(r => r.id)).toEqual([r1, r2, r0, r3]);
+    expect(moveTableColumnTo(table, c0!, c3!, 'after').columns.map(c => c.id)).toEqual([
+      c1,
+      c2,
+      c3,
+      c0,
+    ]);
+
+    // Backward moves
+    expect(moveTableRowTo(table, r3!, r1!, 'before').rows.map(r => r.id)).toEqual([r0, r3, r1, r2]);
+    expect(moveTableRowTo(table, r3!, r0!, 'after').rows.map(r => r.id)).toEqual([r0, r3, r1, r2]);
+    expect(moveTableColumnTo(table, c2!, c0!, 'before').columns.map(c => c.id)).toEqual([
+      c2,
+      c0,
+      c1,
+      c3,
+    ]);
+
+    // No-ops keep exact reference
+    expect(moveTableRowTo(table, r1!, r1!, 'before')).toBe(table);
+    expect(moveTableRowTo(table, r0!, r1!, 'before')).toBe(table);
+    expect(moveTableRowTo(table, r1!, r0!, 'after')).toBe(table);
+    expect(moveTableRowTo(table, 'missing', r1!, 'before')).toBe(table);
+    expect(moveTableRowTo(table, r1!, 'missing', 'after')).toBe(table);
+
+    expect(moveTableColumnTo(table, c1!, c1!, 'after')).toBe(table);
+    expect(moveTableColumnTo(table, c0!, c1!, 'before')).toBe(table);
+    expect(moveTableColumnTo(table, c1!, c0!, 'after')).toBe(table);
+    expect(moveTableColumnTo(table, 'missing', c1!, 'before')).toBe(table);
+    expect(moveTableColumnTo(table, c1!, 'missing', 'after')).toBe(table);
+  });
+
+  it('exports rich-text table cells to HTML and round-trips through Markdown', () => {
+    const base = createTableData({ rows: 2, columns: 2 });
+    const [c1, c2] = base.columns;
+    const [r1, r2] = base.rows;
+
+    let edited = setTableCellRuns(base, r1!.id, c1!.id, [{ text: 'Task', marks: { bold: true } }]);
+    edited = setTableCellText(edited, r1!.id, c2!.id, 'Notes');
+    edited = setTableCellRuns(edited, r2!.id, c1!.id, [
+      { text: 'Check ' },
+      { text: 'spec', marks: { link: 'https://example.com' } },
+      { text: ' & ' },
+      { text: 'code', marks: { code: true } },
+    ]);
+    edited = setTableCellRuns(edited, r2!.id, c2!.id, [
+      { text: 'old', marks: { strike: true } },
+      { text: ' ' },
+      { text: 'new\nline', marks: { italic: true } },
+    ]);
+
+    const block = createBlock('table', { id: 't', props: { table: edited } });
+    const html = blocksToHtml([block]);
+    expect(html).toContain('<strong>Task</strong>');
+    expect(html).toContain('<td>Notes</td>');
+    expect(html).toContain('<a href="https://example.com" rel="noopener noreferrer nofollow">spec</a>');
+    expect(html).toContain('<code>code</code>');
+    expect(html).toContain('<s>old</s> <em>new<br>line</em>');
+
+    const markdown = blocksToMarkdown(createDoc({ blocks: [block] }), { title: false });
+    expect(markdown).toContain('| **Task** | Notes |');
+    expect(markdown).toContain(
+      '| Check [spec](https://example.com) & `code` | ~~old~~ *new<br>line* |'
+    );
+
+    const imported = markdownToBlocks(markdown, { extractTitle: false }).blocks.find(
+      item => item.type === 'table'
+    );
+    const impTable = imported?.props.table;
+    expect(impTable).toBeDefined();
+    const [ic1, ic2] = impTable!.columns;
+    const [ir1, ir2] = impTable!.rows;
+    expect(ir1?.cells[ic1!.id]).toEqual({
+      text: 'Task',
+      runs: [{ text: 'Task', marks: { bold: true } }],
+    });
+    expect(ir1?.cells[ic2!.id]).toEqual({ text: 'Notes' });
+    expect('runs' in (ir1?.cells[ic2!.id] ?? {})).toBe(false);
+    expect(ir2?.cells[ic1!.id]).toEqual({
+      text: 'Check spec & code',
+      runs: [
+        { text: 'Check ' },
+        { text: 'spec', marks: { link: 'https://example.com' } },
+        { text: ' & ' },
+        { text: 'code', marks: { code: true } },
+      ],
+    });
+    expect(ir2?.cells[ic2!.id]).toEqual({
+      text: 'old new\nline',
+      runs: [
+        { text: 'old', marks: { strike: true } },
+        { text: ' ' },
+        { text: 'new\nline', marks: { italic: true } },
+      ],
+    });
   });
 });

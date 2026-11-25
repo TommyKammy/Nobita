@@ -10,6 +10,7 @@ import {
   markdownToBlocks,
   normalizeRuns,
   parseDoc,
+  plainText,
   TEXT_COLOR_RGB_REFERENCES,
 } from '@nobita/core';
 import type {
@@ -306,6 +307,23 @@ function languageOf(pre: Element): string {
   return match?.[1] ?? 'text';
 }
 
+function trimCellRuns(runs: readonly InlineRun[]): InlineRun[] {
+  const copy = normalizeRuns(runs);
+  while (copy.length > 0) {
+    const first = copy[0]!;
+    first.text = first.text.replace(/^\s+/u, '');
+    if (first.text.length > 0) break;
+    copy.shift();
+  }
+  while (copy.length > 0) {
+    const last = copy[copy.length - 1]!;
+    last.text = last.text.replace(/\s+$/u, '');
+    if (last.text.length > 0) break;
+    copy.pop();
+  }
+  return normalizeRuns(copy);
+}
+
 function tableToSimpleTable(table: Element): TableData | null {
   const allRows = Array.from(table.querySelectorAll('tr'));
   if (allRows.length === 0) return null;
@@ -318,11 +336,11 @@ function tableToSimpleTable(table: Element): TableData | null {
     columns.forEach((column, index) => {
       const cell = cells[index];
       if (!cell) return;
-      const text = inlineRuns(cell)
-        .map(run => run.text)
-        .join('')
-        .trim();
-      if (text) tableRow.cells[column.id] = { text };
+      const runs = trimCellRuns(inlineRuns(cell));
+      const text = plainText(runs);
+      if (!text) return;
+      const hasMarks = runs.some(run => Boolean(run.marks && Object.keys(run.marks).length > 0));
+      tableRow.cells[column.id] = hasMarks ? { text, runs } : { text };
     });
     return tableRow;
   });

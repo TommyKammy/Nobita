@@ -26,9 +26,10 @@ import {
 
 export interface DatabaseRichTextContext {
   rootElement: HTMLElement;
-  getDetailElement: () => HTMLElement | null;
+  getDetailElement?: () => HTMLElement | null;
   isReadonly: () => boolean;
   getSignal: () => AbortSignal;
+  richTextSelector?: string;
 }
 
 /** Manages inline rich-text formatting toolbar, pending marks, IME composition, and paste. */
@@ -89,12 +90,13 @@ export class DatabaseRichTextController {
       this.hideToolbar();
       return;
     }
+    const selector = this.#ctx.richTextSelector ?? '.nb-db-rich-text';
     const root = this.#ctx.rootElement.getRootNode() as ShadowRoot;
     const active = root.activeElement as HTMLElement | null;
     if (
       active &&
       active.isContentEditable !== true &&
-      !active.closest('.nb-db-rich-text')
+      !active.closest(selector)
     ) {
       this.hideToolbar();
       return;
@@ -110,8 +112,8 @@ export class DatabaseRichTextController {
       node.nodeType === Node.ELEMENT_NODE
         ? (node as HTMLElement)
         : node.parentElement;
-    const target = element?.closest<HTMLElement>('.nb-db-rich-text') ?? null;
-    const detail = this.#ctx.getDetailElement();
+    const target = element?.closest<HTMLElement>(selector) ?? null;
+    const detail = this.#ctx.getDetailElement?.() ?? null;
     if (
       !target ||
       target.isContentEditable !== true ||
@@ -348,8 +350,9 @@ export class DatabaseRichTextController {
       node.nodeType === Node.ELEMENT_NODE
         ? (node as HTMLElement)
         : node.parentElement;
-    const target = element?.closest<HTMLElement>('.nb-db-rich-text') ?? null;
-    const detail = this.#ctx.getDetailElement();
+    const selector = this.#ctx.richTextSelector ?? '.nb-db-rich-text';
+    const target = element?.closest<HTMLElement>(selector) ?? null;
+    const detail = this.#ctx.getDetailElement?.() ?? null;
     if (
       !target ||
       target.isContentEditable !== true ||

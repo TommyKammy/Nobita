@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **93.7 KB gzipped** (`349.5 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core and data views.
+- **95.6 KB gzipped** (`356.9 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core and data views.
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 93.7 KB gzipped bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 95.6 KB gzipped bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -174,7 +174,7 @@ A document is deliberately simple, stable JSON:
 
 **Table** and **Database** are separate blocks.
 
-- A `table` block is a simple editable grid (`props.table`). It follows AFFiNE's table model: row/column handles sit on the first cell edges, drag selection covers multiple cells (copy, cut, paste and clear), menus are integrated into the grid, hover plus controls add rows/columns, and row/column background colors are available. It has no properties or views.
+- A `table` block is a simple editable grid (`props.table`). It follows AFFiNE's table model: row/column handles sit on the first cell edges (click for menus, drag to reorder rows/columns), cells support inline rich-text formatting (`cell.runs` with `cell.text` plain projection and HTML/Markdown table round-trip), drag selection covers multiple cells (copy, cut, paste and clear), hover plus controls add rows/columns, and row/column background colors are available. It has no properties or views.
 - A `database` block is the typed data view (`props.database`). It has typed columns, row records and one or more named views.
 
 ```json
@@ -386,9 +386,9 @@ Bundle sizes (`pnpm size`):
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 349.5 KB | **93.7 KB** |
-| Editor IIFE (`nobita.global.js`) | 349.5 KB | **93.7 KB** |
-| Demo app (editor + UI + seed data) | 393.9 KB | 105.5 KB |
+| Editor ESM (`nobita.js`) | 356.9 KB | **95.6 KB** |
+| Editor IIFE (`nobita.global.js`) | 356.9 KB | **95.6 KB** |
+| Demo app (editor + UI + seed data) | 401.6 KB | 107.5 KB |
 
 The optional `@nobita/storage` package is not part of any editor bundle; it is only present when a host imports it.
 
@@ -421,7 +421,7 @@ A command-by-command comparison with AFFiNE is in [docs/command-comparison.md](d
 ## Roadmap
 
 - Database: formulas/relations, progress/image properties and AFFiNE card covers. Calendar view is intentionally out of scope.
-- Simple table: rich-text cells, merged cells and row/column drag reorder.
+- Simple table: merged cells.
 - Page workspace: navigation, backlinks and page trees.
 - Collaboration adapter (Yjs/Automerge) behind an explicit interface.
 - Virtualized rendering for 10k+ block documents.

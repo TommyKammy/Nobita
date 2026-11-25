@@ -1,8 +1,8 @@
 import { createBlock } from './doc.js';
-import { createTableColumn, createTableData, createTableRow } from './table.js';
+import { createTableColumn, createTableData, createTableRow, hasRichMarks } from './table.js';
 import { databaseCellText, sortedDatabaseRows } from './database.js';
 import { normalizeRuns, plainText, runsLength, sliceRuns } from './text.js';
-import type { Block, Doc, InlineMark, InlineRun } from './types.js';
+import type { Block, Doc, InlineMark, InlineRun, TableCell } from './types.js';
 import { safeHref, safeImageSrc } from './url.js';
 
 const ESCAPABLE = new Set(['\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!', '|', '>', '~']);
@@ -172,7 +172,7 @@ function protectTableEscapes(value: string): string {
   return out;
 }
 
-function decodeTableText(value: string): string {
+function decodeTableCell(value: string): TableCell | undefined {
   const codeSpans: string[] = [];
   let protectedText = '';
   let index = 0;
@@ -199,17 +199,38 @@ function decodeTableText(value: string): string {
     index += 1;
   }
 
-  let text = plainText(
-    parseInlineMarkdown(
-      protectTableEscapes(protectedText).replace(/<br\s*\/?>/giu, '\n')
-    )
-  )
-    .replaceAll(TABLE_LT, '<')
-    .replaceAll(TABLE_GT, '>');
-  codeSpans.forEach((inner, codeIndex) => {
-    text = text.replaceAll(`\u0000CODE${codeIndex}\u0000`, inner);
-  });
-  return text;
+  const parsed = parseInlineMarkdown(
+    protectTableEscapes(protectedText).replace(/<br\s*\/?>/giu, '\n')
+  );
+  const expanded: InlineRun[] = [];
+  const codeTokenRe = /(\u0000CODE\d+\u0000)/gu;
+  for (const run of parsed) {
+    const restored = run.text.replaceAll(TABLE_LT, '<').replaceAll(TABLE_GT, '>');
+    if (codeSpans.length === 0 || !restored.includes('\u0000CODE')) {
+      expanded.push(run.marks ? { text: restored, marks: run.marks } : { text: restored });
+      continue;
+    }
+    for (const part of restored.split(codeTokenRe)) {
+      if (!part) continue;
+      const match = /^\u0000CODE(\d+)\u0000$/u.exec(part);
+      if (match?.[1]) {
+        const inner = codeSpans[Number(match[1])] ?? '';
+        if (inner) {
+          expanded.push({
+            text: inner,
+            marks: { ...(run.marks ?? {}), code: true },
+          });
+        }
+      } else {
+        expanded.push(run.marks ? { text: part, marks: run.marks } : { text: part });
+      }
+    }
+  }
+
+  const runs = normalizeRuns(expanded);
+  const text = plainText(runs);
+  if (!text) return undefined;
+  return hasRichMarks(runs) ? { text, runs } : { text };
 }
 
 function isTableSeparator(line: string): boolean {
@@ -301,7 +322,9 @@ export function markdownToBlocks(
       const tableRows = [createTableRow()];
       headerCells.forEach((value, columnIndex) => {
         const column = columns[columnIndex];
-        if (column && value) tableRows[0]!.cells[column.id] = { text: decodeTableText(value) };
+        if (!column || !value) return;
+        const cell = decodeTableCell(value);
+        if (cell) tableRows[0]!.cells[column.id] = cell;
       });
       index += 2;
       while (index < lines.length) {
@@ -310,8 +333,8 @@ export function markdownToBlocks(
         const cells = splitTableRow(line);
         const row = createTableRow();
         columns.forEach((column, columnIndex) => {
-          const value = decodeTableText(cells[columnIndex] ?? '');
-          if (value) row.cells[column.id] = { text: value };
+          const cell = decodeTableCell(cells[columnIndex] ?? '');
+          if (cell) row.cells[column.id] = cell;
         });
         tableRows.push(row);
         index += 1;
@@ -433,16 +456,21 @@ function escapeInline(text: string): string {
   return out;
 }
 
-function runsToMarkdown(runs: readonly InlineRun[]): string {
+function serializeRunsToMarkdown(
+  runs: readonly InlineRun[],
+  escapePlain: (text: string) => string,
+  escapeCode: (text: string) => string,
+  escapeHrefPipe: boolean
+): string {
   let out = '';
   for (const run of runs) {
     const text = run.text;
     const marks = run.marks;
     if (!marks) {
-      out += escapeInline(text);
+      out += escapePlain(text);
       continue;
     }
-    let body = escapeInline(text);
+    let body = marks.code ? escapeCode(text) : escapePlain(text);
     if (marks.code) {
       let fence = '`';
       while (body.includes(fence)) fence += '`';
@@ -452,10 +480,30 @@ function runsToMarkdown(runs: readonly InlineRun[]): string {
     if (marks.italic) body = `*${body}*`;
     if (marks.strike) body = `~~${body}~~`;
     const href = marks.link ? safeHref(marks.link) : null;
-    if (href) body = `[${body}](${href})`;
+    if (href) {
+      const safeUrl = escapeHrefPipe ? href.replace(/\|/gu, '\\|') : href;
+      body = `[${body}](${safeUrl})`;
+    }
     out += body;
   }
   return out;
+}
+
+function runsToMarkdown(runs: readonly InlineRun[]): string {
+  return serializeRunsToMarkdown(runs, escapeInline, escapeInline, false);
+}
+
+function serializeTableCell(cell: TableCell | undefined): string {
+  if (!cell) return '';
+  if (cell.runs && cell.runs.length > 0) {
+    return serializeRunsToMarkdown(
+      cell.runs,
+      escapeTableText,
+      text => text.replace(/\|/gu, '\\|').replace(/\n/gu, '<br>'),
+      true
+    );
+  }
+  return escapeTableText(cell.text ?? '');
 }
 
 function indentLines(text: string, prefix: string): string {
@@ -513,15 +561,15 @@ function serializeBlocks(blocks: readonly Block[], depth: number, lines: string[
       }
       case 'table': {
         const table = block.props.table ?? createTableData({ rows: 1, columns: 1 });
-        const header = table.columns.map(column => {
-          return escapeTableText(table.rows[0]?.cells[column.id]?.text ?? '');
-        });
+        const header = table.columns.map(column =>
+          serializeTableCell(table.rows[0]?.cells[column.id])
+        );
         lines.push(`${pad}| ${header.join(' | ')} |`);
         lines.push(`${pad}| ${table.columns.map(() => '---').join(' | ')} |`);
         for (const row of table.rows.slice(1)) {
           lines.push(
             `${pad}| ${table.columns
-              .map(column => escapeTableText(row.cells[column.id]?.text ?? ''))
+              .map(column => serializeTableCell(row.cells[column.id]))
               .join(' | ')} |`
           );
         }

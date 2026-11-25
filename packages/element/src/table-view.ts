@@ -10,17 +10,31 @@ import {
   insertTableColumn,
   insertTableRow,
   moveTableColumn,
+  moveTableColumnTo,
   moveTableRow,
+  moveTableRowTo,
+  plainText,
+  runsLength,
+  setTableCellRuns,
   setTableCellText,
   setTableColumnColor,
   setTableColumnWidth,
   setTableRowColor,
   tableCellText,
 } from '@nobita/core';
-import type { TableData } from '@nobita/core';
+import type { TableCell, TableData } from '@nobita/core';
+import {
+  readRichTextRuns,
+  runsSignature,
+  selectionOffsets,
+  setSelectionOffsets,
+  shortcutTag,
+} from './database-dom.js';
+import { DatabaseRichTextController } from './database-rich-text.js';
 import { nativeSelection, placeCaret } from './dom.js';
 import { dismissFloating, placeFloating } from './floating.js';
 import { icon } from './icons.js';
+import { renderInlineRuns } from './inline-dom.js';
 import { parseTsv, tsvCell } from './tsv.js';
 
 export interface TableHost {
@@ -51,26 +65,6 @@ interface TableAreaBounds {
   columnEnd: number;
 }
 
-function readCellText(element: HTMLElement): string {
-  let text = '';
-  const visit = (node: Node): void => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      text += node.nodeValue ?? '';
-      return;
-    }
-    if (!(node instanceof HTMLElement)) return;
-    if (node.tagName === 'BR') {
-      text += '\n';
-      return;
-    }
-    const block = node.tagName === 'DIV' || node.tagName === 'P';
-    if (block && text.length > 0 && !text.endsWith('\n')) text += '\n';
-    node.childNodes.forEach(visit);
-  };
-  element.childNodes.forEach(visit);
-  return text.replace(/\r\n?/gu, '\n');
-}
-
 function writeCellText(element: HTMLElement, value: string): void {
   element.replaceChildren();
   const lines = value.split('\n');
@@ -96,7 +90,9 @@ export class SimpleTableView {
   #host: TableHost;
   #data: TableData;
   #readonly: boolean;
+  #globalEvents = new AbortController();
   #events = new AbortController();
+  #richText: DatabaseRichTextController;
   #cells = new Map<string, HTMLElement>();
   #colElements: HTMLTableColElement[] = [];
   #popover: { element: HTMLElement; cleanup: () => void } | null = null;
@@ -116,9 +112,11 @@ export class SimpleTableView {
     moved: boolean;
   } | null = null;
   #selectionOverlay: HTMLElement | null = null;
+  #dropLine: HTMLElement | null = null;
   #activeCell: { rowId: string; columnId: string } | null = null;
   #suppressCellClick = false;
   #suppressAddClick = false;
+  #suppressHandleClick = false;
   #addTip: HTMLElement | null = null;
 
   constructor(host: TableHost, data: TableData) {
@@ -129,6 +127,23 @@ export class SimpleTableView {
     this.element.className = 'nb-table';
     this.element.contentEditable = 'false';
     this.element.dataset.readonly = String(this.#readonly);
+    this.#richText = new DatabaseRichTextController({
+      rootElement: this.element,
+      isReadonly: () => this.#readonly,
+      getSignal: () => this.#events.signal,
+      richTextSelector: '.nb-table-cell',
+    });
+    const doc = this.element.ownerDocument;
+    doc.addEventListener(
+      'selectionchange',
+      () => this.#richText.handleSelectionChange(),
+      { signal: this.#globalEvents.signal }
+    );
+    doc.defaultView?.addEventListener('scroll', this.#richText.hideToolbar, {
+      capture: true,
+      passive: true,
+      signal: this.#globalEvents.signal,
+    });
     this.element.addEventListener('mouseleave', () => {
       this.#hoverRowId = null;
       this.#hoverColumnId = null;
@@ -173,7 +188,9 @@ export class SimpleTableView {
   }
 
   destroy(): void {
+    this.#globalEvents.abort();
     this.#events.abort();
+    this.#richText.destroy();
     this.#closePopover();
     this.#removeAddTip();
     this.element.remove();
@@ -191,13 +208,26 @@ export class SimpleTableView {
     });
   }
 
+  #renderCellContent(cell: HTMLElement, tableCell: TableCell | undefined): void {
+    if (tableCell?.runs && tableCell.runs.length > 0) {
+      cell.dataset.runs = runsSignature(tableCell.runs);
+      renderInlineRuns(cell, tableCell.runs);
+    } else {
+      cell.dataset.runs = '';
+      writeCellText(cell, tableCell?.text ?? '');
+    }
+  }
+
   render(): void {
     this.#events.abort();
     this.#events = new AbortController();
+    this.#richText.clearPendingMarks();
+    this.#richText.resetToolbar();
     this.#closePopover();
     this.#cells.clear();
     this.#colElements = [];
     this.#selectionOverlay = null;
+    this.#dropLine = null;
     this.#structureKey = this.#structuralKey();
     this.element.dataset.readonly = String(this.#readonly);
     this.element.replaceChildren();
@@ -237,14 +267,26 @@ export class SimpleTableView {
         cell.spellcheck = false;
         cell.dataset.rowId = row.id;
         cell.dataset.columnId = column.id;
+        cell.dataset.multiline = 'true';
+        cell.dataset.richText = 'true';
         cell.setAttribute('role', 'textbox');
         cell.setAttribute('aria-label', `Row ${rowIndex + 1}, column ${columnIndex + 1}`);
-        writeCellText(cell, tableCellText(row, column.id));
+        this.#renderCellContent(cell, row.cells[column.id]);
+        if (!this.#readonly) {
+          this.#richText.attachRichTextHandlers(cell, this.#events.signal);
+          this.#richText.attachCompositionHandlers(
+            cell,
+            () => this.#commitCell(row.id, column.id, cell),
+            this.#events.signal,
+            true
+          );
+        }
         cell.addEventListener(
           'input',
-          () => {
+          event => {
+            if (this.#richText.isComposing(cell) || (event as InputEvent).isComposing) return;
             this.#clearAreaSelection();
-            this.#commitCell(row.id, column.id, readCellText(cell));
+            this.#commitCell(row.id, column.id, cell);
           },
           { signal: this.#events.signal }
         );
@@ -284,10 +326,19 @@ export class SimpleTableView {
           columnHandle.setAttribute('aria-label', `Column ${columnIndex + 1} actions`);
           columnHandle.append(dots());
           columnHandle.addEventListener(
+            'pointerdown',
+            event => this.#beginColumnDrag(event, column.id),
+            { signal: this.#events.signal }
+          );
+          columnHandle.addEventListener(
             'click',
             event => {
               event.preventDefault();
               event.stopPropagation();
+              if (this.#suppressHandleClick) {
+                this.#suppressHandleClick = false;
+                return;
+              }
               this.#openColumnMenu(column.id, columnHandle);
             },
             { signal: this.#events.signal }
@@ -302,10 +353,19 @@ export class SimpleTableView {
           rowHandle.setAttribute('aria-label', `Row ${rowIndex + 1} actions`);
           rowHandle.append(dots(true));
           rowHandle.addEventListener(
+            'pointerdown',
+            event => this.#beginRowDrag(event, row.id),
+            { signal: this.#events.signal }
+          );
+          rowHandle.addEventListener(
             'click',
             event => {
               event.preventDefault();
               event.stopPropagation();
+              if (this.#suppressHandleClick) {
+                this.#suppressHandleClick = false;
+                return;
+              }
               this.#openRowMenu(row.id, rowHandle);
             },
             { signal: this.#events.signal }
@@ -326,6 +386,13 @@ export class SimpleTableView {
     selection.dataset.visible = 'false';
     canvas.append(selection);
     this.#selectionOverlay = selection;
+
+    const dropLine = document.createElement('div');
+    dropLine.className = 'nb-table-drop-line';
+    dropLine.dataset.visible = 'false';
+    canvas.append(dropLine);
+    this.#dropLine = dropLine;
+
     window.addEventListener('resize', () => this.#syncSelection(), {
       signal: this.#events.signal,
     });
@@ -392,15 +459,34 @@ export class SimpleTableView {
   }
 
   #syncValues(): void {
+    const root = this.element.getRootNode() as ShadowRoot;
     for (const row of this.#data.rows) {
       for (const column of this.#data.columns) {
         const cell = this.#cells.get(cellKey(row.id, column.id));
-        if (!cell) continue;
-        const value = tableCellText(row, column.id);
-        if (readCellText(cell) === value) continue;
-        const focused = cell.matches(':focus');
-        writeCellText(cell, value);
-        if (focused) placeCaret(cell, 'end');
+        if (!cell || this.#richText.isComposing(cell)) continue;
+        const tableCell = row.cells[column.id];
+        const expectedSig =
+          tableCell?.runs && tableCell.runs.length > 0 ? runsSignature(tableCell.runs) : '';
+        const expectedText =
+          tableCell?.text ?? (tableCell?.runs ? plainText(tableCell.runs) : '');
+        const currentSig = cell.dataset.runs ?? '';
+        const currentText = plainText(readRichTextRuns(cell));
+        if (currentSig === expectedSig && currentText === expectedText) continue;
+        const focused = root.activeElement === cell;
+        const saved = focused ? selectionOffsets(cell) : null;
+        this.#renderCellContent(cell, tableCell);
+        if (focused) {
+          const maxLen = tableCell?.runs ? runsLength(tableCell.runs) : expectedText.length;
+          if (saved) {
+            setSelectionOffsets(
+              cell,
+              Math.min(saved.start, maxLen),
+              Math.min(saved.end, maxLen)
+            );
+          } else {
+            placeCaret(cell, 'end');
+          }
+        }
       }
     }
   }
@@ -539,6 +625,32 @@ export class SimpleTableView {
     this.#syncSelection();
   }
 
+  #beginWindowDrag(
+    onMove: (event: PointerEvent) => void,
+    onFinish: (event: PointerEvent) => void,
+    onCancel?: () => void
+  ): void {
+    const eventsSignal = this.#events.signal;
+    if (eventsSignal.aborted) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    eventsSignal.addEventListener(
+      'abort',
+      () => {
+        onCancel?.();
+        controller.abort();
+      },
+      { once: true, signal }
+    );
+    window.addEventListener('pointermove', onMove, { signal });
+    const finish = (event: PointerEvent): void => {
+      controller.abort();
+      onFinish(event);
+    };
+    window.addEventListener('pointerup', finish, { signal });
+    window.addEventListener('pointercancel', finish, { signal });
+  }
+
   #beginCellRange(event: PointerEvent, rowId: string, columnId: string): void {
     if (this.#readonly || event.button !== 0 || !event.isPrimary) return;
     this.#clearAreaSelection();
@@ -549,53 +661,53 @@ export class SimpleTableView {
     };
     this.#drag = drag;
     const root = this.element.getRootNode() as ShadowRoot;
-    const move = (moveEvent: PointerEvent): void => {
-      if (this.#drag !== drag) return;
-      const target = this.#cellFromEvent(moveEvent);
-      if (!target) return;
-      const targetRowId = target.dataset.rowId;
-      const targetColumnId = target.dataset.columnId;
-      if (!targetRowId || !targetColumnId) return;
-      if (
-        !drag.moved &&
-        targetRowId === drag.anchorRowId &&
-        targetColumnId === drag.anchorColumnId
-      ) {
-        return;
+    this.#beginWindowDrag(
+      moveEvent => {
+        if (this.#drag !== drag) return;
+        const target = this.#cellFromEvent(moveEvent);
+        if (!target) return;
+        const targetRowId = target.dataset.rowId;
+        const targetColumnId = target.dataset.columnId;
+        if (!targetRowId || !targetColumnId) return;
+        if (
+          !drag.moved &&
+          targetRowId === drag.anchorRowId &&
+          targetColumnId === drag.anchorColumnId
+        ) {
+          return;
+        }
+        drag.moved = true;
+        this.element.classList.add('is-selecting');
+        this.#area = {
+          anchorRowId: drag.anchorRowId,
+          anchorColumnId: drag.anchorColumnId,
+          focusRowId: targetRowId,
+          focusColumnId: targetColumnId,
+        };
+        nativeSelection(root)?.removeAllRanges();
+        moveEvent.preventDefault();
+        this.#syncSelection();
+      },
+      () => {
+        if (this.#drag !== drag) return;
+        this.#drag = null;
+        this.element.classList.remove('is-selecting');
+        if (drag.moved) {
+          this.#suppressCellClick = true;
+          window.setTimeout(() => {
+            this.#suppressCellClick = false;
+          }, 0);
+        } else {
+          this.#area = null;
+        }
+        this.#syncSelection();
+        if (drag.moved) this.#restoreActiveCaret();
+      },
+      () => {
+        if (this.#drag === drag) this.#drag = null;
+        this.element.classList.remove('is-selecting');
       }
-      drag.moved = true;
-      this.element.classList.add('is-selecting');
-      this.#area = {
-        anchorRowId: drag.anchorRowId,
-        anchorColumnId: drag.anchorColumnId,
-        focusRowId: targetRowId,
-        focusColumnId: targetColumnId,
-      };
-      nativeSelection(root)?.removeAllRanges();
-      moveEvent.preventDefault();
-      this.#syncSelection();
-    };
-    const finish = (): void => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', finish);
-      window.removeEventListener('pointercancel', finish);
-      if (this.#drag !== drag) return;
-      this.#drag = null;
-      this.element.classList.remove('is-selecting');
-      if (drag.moved) {
-        this.#suppressCellClick = true;
-        window.setTimeout(() => {
-          this.#suppressCellClick = false;
-        }, 0);
-      } else {
-        this.#area = null;
-      }
-      this.#syncSelection();
-      if (drag.moved) this.#restoreActiveCaret();
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', finish);
-    window.addEventListener('pointercancel', finish);
+    );
   }
 
   #cellFromEvent(event: Event): HTMLElement | null {
@@ -630,6 +742,11 @@ export class SimpleTableView {
       this.#host.focusAfterHistory();
       return;
     }
+    const root = this.element.getRootNode() as ShadowRoot;
+    const activeEl = active
+      ? this.#cells.get(cellKey(active.rowId, active.columnId))
+      : undefined;
+    if (activeEl && root.activeElement === activeEl) return;
     const focus = (): void =>
       this.#focusHistoryCell(active, rowIndex, columnIndex);
     focus();
@@ -724,7 +841,16 @@ export class SimpleTableView {
   #onPaste = (event: ClipboardEvent): void => {
     if (this.#readonly) return;
     const bounds = this.#areaBounds();
-    if (!bounds) return;
+    if (!bounds) {
+      const cell = this.#cellFromEvent(event);
+      if (!cell) return;
+      const plain = event.clipboardData?.getData('text/plain') ?? '';
+      if (!plain) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.#richText.pasteIntoRichText(cell, plain.replace(/\r\n?/gu, '\n'));
+      return;
+    }
     const text = event.clipboardData?.getData('text/plain') ?? '';
     if (!text) return;
     const grid = parseTsv(text);
@@ -785,8 +911,12 @@ export class SimpleTableView {
     });
   };
 
-  #commitCell(rowId: string, columnId: string, text: string): void {
-    const next = setTableCellText(this.#data, rowId, columnId, text);
+  #commitCell(rowId: string, columnId: string, cell: HTMLElement): void {
+    const runs = readRichTextRuns(cell);
+    const next = setTableCellRuns(this.#data, rowId, columnId, runs);
+    const nextCell = next.rows.find(row => row.id === rowId)?.cells[columnId];
+    cell.dataset.runs =
+      nextCell?.runs && nextCell.runs.length > 0 ? runsSignature(nextCell.runs) : '';
     if (next === this.#data) return;
     this.#host.commit(next, { mergeKey: `tb:${rowId}:${columnId}` });
   }
@@ -795,32 +925,30 @@ export class SimpleTableView {
     if (this.#readonly || event.button !== 0) return;
     const startX = event.clientX;
     const startY = event.clientY;
-    const move = (moveEvent: PointerEvent): void => {
-      this.#syncAddTip(moveEvent.clientX, moveEvent.clientY, axis, startX, startY);
-    };
-    const end = (upEvent: PointerEvent): void => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', end);
-      window.removeEventListener('pointercancel', end);
-      this.#removeAddTip();
-      const dx = upEvent.clientX - startX;
-      const dy = upEvent.clientY - startY;
-      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
-      this.#suppressAddClick = true;
-      window.setTimeout(() => {
-        this.#suppressAddClick = false;
-      }, 0);
-      const rows = axis === 'row' || axis === 'corner'
-        ? Math.max(1, Math.round(Math.abs(dy) / 39))
-        : 0;
-      const columns = axis === 'column' || axis === 'corner'
-        ? Math.max(1, Math.round(Math.abs(dx) / DEFAULT_COLUMN_WIDTH))
-        : 0;
-      this.#addCounts(rows, columns);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', end);
-    window.addEventListener('pointercancel', end);
+    this.#beginWindowDrag(
+      moveEvent => {
+        this.#syncAddTip(moveEvent.clientX, moveEvent.clientY, axis, startX, startY);
+      },
+      upEvent => {
+        this.#removeAddTip();
+        if (upEvent.type === 'pointercancel') return;
+        const dx = upEvent.clientX - startX;
+        const dy = upEvent.clientY - startY;
+        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+        this.#suppressAddClick = true;
+        window.setTimeout(() => {
+          this.#suppressAddClick = false;
+        }, 0);
+        const rows = axis === 'row' || axis === 'corner'
+          ? Math.max(1, Math.round(Math.abs(dy) / 39))
+          : 0;
+        const columns = axis === 'column' || axis === 'corner'
+          ? Math.max(1, Math.round(Math.abs(dx) / DEFAULT_COLUMN_WIDTH))
+          : 0;
+        this.#addCounts(rows, columns);
+      },
+      () => this.#removeAddTip()
+    );
   }
 
   #syncAddTip(x: number, y: number, axis: 'row' | 'column' | 'corner', startX: number, startY: number): void {
@@ -928,30 +1056,183 @@ export class SimpleTableView {
     event.stopPropagation();
     const startX = event.clientX;
     const startWidth = col.getBoundingClientRect().width;
-    const move = (moveEvent: PointerEvent): void => {
-      const width = Math.max(
-        MIN_COLUMN_WIDTH,
-        Math.min(MAX_COLUMN_WIDTH, Math.round(startWidth + moveEvent.clientX - startX))
-      );
-      col.style.width = `${width}px`;
-      this.#syncSelection();
-    };
-    const end = (): void => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', end);
-      window.removeEventListener('pointercancel', end);
-      const width = Number.parseFloat(col.style.width);
-      if (Number.isFinite(width)) {
-        this.#host.commit(setTableColumnWidth(this.#data, columnId, width));
+    this.#beginWindowDrag(
+      moveEvent => {
+        const width = Math.max(
+          MIN_COLUMN_WIDTH,
+          Math.min(MAX_COLUMN_WIDTH, Math.round(startWidth + moveEvent.clientX - startX))
+        );
+        col.style.width = `${width}px`;
+        this.#syncSelection();
+      },
+      endEvent => {
+        if (endEvent.type === 'pointercancel') return;
+        const width = Number.parseFloat(col.style.width);
+        if (Number.isFinite(width)) {
+          this.#host.commit(setTableColumnWidth(this.#data, columnId, width));
+        }
       }
+    );
+  }
+
+  #startReorderDrag(
+    event: PointerEvent,
+    markSources: () => void,
+    updateTarget: (moveEvent: PointerEvent) => boolean,
+    commitTarget: () => void
+  ): void {
+    if (this.#readonly || event.button !== 0 || !event.isPrimary) return;
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+    let hasTarget = false;
+    const cleanup = (): void => {
+      this.element.classList.remove('is-reordering');
+      for (const node of this.element.querySelectorAll('.is-drag-source')) {
+        node.classList.remove('is-drag-source');
+      }
+      if (this.#dropLine) this.#dropLine.dataset.visible = 'false';
     };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', end);
-    window.addEventListener('pointercancel', end);
+    this.#beginWindowDrag(
+      moveEvent => {
+        if (!dragging) {
+          if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 5) {
+            return;
+          }
+          dragging = true;
+          this.#closePopover();
+          this.#clearAreaSelection();
+          this.element.classList.add('is-reordering');
+          markSources();
+        }
+        moveEvent.preventDefault();
+        hasTarget = updateTarget(moveEvent);
+      },
+      upEvent => {
+        cleanup();
+        if (!dragging) return;
+        this.#suppressHandleClick = true;
+        window.setTimeout(() => {
+          this.#suppressHandleClick = false;
+        }, 0);
+        if (upEvent.type !== 'pointercancel' && hasTarget) {
+          commitTarget();
+        }
+      },
+      cleanup
+    );
+  }
+
+  #beginRowDrag(event: PointerEvent, rowId: string): void {
+    let target: { rowId: string; position: 'before' | 'after' } | null = null;
+    this.#startReorderDrag(
+      event,
+      () => {
+        this.element
+          .querySelector<HTMLElement>(`.nb-table-grid tbody tr[data-row-id="${CSS.escape(rowId)}"]`)
+          ?.classList.add('is-drag-source');
+      },
+      moveEvent => {
+        const dropLine = this.#dropLine;
+        const canvas = dropLine?.parentElement;
+        const table = this.element.querySelector<HTMLElement>('.nb-table-grid');
+        const rows = Array.from(
+          this.element.querySelectorAll<HTMLTableRowElement>('.nb-table-grid tbody tr[data-row-id]')
+        );
+        if (!dropLine || !canvas || !table || rows.length === 0) return false;
+        const canvasRect = canvas.getBoundingClientRect();
+        const tableRect = table.getBoundingClientRect();
+        let chosen: { rowId: string; position: 'before' | 'after'; y: number } | null = null;
+        for (const tr of rows) {
+          const id = tr.dataset.rowId;
+          if (!id) continue;
+          const rect = tr.getBoundingClientRect();
+          if (moveEvent.clientY < rect.top + rect.height / 2) {
+            chosen = { rowId: id, position: 'before', y: rect.top - canvasRect.top };
+            break;
+          }
+          chosen = { rowId: id, position: 'after', y: rect.bottom - canvasRect.top };
+        }
+        if (!chosen) return false;
+        target = { rowId: chosen.rowId, position: chosen.position };
+        dropLine.dataset.axis = 'row';
+        dropLine.style.left = `${tableRect.left - canvasRect.left}px`;
+        dropLine.style.top = `${chosen.y}px`;
+        dropLine.style.width = `${tableRect.width}px`;
+        dropLine.style.height = '';
+        dropLine.dataset.visible = 'true';
+        return true;
+      },
+      () => {
+        if (!target) return;
+        const next = moveTableRowTo(this.#data, rowId, target.rowId, target.position);
+        if (next !== this.#data) this.#host.commit(next);
+      }
+    );
+  }
+
+  #beginColumnDrag(event: PointerEvent, columnId: string): void {
+    let target: { columnId: string; position: 'before' | 'after' } | null = null;
+    this.#startReorderDrag(
+      event,
+      () => {
+        for (const td of this.element.querySelectorAll<HTMLElement>(
+          `.nb-table-grid td[data-column-id="${CSS.escape(columnId)}"]`
+        )) {
+          td.classList.add('is-drag-source');
+        }
+      },
+      moveEvent => {
+        const dropLine = this.#dropLine;
+        const canvas = dropLine?.parentElement;
+        const table = this.element.querySelector<HTMLElement>('.nb-table-grid');
+        const cells = Array.from(
+          this.element.querySelectorAll<HTMLTableCellElement>(
+            '.nb-table-grid tbody tr:first-child td[data-column-id]'
+          )
+        );
+        if (!dropLine || !canvas || !table || cells.length === 0) return false;
+        const canvasRect = canvas.getBoundingClientRect();
+        const tableRect = table.getBoundingClientRect();
+        let chosen: { columnId: string; position: 'before' | 'after'; x: number } | null = null;
+        for (const td of cells) {
+          const id = td.dataset.columnId;
+          if (!id) continue;
+          const rect = td.getBoundingClientRect();
+          if (moveEvent.clientX < rect.left + rect.width / 2) {
+            chosen = { columnId: id, position: 'before', x: rect.left - canvasRect.left };
+            break;
+          }
+          chosen = { columnId: id, position: 'after', x: rect.right - canvasRect.left };
+        }
+        if (!chosen) return false;
+        target = { columnId: chosen.columnId, position: chosen.position };
+        dropLine.dataset.axis = 'column';
+        dropLine.style.left = `${chosen.x}px`;
+        dropLine.style.top = `${tableRect.top - canvasRect.top}px`;
+        dropLine.style.width = '';
+        dropLine.style.height = `${tableRect.height}px`;
+        dropLine.dataset.visible = 'true';
+        return true;
+      },
+      () => {
+        if (!target) return;
+        const next = moveTableColumnTo(this.#data, columnId, target.columnId, target.position);
+        if (next !== this.#data) this.#host.commit(next);
+      }
+    );
   }
 
   #onCellKeyDown(event: KeyboardEvent, rowId: string, columnId: string): void {
-    if (event.isComposing) return;
+    if (this.#richText.isComposingKey(event, event.target as HTMLElement | null)) return;
+    const formatTag = shortcutTag(event);
+    if (formatTag && !this.#readonly) {
+      event.preventDefault();
+      this.#clearAreaSelection();
+      this.#richText.toggleInlineTag(formatTag);
+      return;
+    }
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key.toLowerCase() === 'z') {
       event.preventDefault();

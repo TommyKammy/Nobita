@@ -89,7 +89,7 @@ in Nobita's toolbar or block menu.
 | --- | --- | --- |
 | New Doc | ❌ | Demo shell can create pages; not exposed from `/` |
 | Linked Doc | ◐ | Page reference block + host routing; no page registry or backlinks |
-| Table (simple table block) | ✅ | Separate `table` block; AFFiNE-style hover handles, drag cell selection, row/column menus, colors, hover add controls and HTML/Markdown import |
+| Table (simple table block) | ✅ | Separate `table` block; AFFiNE-style hover handles, row/column drag reorder, rich-text cells, drag cell selection, row/column menus, colors, hover add controls and HTML/Markdown import |
 | Image | ✅ | URL-based |
 | Link (bookmark card) | 🟡 | Inline links work; no bookmark card |
 | Attachment / PDF | ❌ | No file storage/upload layer |
@@ -235,12 +235,12 @@ AFFiNE's separate table block additionally offers:
 - Cell/row/column background colors
 - Delete row/column
 
-Nobita's separate `table` block covers row/column insert/move/duplicate/delete,
-clear row/column contents, cell range clear/copy/paste and cell/row/column
-background colors, while `database` covers row insert/duplicate/delete,
-column insert/move/duplicate/hide/delete, and board card reorder. Merged cells,
-row/column drag reorder and rich-text cells in the simple `table` block remain
-unimplemented.
+Nobita's separate `table` block covers rich-text cells (`cell.runs`),
+row/column drag reorder and insert/move/duplicate/delete, clear row/column
+contents, cell range clear/copy/paste and cell/row/column background colors,
+while `database` covers row insert/duplicate/delete, column
+insert/move/duplicate/hide/delete, and board card reorder. Merged cells in the
+simple `table` block remain unimplemented.
 
 ## 6. Clipboard, import and export
 
@@ -346,7 +346,7 @@ the editor core just for parity:
 - Comments and collaboration.
 - Attachments/PDF, managed image hosting, bookmark previews, embeds.
 - LaTeX/equation blocks.
-- Simple table rich-text cells, merged cells and row/column drag reorder.
+- Simple table merged cells (rich-text cells and row/column drag reorder are implemented).
 - Edgeless, AI, cloud import/sync.
 
 ## 10. What to avoid for Nobita's identity
