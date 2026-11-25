@@ -207,8 +207,8 @@ table/board views.
 | Multi-select | ✅ | Comma-separated option editing |
 | Checkbox | ✅ | — |
 | Date | 🟡 | ISO text input; no native picker/calendar |
-| Progress | ❌ | — |
-| Image | ❌ | — |
+| Progress | ✅ | Interactive 0–100% progress bar (pointer scrub, keyboard arrows, range slider in record page), numeric sort/filter and `%` stats |
+| Image | ✅ | Validated image URL or host `uploadImage` adapter with thumbnail cells, preview popover, and Board card covers (`view.coverColumnId`) |
 | Link | 🟡 | URL column behaves as text |
 | Created time | ❌ | — |
 | Property colors / tags | 🟡 | Select dots colored; no custom tag colors |
@@ -253,7 +253,7 @@ simple `table` block remain unimplemented.
 | Notion HTML import | ✅ | ❌ |
 | Block slice copy | ✅ | 🟡 custom JSON + Markdown/HTML |
 | Database cell/area copy | ✅ | ✅ TSV range copy/cut/paste |
-| Image upload / paste | ✅ | ❌ URL only |
+| Image upload / paste | ✅ | ✅ Host `uploadImage` adapter (block paste/drop & database image cells) |
 | Attachment / PDF import | ✅ | ❌ |
 | Page Markdown/JSON export | App-level | ✅ demo |
 | Import/export app workflows | ✅ | ❌ |
@@ -341,7 +341,7 @@ the editor core just for parity:
 ### P2 — large or scope expansion
 
 - Calendar database view (intentionally out of scope).
-- Progress/image properties, formulas/relations and AFFiNE card covers.
+- Database formulas and relations (progress/image properties and Board card covers are implemented).
 - Page workspace navigation, `[[`, backlinks.
 - Comments and collaboration.
 - Attachments/PDF, managed image hosting, bookmark previews, embeds.

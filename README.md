@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **95.6 KB gzipped** (`356.9 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core and data views.
+- **99.5 KB gzipped** (`372.1 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core and data views.
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -29,7 +29,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, simple table, database, page links |
 | Inline | Bold, italic, underline, strikethrough, inline code, links, mentions, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo |
-| Data views | Multiple named table and board views per database, AFFiNE-style view settings (`⋯`), per-view column order/widths/visibility, nested AND/OR filters, multi-sort, container-aware expandable search (auto-hidden below `560px`), footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state; rich-text cells (`B`/`I`/`U`/`S`/code toolbar & shortcuts, highlight/color rendering, IME & plain-text paste safe), editable record pages (`row.page.content`), board card add/open/drag-reorder/group actions (preserving multi-select tags), drag cell selection & fill, TSV copy/paste, readonly view switching & record-page viewing; 9 typed columns (`text`, `number`, `select`, `multi-select`, `date`, `checkbox`, `url`, `files`, `people`) |
+| Data views | Multiple named table and board views per database, AFFiNE-style view settings (`⋯`), per-view column order/widths/visibility, nested AND/OR filters, multi-sort, container-aware expandable search (auto-hidden below `560px`), footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state; rich-text cells (`B`/`I`/`U`/`S`/code toolbar & shortcuts, highlight/color rendering, IME & plain-text paste safe), editable record pages (`row.page.content`), board card covers (`coverColumnId`), board card add/open/drag-reorder/group actions (preserving multi-select tags), drag cell selection & fill, TSV copy/paste, readonly view switching & record-page viewing; 11 typed columns (`text`, `number`, `progress`, `select`, `multi-select`, `date`, `checkbox`, `url`, `image`, `files`, `people`) |
 | Menus | Slash menu with fuzzy search and block actions (move/copy/link), block handle menu, selection toolbar with Turn into / Align / format / Color, link popover, mention picker |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 95.6 KB gzipped bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 99.5 KB gzipped bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -386,9 +386,9 @@ Bundle sizes (`pnpm size`):
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 356.9 KB | **95.6 KB** |
-| Editor IIFE (`nobita.global.js`) | 356.9 KB | **95.6 KB** |
-| Demo app (editor + UI + seed data) | 401.6 KB | 107.5 KB |
+| Editor ESM (`nobita.js`) | 372.1 KB | **99.5 KB** |
+| Editor IIFE (`nobita.global.js`) | 372.0 KB | **99.5 KB** |
+| Demo app (editor + UI + seed data) | 417.2 KB | 111.3 KB |
 
 The optional `@nobita/storage` package is not part of any editor bundle; it is only present when a host imports it.
 
@@ -420,7 +420,7 @@ A command-by-command comparison with AFFiNE is in [docs/command-comparison.md](d
 
 ## Roadmap
 
-- Database: formulas/relations, progress/image properties and AFFiNE card covers. Calendar view is intentionally out of scope.
+- Database: formulas and relations. Calendar view is intentionally out of scope.
 - Simple table: merged cells.
 - Page workspace: navigation, backlinks and page trees.
 - Collaboration adapter (Yjs/Automerge) behind an explicit interface.

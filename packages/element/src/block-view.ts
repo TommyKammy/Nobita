@@ -268,6 +268,9 @@ export class BlockView {
           get readonly() {
             return host.readonly;
           },
+          get uploadImage() {
+            return host.uploadImage;
+          },
           commit: (data, options) => host.updateDatabase(blockId, data, options),
           undo: () => host.undoDatabase(),
           redo: () => host.redoDatabase(),

@@ -8,6 +8,7 @@ import {
   databaseViewColumnStates,
   groupedDatabaseRows,
   safeHref,
+  safeImageSrc,
 } from '@nobita/core';
 import type {
   DatabaseCell,
@@ -37,11 +38,13 @@ import {
   popTitle,
   selectEl,
 } from './database-dom.js';
+import type { DatabaseImageUploader } from './database-view.js';
 
 export interface DatabasePopoversContext {
   rootElement: HTMLElement;
   getEventsSignal(): AbortSignal;
   getReadonly(): boolean;
+  getUploadImage(): DatabaseImageUploader | undefined;
   getData(): DatabaseData;
   activeView(): DatabaseViewConfig & { id: string; name: string };
   views(): (DatabaseViewConfig & { id: string; name: string })[];
@@ -184,6 +187,36 @@ export class DatabasePopoversController {
     }
     layout.append(label, buttons);
     content.append(layout);
+
+    if (view.type === 'board') {
+      const imageColumns = data.columns.filter(column => column.type === 'image');
+      const coverField = el('label', 'nb-db-field nb-db-cover-setting');
+      coverField.append(el('span', undefined, 'Card cover'));
+      const coverSelect = selectEl('Card cover', [
+        { value: '', label: 'None', selected: !view.coverColumnId },
+        ...imageColumns.map(column => ({
+          value: column.id,
+          label: column.name,
+          selected: view.coverColumnId === column.id,
+        })),
+      ]);
+      coverSelect.disabled = imageColumns.length === 0;
+      coverSelect.addEventListener(
+        'change',
+        () => {
+          this.#ctx.updateActiveView({ coverColumnId: coverSelect.value || null });
+          this.closePopover();
+        },
+        { signal }
+      );
+      coverField.append(coverSelect);
+      if (imageColumns.length === 0) {
+        coverField.append(
+          el('span', 'nb-db-cover-hint', 'Add an Image column to show covers')
+        );
+      }
+      content.append(coverField);
+    }
 
     const actions = el('div', 'nb-db-pop-actions');
     const add = (text: string, action: () => void, danger = false): void => {
@@ -486,7 +519,7 @@ export class DatabasePopoversController {
     };
     add('None', null);
     const available =
-      column.type === 'number'
+      column.type === 'number' || column.type === 'progress'
         ? DATABASE_STAT_TYPES
         : DATABASE_STAT_TYPES.filter(
             type =>
@@ -962,6 +995,139 @@ export class DatabasePopoversController {
     render();
     this.showPopover(anchor, content);
     nameInput.focus();
+  }
+
+  openImagePopover(
+    columnId: string,
+    rowId: string,
+    anchor: HTMLElement
+  ): void {
+    if (this.#ctx.getReadonly()) return;
+    const data = this.#ctx.getData();
+    const column = data.columns.find(item => item.id === columnId);
+    const row = data.rows.find(item => item.id === rowId);
+    if (!column || !row) return;
+    const current = safeImageSrc(row.cells[columnId]?.text);
+    const content = document.createElement('div');
+    content.append(popTitle(column.name));
+    if (current) {
+      const preview = el('div', 'nb-db-img-preview');
+      const img = document.createElement('img');
+      img.src = current;
+      img.alt = '';
+      img.loading = 'lazy';
+      preview.append(img);
+      content.append(preview);
+    }
+    const urlInput = document.createElement('input');
+    urlInput.type = 'url';
+    urlInput.placeholder = 'https://…';
+    urlInput.setAttribute('aria-label', 'Image URL');
+    urlInput.value = current ?? '';
+    const error = el('div', 'nb-db-error');
+    error.setAttribute('role', 'alert');
+    error.hidden = true;
+
+    const mergeKey = `db:${rowId}:${columnId}`;
+    const saveUrl = (): void => {
+      const trimmed = urlInput.value.trim();
+      if (!trimmed) {
+        this.#ctx.commitCell(rowId, columnId, {}, mergeKey);
+        this.closePopover();
+        return;
+      }
+      const safe = safeImageSrc(trimmed);
+      if (!safe) {
+        error.textContent = 'Enter a valid image URL.';
+        error.hidden = false;
+        return;
+      }
+      this.#ctx.commitCell(rowId, columnId, { text: safe }, mergeKey);
+      this.closePopover();
+    };
+
+    urlInput.addEventListener('keydown', event => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      saveUrl();
+    });
+
+    const actions = el('div', 'nb-db-pop-actions');
+    const upload = this.#ctx.getUploadImage();
+    if (upload) {
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = 'image/*';
+      fileInput.hidden = true;
+      const uploadBtn = btn(undefined, { text: 'Upload image' });
+      uploadBtn.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', async () => {
+        const file = fileInput.files?.[0];
+        const activeUpload = this.#ctx.getUploadImage();
+        if (!file || !activeUpload) return;
+        uploadBtn.disabled = true;
+        uploadBtn.textContent = 'Uploading…';
+        error.hidden = true;
+        try {
+          const res = await activeUpload(file);
+          if (
+            !content.isConnected ||
+            !this.#ctx.rootElement.isConnected ||
+            this.#ctx.getReadonly()
+          ) {
+            return;
+          }
+          const latest = this.#ctx.getData();
+          if (
+            !latest.rows.some(item => item.id === rowId) ||
+            !latest.columns.some(item => item.id === columnId && item.type === 'image')
+          ) {
+            return;
+          }
+          const rawSrc = typeof res === 'string' ? res : res?.src;
+          const safe = safeImageSrc(rawSrc);
+          if (safe) {
+            this.#ctx.commitCell(rowId, columnId, { text: safe }, mergeKey);
+            this.closePopover();
+            return;
+          }
+          error.textContent = 'Could not upload image.';
+          error.hidden = false;
+        } catch {
+          if (
+            !content.isConnected ||
+            !this.#ctx.rootElement.isConnected ||
+            this.#ctx.getReadonly()
+          ) {
+            return;
+          }
+          error.textContent = 'Could not upload image.';
+          error.hidden = false;
+        } finally {
+          uploadBtn.disabled = false;
+          uploadBtn.textContent = 'Upload image';
+          fileInput.value = '';
+        }
+      });
+      actions.append(fileInput, uploadBtn);
+    }
+
+    const save = btn(undefined, { text: 'Save' });
+    save.addEventListener('click', saveUrl);
+    actions.append(save);
+    if (current) {
+      const remove = btn('danger', { text: 'Remove' });
+      remove.addEventListener('click', () => {
+        this.#ctx.commitCell(rowId, columnId, {}, mergeKey);
+        this.closePopover();
+      });
+      actions.append(remove);
+    }
+
+    content.append(urlInput, error, actions);
+    this.showPopover(anchor, content);
+    urlInput.focus();
+    urlInput.select();
   }
 
   openPeoplePopover(

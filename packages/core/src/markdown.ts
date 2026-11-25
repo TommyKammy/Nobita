@@ -1,6 +1,6 @@
 import { createBlock } from './doc.js';
 import { createTableColumn, createTableData, createTableRow, hasRichMarks } from './table.js';
-import { databaseCellText, sortedDatabaseRows } from './database.js';
+import { databaseCellDisplay, databaseCellText, sortedDatabaseRows } from './database.js';
 import { normalizeRuns, plainText, runsLength, sliceRuns } from './text.js';
 import type { Block, Doc, InlineMark, InlineRun, TableCell } from './types.js';
 import { safeHref, safeImageSrc } from './url.js';
@@ -376,6 +376,13 @@ function databaseTableToLines(data: NonNullable<Block['props']['database']>): st
     const cells = data.columns.map(column => {
       const cell = row.cells[column.id];
       if (column.type === 'checkbox') return cell?.checked ? '[x]' : '[ ]';
+      if (column.type === 'progress') return escapeCell(databaseCellDisplay(cell, 'progress'));
+      if (column.type === 'image') {
+        const src = safeImageSrc(cell?.text);
+        if (!src) return '';
+        const safeMdSrc = src.replace(/\(/gu, '%28').replace(/\)/gu, '%29');
+        return escapeCell(`![image](${safeMdSrc})`);
+      }
       if (column.type === 'text' && cell?.runs && cell.runs.length > 0) {
         return escapeCell(inlineToMarkdown(cell.runs));
       }

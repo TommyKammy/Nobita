@@ -21,6 +21,7 @@ import {
   parseInlineRuns,
   plainText,
   runsLength,
+  safeImageSrc,
   searchDatabaseRows,
 } from '@nobita/core';
 import type {
@@ -45,8 +46,10 @@ import {
   FILTER_LABELS,
   TYPE_ICON,
   applyFilesLabel,
+  applyImageLabel,
   applyMultiLabel,
   applyPeopleLabel,
+  applyProgressState,
   applySelectLabel,
   attachNumberInput,
   btn,
@@ -60,6 +63,7 @@ import {
   formatDatabaseNumber,
   iconBtn,
   mergeOrder,
+  parseProgressValue,
   pruneRowIdsFromViews,
   readCellRuns,
   removeColumnFromView,
@@ -76,8 +80,13 @@ import { DatabaseDetailController } from './database-detail.js';
 import { DatabasePopoversController } from './database-popovers.js';
 import { DatabaseRichTextController } from './database-rich-text.js';
 
+export type DatabaseImageUploader = (
+  file: File
+) => string | { src: string } | Promise<string | { src: string }>;
+
 export interface DatabaseHost {
   readonly readonly: boolean;
+  readonly uploadImage?: DatabaseImageUploader | undefined;
   commit(data: DatabaseData, options?: { mergeKey?: string }): void;
   undo(): void;
   redo(): void;
@@ -237,12 +246,15 @@ export class DatabaseView {
         this.#popovers.openFilesPopover(colId, rowId, anchor),
       openPeoplePopover: (colId, rowId, anchor) =>
         this.#popovers.openPeoplePopover(colId, rowId, anchor),
+      openImagePopover: (colId, rowId, anchor) =>
+        this.#popovers.openImagePopover(colId, rowId, anchor),
       richText: this.#richText,
     });
     this.#popovers = new DatabasePopoversController({
       rootElement: this.element,
       getEventsSignal: () => this.#events.signal,
       getReadonly: () => this.#readonly,
+      getUploadImage: () => this.#host.uploadImage,
       getData: () => this.#data,
       activeView: () => this.#activeView(),
       views: () => this.#views(),
@@ -356,7 +368,7 @@ export class DatabaseView {
   focusCell(rowId: string, columnId: string, at: 'start' | 'end' = 'end'): void {
     const nodes = this.#cells.get(cellKey(rowId, columnId))?.[0];
     if (!nodes) return;
-    const target = nodes.text ?? nodes.input ?? nodes.button;
+    const target = nodes.text ?? nodes.input ?? nodes.button ?? nodes.progress;
     if (!target) return;
     target.focus();
     if (nodes.text) placeCaret(nodes.text, at);
@@ -442,11 +454,19 @@ export class DatabaseView {
 
   #updateActiveView(patch: Partial<DatabaseViewConfig>): void {
     const active = this.#activeView();
-    const views = this.#views().map(view =>
-      view.id === active.id
-        ? { ...view, ...patch, id: active.id, name: patch.name ?? view.name }
-        : view
-    );
+    const views = this.#views().map(view => {
+      if (view.id !== active.id) return view;
+      const next: DatabaseViewConfig & { id: string; name: string } = {
+        ...view,
+        ...patch,
+        id: active.id,
+        name: patch.name ?? view.name,
+      };
+      if ('coverColumnId' in patch && !patch.coverColumnId) {
+        delete next.coverColumnId;
+      }
+      return next;
+    });
     const { view: _legacyView, sort: _legacySort, ...rest } = this.#data;
     this.#host.commit({ ...rest, views, activeViewId: active.id });
   }
@@ -669,6 +689,7 @@ export class DatabaseView {
         hiddenColumns: view.hiddenColumns ?? [],
         stats: view.stats ?? {},
         header: view.header ?? null,
+        coverColumnId: view.coverColumnId ?? null,
       })),
       sort: data.sort ?? null,
     });
@@ -1858,6 +1879,12 @@ export class DatabaseView {
           if (nodes.button && column.type === 'people') {
             applyPeopleLabel(nodes.button, cell?.people ?? [], column.name);
           }
+          if (nodes.progress && column.type === 'progress') {
+            applyProgressState(nodes.progress, value, column.name);
+          }
+          if (nodes.button && column.type === 'image') {
+            applyImageLabel(nodes.button, value, column.name);
+          }
         }
       }
     }
@@ -1931,6 +1958,10 @@ export class DatabaseView {
 
     if (column.type === 'checkbox') {
       this.#createCheckboxCell(td, nodes, row, column, cell);
+    } else if (column.type === 'progress') {
+      this.#createProgressCell(td, nodes, row, column, cell);
+    } else if (column.type === 'image') {
+      this.#createImageCell(td, nodes, row, column, cell);
     } else if (column.type === 'select') {
       this.#createSelectCell(td, nodes, row, column, cell);
     } else if (
@@ -2055,6 +2086,179 @@ export class DatabaseView {
           return;
         }
         this.#onCellKeyDown(event, row.id, column.id, column.type as CellKind);
+      },
+      { signal }
+    );
+    td.append(button);
+    nodes.button = button;
+  }
+
+  #createProgressCell(
+    td: HTMLTableCellElement,
+    nodes: CellNodes,
+    row: DatabaseRow,
+    column: DatabaseColumn,
+    cell: DatabaseCell | undefined
+  ): void {
+    const signal = this.#contentEvents.signal;
+    const control = el('div', 'nb-db-progress');
+    control.setAttribute('role', 'slider');
+    control.setAttribute('aria-valuemin', '0');
+    control.setAttribute('aria-valuemax', '100');
+    control.tabIndex = this.#readonly ? -1 : 0;
+    if (this.#readonly) control.setAttribute('aria-disabled', 'true');
+    const track = el('div', 'nb-db-progress-track');
+    track.append(el('div', 'nb-db-progress-fill'));
+    const label = el('span', 'nb-db-progress-label');
+    control.append(track, label);
+    applyProgressState(control, cell?.text, column.name);
+
+    control.addEventListener(
+      'focus',
+      () => {
+        this.#activateCellInput(control, row.id, column.id);
+        this.#syncSelectionVisuals();
+      },
+      { signal }
+    );
+
+    if (!this.#readonly) {
+      const mergeKey = `db:${row.id}:${column.id}`;
+      control.addEventListener(
+        'pointerdown',
+        event => {
+          if (event.button !== 0 || event.shiftKey) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (this.#selectedRows.size > 0) {
+            this.#selectedRows.clear();
+            this.#syncRowSelection();
+          }
+          this.#suppressClick = false;
+          if (this.#range) {
+            this.#clearRange();
+            this.#renderRange();
+          }
+          control.focus();
+          this.#activateCellInput(control, row.id, column.id);
+          this.#syncSelectionVisuals();
+          const initialRect = track.getBoundingClientRect();
+          const percentAt = (clientX: number): number | null => {
+            const rect = track.isConnected ? track.getBoundingClientRect() : initialRect;
+            if (rect.width <= 0) return null;
+            return Math.max(
+              0,
+              Math.min(100, Math.round(((clientX - rect.left) / rect.width) * 100))
+            );
+          };
+          const initial = percentAt(event.clientX);
+          let lastPct = initial;
+          if (initial !== null) {
+            applyProgressState(control, String(initial), column.name);
+          }
+          this.#beginWindowDrag(
+            moveEvent => {
+              const nextPct = percentAt(moveEvent.clientX);
+              if (nextPct === null || nextPct === lastPct) return;
+              lastPct = nextPct;
+              applyProgressState(control, String(nextPct), column.name);
+            },
+            finishEvent => {
+              if (finishEvent.type === 'pointercancel') {
+                applyProgressState(
+                  control,
+                  this.#currentCell(row.id, column.id)?.text,
+                  column.name
+                );
+                return;
+              }
+              if (lastPct === null) return;
+              const nextValue = String(lastPct);
+              if ((this.#currentCell(row.id, column.id)?.text ?? '') === nextValue) {
+                return;
+              }
+              this.#commitCell(row.id, column.id, { text: nextValue }, mergeKey);
+            }
+          );
+        },
+        { signal }
+      );
+      control.addEventListener(
+        'keydown',
+        event => {
+          if (!event.metaKey && !event.ctrlKey && !event.altKey) {
+            if (event.key === 'Backspace' || event.key === 'Delete') {
+              event.preventDefault();
+              event.stopPropagation();
+              this.#commitCell(row.id, column.id, {}, mergeKey);
+              return;
+            }
+            if (event.key === 'Home') {
+              event.preventDefault();
+              event.stopPropagation();
+              this.#commitCell(row.id, column.id, { text: '0' }, mergeKey);
+              return;
+            }
+            if (event.key === 'End') {
+              event.preventDefault();
+              event.stopPropagation();
+              this.#commitCell(row.id, column.id, { text: '100' }, mergeKey);
+              return;
+            }
+            if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+              event.preventDefault();
+              event.stopPropagation();
+              const current =
+                parseProgressValue(this.#currentCell(row.id, column.id)?.text) ?? 0;
+              const step = event.shiftKey ? 1 : 5;
+              const next = Math.max(
+                0,
+                Math.min(100, current + (event.key === 'ArrowRight' ? step : -step))
+              );
+              this.#commitCell(row.id, column.id, { text: String(next) }, mergeKey);
+              return;
+            }
+          }
+          this.#onCellKeyDown(event, row.id, column.id, 'progress');
+        },
+        { signal }
+      );
+    } else {
+      control.addEventListener(
+        'keydown',
+        event => this.#onCellKeyDown(event, row.id, column.id, 'progress'),
+        { signal }
+      );
+    }
+
+    td.append(control);
+    nodes.progress = control;
+  }
+
+  #createImageCell(
+    td: HTMLTableCellElement,
+    nodes: CellNodes,
+    row: DatabaseRow,
+    column: DatabaseColumn,
+    cell: DatabaseCell | undefined
+  ): void {
+    const signal = this.#contentEvents.signal;
+    const button = btn('nb-db-select nb-db-image-cell', { disabled: this.#readonly });
+    applyImageLabel(button, cell?.text, column.name);
+    button.addEventListener(
+      'click',
+      () => this.#popovers.openImagePopover(column.id, row.id, button),
+      { signal }
+    );
+    button.addEventListener(
+      'keydown',
+      event => {
+        if (!(event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          button.click();
+          return;
+        }
+        this.#onCellKeyDown(event, row.id, column.id, 'image');
       },
       { signal }
     );
@@ -2423,6 +2627,7 @@ export class DatabaseView {
     optionsText: string,
     extra?: (columns: DatabaseColumn[]) => DatabaseColumn[]
   ): void {
+    const previous = this.#data.columns.find(item => item.id === columnId);
     const options = optionsText
       .split(',')
       .map(option => option.trim())
@@ -2434,10 +2639,20 @@ export class DatabaseView {
         ? { options }
         : {}),
     });
-    this.#host.commit({
+    const nextData: DatabaseData = {
       ...this.#data,
       columns: extra ? extra(columns) : columns,
-    });
+    };
+    if (previous?.type === 'image' && type !== 'image') {
+      const stripCover = (view: DatabaseViewConfig): DatabaseViewConfig => {
+        if (view.coverColumnId !== columnId) return view;
+        const { coverColumnId: _removed, ...rest } = view;
+        return rest;
+      };
+      if (this.#data.views) nextData.views = this.#data.views.map(stripCover);
+      if (this.#data.view) nextData.view = stripCover(this.#data.view);
+    }
+    this.#host.commit(nextData);
   }
 
   /** ---- navigation ---- */
@@ -2585,7 +2800,12 @@ export class DatabaseView {
         }
         return;
       }
-      if (kind === 'multi-select' || kind === 'files' || kind === 'people') {
+      if (
+        kind === 'multi-select' ||
+        kind === 'files' ||
+        kind === 'people' ||
+        kind === 'image'
+      ) {
         activeNode?.button?.click();
         return;
       }
@@ -2598,7 +2818,13 @@ export class DatabaseView {
       this.#host.focusAfter();
       return;
     }
-    if (kind === 'text' || kind === 'select' || kind === 'checkbox') {
+    if (
+      kind === 'text' ||
+      kind === 'select' ||
+      kind === 'checkbox' ||
+      kind === 'progress' ||
+      kind === 'image'
+    ) {
       if (event.key === 'ArrowDown') {
         if (kind === 'text' && activeNode?.text && !caretAtBoundary(activeNode.text, 'end')) {
           return;
@@ -3015,13 +3241,8 @@ export class DatabaseView {
         target = createDatabaseRow();
         if (group && groupColumn) {
           const cells = { ...target.cells };
-          if (groupColumn.type === 'checkbox') {
-            cells[groupColumn.id] = { checked: group.key === 'true' };
-          } else if (groupColumn.type === 'multi-select') {
-            if (group.key) cells[groupColumn.id] = { values: [group.key] };
-          } else if (group.key) {
-            cells[groupColumn.id] = { text: group.key };
-          }
+          const groupCell = cellForGroupValue(groupColumn, undefined, group.key);
+          if (Object.keys(groupCell).length > 0) cells[groupColumn.id] = groupCell;
           target = { ...target, cells };
         }
         added.push(target);
@@ -3041,6 +3262,14 @@ export class DatabaseView {
             .map(item => item.trim())
             .filter(Boolean);
           if (next.length > 0) cells[column.id] = { ...(cell ?? {}), values: next };
+          else delete cells[column.id];
+        } else if (column.type === 'progress') {
+          const n = parseProgressValue(value);
+          if (n !== null) cells[column.id] = withText(cell, String(n));
+          else delete cells[column.id];
+        } else if (column.type === 'image') {
+          const src = safeImageSrc(value);
+          if (src) cells[column.id] = withText(cell, src);
           else delete cells[column.id];
         } else if (column.type === 'files' || column.type === 'people') {
           if (clearReferences) delete cells[column.id];
@@ -3105,6 +3334,7 @@ export class DatabaseView {
       target instanceof HTMLTextAreaElement ||
       (target instanceof HTMLElement &&
         (target.matches('[contenteditable="true"]') ||
+          target.matches('.nb-db-progress[role="slider"]') ||
           Boolean(target.closest('.nb-db-text[contenteditable="true"]'))));
     const editingCell =
       target instanceof HTMLElement && Boolean(target.closest('.nb-db-cell'));
