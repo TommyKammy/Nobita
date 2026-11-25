@@ -741,4 +741,47 @@ describe('database P1 queries', () => {
     expect(database?.views?.[0]?.hiddenColumns).toEqual(['score']);
     expect(database?.views?.[0]?.stats?.score).toBe('sum');
   });
+
+  it('computes min, max, and range on 100,000 rows without stack overflow', () => {
+    const num = createDatabaseColumn('Num', 'number');
+    const bigRows = Array.from({ length: 100_000 }, (_, index) =>
+      createDatabaseRow({ [num.id]: { text: String(index - 500) } })
+    );
+    expect(databaseStatValue(bigRows, num, 'min')).toBe('-500');
+    expect(databaseStatValue(bigRows, num, 'max')).toBe('99499');
+    expect(databaseStatValue(bigRows, num, 'range')).toBe('99999');
+  });
+
+  it('deduplicates, prunes deleted rows, and retains >1,000 entries in manuallyCardSort', () => {
+    const rowIds = Array.from({ length: 1200 }, (_, index) => `r-${index}`);
+    const normalized = normalizeDatabaseData({
+      variant: 'database',
+      columns: [{ id: 'status', name: 'Status', type: 'select', options: ['Todo'] }],
+      rows: rowIds.map(id => ({ id, cells: { status: { text: 'Todo' } } })),
+      views: [
+        {
+          id: 'v1',
+          name: 'Board',
+          type: 'board',
+          groupBy: 'status',
+          groupProperties: [
+            {
+              key: 'Todo',
+              manuallyCardSort: [
+                'deleted-1',
+                ...rowIds,
+                'r-0',
+                'r-500',
+                'deleted-2',
+              ],
+            },
+          ],
+        },
+      ],
+      activeViewId: 'v1',
+    });
+    const sort = normalized.views?.[0]?.groupProperties?.[0]?.manuallyCardSort;
+    expect(sort).toHaveLength(1200);
+    expect(sort).toEqual(rowIds);
+  });
 });

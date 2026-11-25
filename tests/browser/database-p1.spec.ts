@@ -148,7 +148,7 @@ test('groups a table and collapses groups', async ({ page }) => {
 
   const first = page.locator('.nb-db-group-head').first();
   await first.click();
-  await expect(first).toHaveAttribute('aria-expanded', 'false');
+  await expect(first.locator('.nb-db-group-toggle')).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator('.nb-db-group').first().locator('.nb-db-table')).toHaveCount(0);
 });
 
