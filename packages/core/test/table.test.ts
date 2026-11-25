@@ -568,4 +568,50 @@ describe('simple table', () => {
       ],
     });
   });
+
+  it('round-trips escaped delimiters and backtick/padded code spans in table cells', () => {
+    const table = createTableData({ rows: 2, columns: 2 });
+    const [c1, c2] = table.columns;
+    const [r1, r2] = table.rows;
+    let edited = setTableCellRuns(table, r1!.id, c1!.id, [
+      { text: '2 * 3', marks: { italic: true } },
+    ]);
+    edited = setTableCellRuns(edited, r1!.id, c2!.id, [
+      { text: 'a`b', marks: { code: true } },
+    ]);
+    edited = setTableCellRuns(edited, r2!.id, c1!.id, [
+      { text: '`x`', marks: { code: true } },
+    ]);
+    edited = setTableCellRuns(edited, r2!.id, c2!.id, [
+      { text: ' pad ', marks: { code: true } },
+    ]);
+
+    const block = createBlock('table', { id: 't', props: { table: edited } });
+    const md1 = blocksToMarkdown(createDoc({ blocks: [block] }), { title: false });
+    const imp1 = markdownToBlocks(md1, { extractTitle: false }).blocks.find(
+      item => item.type === 'table'
+    )!;
+    const md2 = blocksToMarkdown(createDoc({ blocks: [imp1] }), { title: false });
+    expect(md2).toBe(md1);
+
+    const impTable = imp1.props.table!;
+    const [ic1, ic2] = impTable.columns;
+    const [ir1, ir2] = impTable.rows;
+    expect(ir1?.cells[ic1!.id]).toEqual({
+      text: '2 * 3',
+      runs: [{ text: '2 * 3', marks: { italic: true } }],
+    });
+    expect(ir1?.cells[ic2!.id]).toEqual({
+      text: 'a`b',
+      runs: [{ text: 'a`b', marks: { code: true } }],
+    });
+    expect(ir2?.cells[ic1!.id]).toEqual({
+      text: '`x`',
+      runs: [{ text: '`x`', marks: { code: true } }],
+    });
+    expect(ir2?.cells[ic2!.id]).toEqual({
+      text: ' pad ',
+      runs: [{ text: ' pad ', marks: { code: true } }],
+    });
+  });
 });

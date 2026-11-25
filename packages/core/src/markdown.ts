@@ -11,6 +11,33 @@ function withMark(run: InlineRun, patch: InlineMark): InlineRun {
   return { text: run.text, marks: { ...(run.marks ?? {}), ...patch } };
 }
 
+/** Find a closing backtick fence with the exact same backtick run length (CommonMark §6.1). */
+function findClosingCodeFence(text: string, fence: string, from: number): number {
+  let pos = from;
+  while (pos < text.length) {
+    const hit = text.indexOf(fence, pos);
+    if (hit < 0) return -1;
+    const prevBacktick = hit > 0 && text[hit - 1] === '`';
+    const nextBacktick = text[hit + fence.length] === '`';
+    if (!prevBacktick && !nextBacktick) return hit;
+    pos = hit + 1;
+  }
+  return -1;
+}
+
+/** CommonMark §6.1: strip one leading + trailing space when both exist and content isn't all spaces. */
+function stripCodeSpanPadding(inner: string): string {
+  if (
+    inner.length >= 2 &&
+    inner.startsWith(' ') &&
+    inner.endsWith(' ') &&
+    /[^ ]/u.test(inner)
+  ) {
+    return inner.slice(1, -1);
+  }
+  return inner;
+}
+
 function parseInline(text: string, allowLinks: boolean): InlineRun[] {
   if (!text) return [];
   const runs: InlineRun[] = [];
@@ -23,8 +50,28 @@ function parseInline(text: string, allowLinks: boolean): InlineRun[] {
   };
 
   const findClosing = (token: string, from: number): number => {
-    const index = text.indexOf(token, from);
-    return index;
+    let pos = from;
+    while (pos < text.length) {
+      const ch = text[pos];
+      if (ch === '\\' && pos + 1 < text.length) {
+        pos += 2;
+        continue;
+      }
+      if (ch === '`') {
+        let fence = '`';
+        while (text[pos + fence.length] === '`') fence += '`';
+        const close = findClosingCodeFence(text, fence, pos + fence.length);
+        if (close >= 0) {
+          pos = close + fence.length;
+          continue;
+        }
+        pos += fence.length;
+        continue;
+      }
+      if (text.startsWith(token, pos)) return pos;
+      pos += 1;
+    }
+    return -1;
   };
 
   let index = 0;
@@ -44,14 +91,17 @@ function parseInline(text: string, allowLinks: boolean): InlineRun[] {
     if (char === '`') {
       let fence = '`';
       while (text[index + fence.length] === '`') fence += '`';
-      const close = findClosing(fence, index + fence.length);
+      const close = findClosingCodeFence(text, fence, index + fence.length);
       if (close > index) {
         flush();
-        const inner = text.slice(index + fence.length, close);
+        const inner = stripCodeSpanPadding(text.slice(index + fence.length, close));
         runs.push({ text: inner, marks: { code: true } });
         index = close + fence.length;
         continue;
       }
+      buffer += fence;
+      index += fence.length;
+      continue;
     }
 
     if (allowLinks && char === '[') {
@@ -195,14 +245,17 @@ function decodeTableCell(value: string): TableCell | undefined {
     if (char === '`') {
       let fence = '`';
       while (value[index + fence.length] === '`') fence += '`';
-      const close = value.indexOf(fence, index + fence.length);
+      const close = findClosingCodeFence(value, fence, index + fence.length);
       if (close >= 0) {
         const token = `\u0000CODE${codeSpans.length}\u0000`;
-        codeSpans.push(value.slice(index + fence.length, close));
+        codeSpans.push(stripCodeSpanPadding(value.slice(index + fence.length, close)));
         protectedText += token;
         index = close + fence.length;
         continue;
       }
+      protectedText += fence;
+      index += fence.length;
+      continue;
     }
     protectedText += char;
     index += 1;
@@ -483,7 +536,14 @@ function serializeRunsToMarkdown(
     if (marks.code) {
       let fence = '`';
       while (body.includes(fence)) fence += '`';
-      body = body.includes('`') ? `${fence} ${body} ${fence}` : `${fence}${body}${fence}`;
+      const needsPad =
+        body.startsWith('`') ||
+        body.endsWith('`') ||
+        (body.length >= 2 &&
+          body.startsWith(' ') &&
+          body.endsWith(' ') &&
+          /[^ ]/u.test(body));
+      body = needsPad ? `${fence} ${body} ${fence}` : `${fence}${body}${fence}`;
     }
     if (marks.bold) body = `**${body}**`;
     if (marks.italic) body = `*${body}*`;

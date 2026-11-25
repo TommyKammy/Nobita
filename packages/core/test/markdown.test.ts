@@ -38,6 +38,21 @@ describe('inline markdown', () => {
       { text: ' [1]', marks: { link: 'https://example.com' } },
     ]);
   });
+
+  it('handles escaped delimiters and code-fence padding', () => {
+    expect(parseInlineMarkdown('*2 \\* 3* and **a \\** b**')).toEqual([
+      { text: '2 * 3', marks: { italic: true } },
+      { text: ' and ' },
+      { text: 'a ** b', marks: { bold: true } },
+    ]);
+    expect(parseInlineMarkdown('`` a`b `` and `` `a` `` and `  pad  `')).toEqual([
+      { text: 'a`b', marks: { code: true } },
+      { text: ' and ' },
+      { text: '`a`', marks: { code: true } },
+      { text: ' and ' },
+      { text: ' pad ', marks: { code: true } },
+    ]);
+  });
 });
 
 describe('markdown documents', () => {

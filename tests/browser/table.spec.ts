@@ -1058,3 +1058,60 @@ test('preserves trailing newlines when editing earlier text in a plain table cel
       .rows[0]?.cells.c1
   ).toEqual({ text: 'heXllo\n' });
 });
+
+test('restores the original column width when column resizing is canceled', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, tableDoc());
+
+  const beforeWidth = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const col = root?.querySelector<HTMLElement>('.nb-table-grid col');
+    return col?.style.width ?? '';
+  });
+  expect(beforeWidth).toBe('160px');
+
+  const result = await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const col = root?.querySelector<HTMLElement>('.nb-table-grid col');
+    const resizer = root?.querySelector<HTMLElement>(
+      '.nb-table-cell-wrap[data-row-id="r1"][data-column-id="c1"] .nb-table-resizer'
+    );
+    if (!resizer || !col) throw new Error('Missing resizer or col');
+    const rect = resizer.getBoundingClientRect();
+    resizer.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        composed: true,
+        button: 0,
+        isPrimary: true,
+        clientX: rect.left,
+        clientY: rect.top + 4,
+      })
+    );
+    window.dispatchEvent(
+      new PointerEvent('pointermove', {
+        bubbles: true,
+        clientX: rect.left + 60,
+        clientY: rect.top + 4,
+      })
+    );
+    const duringWidth = col.style.width;
+    window.dispatchEvent(
+      new PointerEvent('pointercancel', {
+        bubbles: true,
+        clientX: rect.left + 60,
+        clientY: rect.top + 4,
+      })
+    );
+    return { duringWidth, afterWidth: col.style.width };
+  });
+
+  expect(result.duringWidth).not.toBe('160px');
+  expect(result.afterWidth).toBe('160px');
+
+  const doc = await getDoc(page);
+  expect(
+    (doc.blocks[0]?.props.table as { columns: Array<{ id: string; width?: number }> }).columns[0]
+      ?.width
+  ).toBe(160);
+});

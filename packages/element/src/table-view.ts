@@ -1062,6 +1062,11 @@ export class SimpleTableView {
     event.stopPropagation();
     const startX = event.clientX;
     const startWidth = col.getBoundingClientRect().width;
+    const originalWidth = col.style.width;
+    const restore = (): void => {
+      col.style.width = originalWidth;
+      this.#syncSelection();
+    };
     this.#beginWindowDrag(
       moveEvent => {
         const width = Math.max(
@@ -1072,12 +1077,16 @@ export class SimpleTableView {
         this.#syncSelection();
       },
       endEvent => {
-        if (endEvent.type === 'pointercancel') return;
+        if (endEvent.type === 'pointercancel') {
+          restore();
+          return;
+        }
         const width = Number.parseFloat(col.style.width);
         if (Number.isFinite(width)) {
           this.#host.commit(setTableColumnWidth(this.#data, columnId, width));
         }
-      }
+      },
+      restore
     );
   }
 
