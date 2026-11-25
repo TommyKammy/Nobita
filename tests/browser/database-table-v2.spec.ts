@@ -353,7 +353,15 @@ test('opens view settings and toggles a property', async ({ page }) => {
 
 test('uses the column menu to hide, sort and duplicate columns', async ({ page }) => {
   await openFixture(page);
-  await setDoc(page);
+  const doc = v2Doc();
+  const view = (doc.blocks[0]?.props.database as { views: Array<Record<string, unknown>> })
+    .views[0]!;
+  view.columns = [
+    { id: 'name', width: 240 },
+    { id: 'status', width: 222 },
+    { id: 'done', width: 120 },
+  ];
+  await setDoc(page, doc);
   await page.locator('.nb-db-th[data-column-id="status"] .nb-db-col-head').click();
   await page.locator('.nb-db-pop-actions button', { hasText: 'Sort Descending' }).click();
   const statusTexts = await page
@@ -364,6 +372,15 @@ test('uses the column menu to hide, sort and duplicate columns', async ({ page }
   await page.locator('.nb-db-th[data-column-id="status"] .nb-db-col-head').click();
   await page.locator('.nb-db-pop-actions button', { hasText: 'Duplicate' }).click();
   await expect(page.locator('.nb-db-th')).toHaveCount(4);
+  const saved = await getDoc(page);
+  const database = saved.blocks[0]?.props.database as {
+    columns: Array<{ id: string }>;
+    views: Array<{ columns?: Array<{ id: string; width: number }> }>;
+  };
+  const duplicate = database.columns[2]!;
+  expect(
+    database.views[0]?.columns?.find(column => column.id === duplicate.id)?.width
+  ).toBe(222);
 
   await page.locator('.nb-db-th[data-column-id="status"] .nb-db-col-head').click();
   await page.locator('.nb-db-pop-actions button', { hasText: 'Hide In View' }).click();

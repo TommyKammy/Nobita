@@ -508,7 +508,8 @@ export class DatabaseView {
     columnId: string,
     anchorId: string | null,
     after: boolean,
-    width = 180
+    width = 180,
+    copyFromId?: string
   ): DatabaseViewConfig[] {
     return this.#views().map(view => {
       const columns = this.#viewColumns(view);
@@ -518,7 +519,13 @@ export class DatabaseView {
         : columns.length;
       if (index < 0) index = columns.length;
       else if (after) index += 1;
-      columns.splice(index, 0, { id: columnId, width });
+      const template = copyFromId
+        ? columns.find(column => column.id === copyFromId)
+        : undefined;
+      columns.splice(index, 0, {
+        ...(template ?? { id: columnId, width }),
+        id: columnId,
+      });
       return { ...view, columns };
     });
   }
@@ -3190,7 +3197,7 @@ export class DatabaseView {
       };
     });
     const view = this.#activeView();
-    const views = this.#viewsWithColumn(column.id, columnId, true);
+    const views = this.#viewsWithColumn(column.id, columnId, true, 180, columnId);
     this.#host.commit({
       ...this.#data,
       columns,
