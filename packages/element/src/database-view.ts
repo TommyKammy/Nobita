@@ -53,16 +53,15 @@ import type {
   InlineRun,
   MarkPatch,
 } from '@nobita/core';
-import {
-  domPointToOffset,
-  nativeSelection,
-  offsetToDomPoint,
-  placeCaret,
-  textLengthOfSubtree,
-} from './dom.js';
+import { nativeSelection, placeCaret } from './dom.js';
 import { dismissFloating, placeFloating } from './floating.js';
 import { icon } from './icons.js';
-import { readRunsFromDom, renderInlineRuns } from './inline-dom.js';
+import {
+  domPointToRunsOffset,
+  readRunsFromDom,
+  renderInlineRuns,
+  runsOffsetToDomPoint,
+} from './inline-dom.js';
 import { parseTsv, tsvCell } from './tsv.js';
 
 export interface DatabaseHost {
@@ -293,8 +292,8 @@ function selectionOffsets(
   ) {
     return null;
   }
-  const start = domPointToOffset(element, range.startContainer, range.startOffset);
-  const end = domPointToOffset(element, range.endContainer, range.endOffset);
+  const start = domPointToRunsOffset(element, range.startContainer, range.startOffset);
+  const end = domPointToRunsOffset(element, range.endContainer, range.endOffset);
   return {
     start: Math.min(start, end),
     end: Math.max(start, end),
@@ -308,8 +307,8 @@ function setSelectionOffsets(
 ): void {
   const from = Math.min(start, end);
   const to = Math.max(start, end);
-  const startPoint = offsetToDomPoint(element, from);
-  const endPoint = offsetToDomPoint(element, to);
+  const startPoint = runsOffsetToDomPoint(element, from);
+  const endPoint = runsOffsetToDomPoint(element, to);
   const range = document.createRange();
   range.setStart(startPoint.node, startPoint.offset);
   range.setEnd(endPoint.node, endPoint.offset);
@@ -325,10 +324,9 @@ function caretAtBoundary(element: HTMLElement, side: 'start' | 'end'): boolean {
   if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return false;
   const range = selection.getRangeAt(0);
   if (!element.contains(range.startContainer)) return false;
-  const offset = domPointToOffset(element, range.startContainer, range.startOffset);
+  const offset = domPointToRunsOffset(element, range.startContainer, range.startOffset);
   if (side === 'start') return offset === 0;
-  const trailingBr = element.lastChild?.nodeName === 'BR' ? 1 : 0;
-  return offset >= Math.max(0, textLengthOfSubtree(element) - trailingBr);
+  return offset >= domPointToRunsOffset(element, element, element.childNodes.length);
 }
 
 export class DatabaseView {
@@ -1136,6 +1134,7 @@ export class DatabaseView {
       applySearch();
     }, { signal: this.#events.signal });
     search.addEventListener('keydown', event => {
+      if (composing || this.#isComposingKey(event, search)) return;
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
@@ -2326,6 +2325,7 @@ export class DatabaseView {
       title.addEventListener(
         'keydown',
         event => {
+          if (this.#isComposingKey(event, title)) return;
           const mod = event.metaKey || event.ctrlKey;
           if (mod && event.key.toLowerCase() === 'z') {
             event.preventDefault();
@@ -3195,6 +3195,7 @@ export class DatabaseView {
       body.addEventListener(
         'keydown',
         event => {
+          if (this.#isComposingKey(event, body)) return;
           const tag = this.#shortcutTag(event);
           if (!tag) return;
           event.preventDefault();
@@ -3385,6 +3386,7 @@ export class DatabaseView {
         this.#pasteIntoRichText(text, value);
       }, { signal: this.#detailEvents.signal });
       text.addEventListener('keydown', event => {
+        if (this.#isComposingKey(event, text)) return;
         if (event.key === 'Enter') {
           event.preventDefault();
           text.blur();
@@ -5046,6 +5048,14 @@ export class DatabaseView {
     columnId: string,
     kind: CellKind
   ): void {
+    if (
+      this.#isComposingKey(
+        event,
+        event.target instanceof HTMLElement ? event.target : null
+      )
+    ) {
+      return;
+    }
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key.toLowerCase() === 'z') {
       event.preventDefault();
@@ -5205,6 +5215,14 @@ export class DatabaseView {
     this.element.append(toolbar);
     this.#cellToolbar = toolbar;
     return toolbar;
+  }
+
+  #isComposingKey(event: KeyboardEvent, target?: HTMLElement | null): boolean {
+    return (
+      event.isComposing ||
+      event.keyCode === 229 ||
+      Boolean(target && this.#composingTargets.has(target))
+    );
   }
 
   #shortcutTag(event: KeyboardEvent): string | null {
