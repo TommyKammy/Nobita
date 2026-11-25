@@ -2007,7 +2007,15 @@ export class DatabaseView {
               return;
             }
             const rowId = event.dataTransfer?.getData('text/nobita-row');
-            if (rowId) this.#moveBoardCard(rowId, group.key);
+            if (rowId) {
+              this.#moveBoardCard(
+                rowId,
+                group.key,
+                undefined,
+                false,
+                event.dataTransfer?.getData('text/nobita-group')
+              );
+            }
           },
           { signal: this.#events.signal }
         );
@@ -2103,6 +2111,10 @@ export class DatabaseView {
         event => {
           event.dataTransfer?.setData('text/nobita-db', this.#instanceId);
           event.dataTransfer?.setData('text/nobita-row', row.id);
+          event.dataTransfer?.setData(
+            'text/nobita-group',
+            card.closest<HTMLElement>('.nb-db-board-column')?.dataset.group ?? ''
+          );
           event.dataTransfer?.setData('text/plain', row.id);
           card.classList.add('is-dragging');
         },
@@ -2148,7 +2160,13 @@ export class DatabaseView {
           const before = event.clientY < rect.top + rect.height / 2;
           const targetGroup = card.closest<HTMLElement>('.nb-db-board-column')?.dataset.group;
           if (targetGroup !== undefined) {
-            this.#moveBoardCard(sourceId, targetGroup, row.id, before);
+            this.#moveBoardCard(
+              sourceId,
+              targetGroup,
+              row.id,
+              before,
+              event.dataTransfer?.getData('text/nobita-group')
+            );
           }
         },
         { signal: this.#events.signal }
@@ -3248,7 +3266,9 @@ export class DatabaseView {
     this.#renderTextCellContent(text, cell);
     text.addEventListener('input', () => {
       const runs = this.#readCellRuns(text);
-      text.dataset.runs = this.#runsSignature(runs);
+      text.dataset.runs = this.#runsSignature(
+        runs.some(run => run.marks) ? runs : undefined
+      );
       this.#commitTextRuns(row.id, column.id, runs, `db:${row.id}:${column.id}`);
     }, { signal: this.#detailEvents.signal });
     text.addEventListener('keydown', event => {
@@ -3633,7 +3653,8 @@ export class DatabaseView {
     rowId: string,
     targetGroupKey: string,
     targetRowId?: string,
-    before = false
+    before = false,
+    sourceGroupKey?: string
   ): void {
     const view = this.#activeView();
     if (view.type !== 'board' || !view.groupBy) return;
@@ -3643,9 +3664,11 @@ export class DatabaseView {
     const row = this.#data.rows.find(item => item.id === rowId);
     if (!groupColumn || !row) return;
     const groups = this.#groupsFor(view);
-    const sourceGroup = groups.find(group =>
-      group.rows.some(item => item.id === rowId)
-    );
+    const sourceGroup =
+      (sourceGroupKey !== undefined
+        ? groups.find(group => group.key === sourceGroupKey)
+        : undefined) ??
+      groups.find(group => group.rows.some(item => item.id === rowId));
     if (!sourceGroup) return;
     const sorts = databaseSorts(view).length > 0;
     const sameGroup = sourceGroup.key === targetGroupKey;
@@ -4023,7 +4046,24 @@ export class DatabaseView {
       }
       const text = field.querySelector<HTMLElement>('.nb-db-detail-text');
       const textValue = cell?.text ?? '';
-      if (text && text.textContent !== textValue) {
+      if (text && text.dataset.richText === 'true') {
+        const signature = this.#runsSignature(cell?.runs);
+        if (
+          text.dataset.runs !== signature ||
+          text.textContent !== textValue
+        ) {
+          const focused = text.matches(':focus');
+          const offsets = focused ? selectionOffsets(text) : null;
+          this.#renderTextCellContent(text, cell);
+          if (offsets) {
+            setSelectionOffsets(
+              text,
+              Math.min(offsets.start, textValue.length),
+              Math.min(offsets.end, textValue.length)
+            );
+          }
+        }
+      } else if (text && text.textContent !== textValue) {
         if (text.matches(':focus')) {
           const offsets = selectionOffsets(text);
           text.textContent = textValue;
@@ -4332,7 +4372,9 @@ export class DatabaseView {
             return;
           }
           const runs = this.#readCellRuns(text);
-          text.dataset.runs = this.#runsSignature(runs);
+          text.dataset.runs = this.#runsSignature(
+            runs.some(run => run.marks) ? runs : undefined
+          );
           this.#commitTextRuns(row.id, column.id, runs, `db:${row.id}:${column.id}`);
         },
         { signal: this.#events.signal }
@@ -5080,6 +5122,59 @@ export class DatabaseView {
         break;
       }
       ancestor = ancestor.parentElement;
+    }
+    if (range.collapsed && (marked || existing)) return;
+    const markedElement = marked ?? existing;
+    if (
+      markedElement &&
+      !range.collapsed &&
+      markedElement.contains(range.endContainer) &&
+      markedElement.childNodes.length === 1 &&
+      markedElement.firstChild?.nodeType === Node.TEXT_NODE &&
+      markedElement.isContentEditable
+    ) {
+      const targetOffsets = selectionOffsets(target);
+      const local = selectionOffsets(markedElement);
+      const text = markedElement.textContent ?? '';
+      if (targetOffsets && local && local.end > local.start) {
+        const build = (value: string, keep: boolean): Node | null => {
+          if (!value) return null;
+          if (markedElement.tagName === 'SPAN') {
+            const clone = markedElement.cloneNode(false) as HTMLElement;
+            if (!keep) {
+              const tokens = new Set(
+                (clone.dataset.mark ?? '').split(/\s+/u)
+              );
+              tokens.delete(markKeyName);
+              if (tokens.size > 0) clone.dataset.mark = [...tokens].join(' ');
+              else delete clone.dataset.mark;
+              clone.classList.remove(`nb-m-${markKeyName}`);
+            }
+            clone.textContent = value;
+            return clone;
+          }
+          if (!keep) return document.createTextNode(value);
+          const clone = document.createElement(markedElement.tagName.toLowerCase());
+          clone.textContent = value;
+          return clone;
+        };
+        const nodes = [
+          build(text.slice(0, local.start), true),
+          build(text.slice(local.start, local.end), false),
+          build(text.slice(local.end), true),
+        ].filter((item): item is Node => item !== null);
+        markedElement.replaceWith(...nodes);
+        setSelectionOffsets(
+          target,
+          Math.min(targetOffsets.start, target.textContent?.length ?? 0),
+          Math.min(targetOffsets.end, target.textContent?.length ?? 0)
+        );
+        target.dispatchEvent(
+          new InputEvent('input', { bubbles: true, inputType: 'format' })
+        );
+        this.#syncCellToolbar();
+        return;
+      }
     }
     if (marked) {
       const tokens = new Set((marked.dataset.mark ?? '').split(/\s+/u));

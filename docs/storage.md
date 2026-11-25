@@ -14,7 +14,7 @@ const doc = editor.getDoc();          // Doc
 editor.setDoc(doc);                   // replace
 ```
 
-No storage library is imported by `@nobita/element`. The 90.7 KB editor bundle is unchanged whether a host persists to localStorage, IndexedDB, a file, an API, SQLite or Cloudflare D1.
+No storage library is imported by `@nobita/element`. The 91.0 KB editor bundle is unchanged whether a host persists to localStorage, IndexedDB, a file, an API, SQLite or Cloudflare D1.
 
 `@nobita/storage` is an **optional** package for hosts that want a ready-made persistence port and adapters.
 
