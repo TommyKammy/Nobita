@@ -8,7 +8,7 @@ import {
   runsLength,
   toggleMarkInRange,
 } from '@nobita/core';
-import type { InlineMark, MarkPatch } from '@nobita/core';
+import type { InlineMark, MarkPatch, PageInfo } from '@nobita/core';
 import { nativeSelection } from './dom.js';
 import { placeFloating } from './floating.js';
 import { icon } from './icons.js';
@@ -30,6 +30,7 @@ export interface DatabaseRichTextContext {
   isReadonly: () => boolean;
   getSignal: () => AbortSignal;
   richTextSelector?: string;
+  resolvePage?: (pageId: string) => PageInfo | null;
 }
 
 /** Manages inline rich-text formatting toolbar, pending marks, IME composition, and paste. */
@@ -224,7 +225,7 @@ export class DatabaseRichTextController {
               code: marks.code === true,
             };
             const nextRuns = applyMarkPatch(runs, offset, endOffset, patch);
-            renderRichTextRuns(target, nextRuns);
+            renderRichTextRuns(target, nextRuns, this.#ctx.resolvePage);
             setSelectionOffsets(target, endOffset, endOffset);
           }
         }
@@ -267,7 +268,7 @@ export class DatabaseRichTextController {
           : inputEvent.data.replace(/\r?\n/gu, ' ');
         const runs = readRichTextRuns(target);
         const nextRuns = insertTextAt(runs, offsets.start, data, marks);
-        renderRichTextRuns(target, nextRuns);
+        renderRichTextRuns(target, nextRuns, this.#ctx.resolvePage);
         const pos = offsets.start + data.length;
         setSelectionOffsets(target, pos, pos);
         target.dispatchEvent(
@@ -306,7 +307,7 @@ export class DatabaseRichTextController {
     this.#pendingMarks = null;
     const deleted = deleteTextRange(runs, offsets.start, offsets.end);
     const nextRuns = insertTextAt(deleted, offsets.start, value, pending);
-    renderRichTextRuns(target, nextRuns);
+    renderRichTextRuns(target, nextRuns, this.#ctx.resolvePage);
     const pos = offsets.start + value.length;
     setSelectionOffsets(target, pos, pos);
     target.dispatchEvent(
@@ -367,7 +368,7 @@ export class DatabaseRichTextController {
     if (end > start) {
       this.#pendingMarks = null;
       const nextRuns = toggleMarkInRange(runs, start, end, markKey);
-      renderRichTextRuns(target, nextRuns);
+      renderRichTextRuns(target, nextRuns, this.#ctx.resolvePage);
       setSelectionOffsets(target, start, end);
       target.dispatchEvent(
         new InputEvent('input', { bubbles: true, inputType: 'format' })
@@ -382,8 +383,9 @@ export class DatabaseRichTextController {
         ? this.#pendingMarks.marks
         : (marksAt(runs, start) ?? {});
     const next: InlineMark = { ...baseSource };
-    // Typing next to an atomic mention must not extend it.
+    // Typing next to an atomic mention or page chip must not extend it.
     delete next.mention;
+    delete next.page;
     if (next[markKey] === true) delete next[markKey];
     else next[markKey] = true;
     this.#pendingMarks = {

@@ -81,7 +81,7 @@ import {
 } from './dom.js';
 import { icon } from './icons.js';
 import { blockRange, orderedRange, selectionBlocks } from './selection.js';
-import { readRunsFromDom } from './inline-dom.js';
+import { readRunsFromDom, refreshInlinePageChips } from './inline-dom.js';
 import { Menu, type MenuItem } from './menu.js';
 import { buildBlockMenuItems, buildSlashMenuItems } from './menu-items.js';
 import { styles } from './styles.js';
@@ -532,6 +532,9 @@ export class NobitaEditor implements BlockHost {
   /** Re-render page reference cards and inline page chips after host metadata changes. */
   refreshPageLinks(): void {
     for (const view of this.#viewIndex.values()) view.refreshPageLink();
+    const resolve = (pageId: string): PageInfo | null => this.pageInfo(pageId);
+    refreshInlinePageChips(this.#body, resolve);
+    refreshInlinePageChips(this.#overlay, resolve);
   }
 
   /** Insert an inline page link chip at the current text selection. */
@@ -3269,17 +3272,26 @@ export class NobitaEditor implements BlockHost {
     }
     state.end = end;
     if (state.mode === 'inline' && query.endsWith(']]')) {
-      const target = query.slice(0, -2).trim().toLowerCase();
-      const exact = target
-        ? state.items.find(item => (item.title.trim() || 'Untitled page').toLowerCase() === target)
+      const target = query.slice(0, -2).trim();
+      const lowerTarget = target.toLowerCase();
+      const exact = lowerTarget
+        ? state.items.find(
+            item => (item.title.trim() || 'Untitled page').toLowerCase() === lowerTarget
+          )
         : undefined;
       if (exact) {
         this.#menu.close(false);
         this.#insertPageLinkFromState(state, exact);
         return;
       }
+      const provider = this.#options.pageProvider;
+      const snapshot: PageLinkState = { ...state, end };
+      const expectedSlice = text.slice(snapshot.start, snapshot.end);
       if (this.#pageLink === state) this.#pageLink = null;
       this.#menu.close();
+      if (target && provider) {
+        void this.#resolveClosingBracketPageLink(snapshot, target, expectedSlice);
+      }
       return;
     }
     const searchQuery =
@@ -3401,9 +3413,72 @@ export class NobitaEditor implements BlockHost {
     this.#focusBlock(state.blockId, caret.offset);
   }
 
+  async #resolveClosingBracketPageLink(
+    snapshot: PageLinkState,
+    target: string,
+    expectedSlice: string
+  ): Promise<void> {
+    const provider = this.#options.pageProvider;
+    if (!provider || this.#readonly) return;
+    const epoch = this.#docEpoch;
+    let items: readonly PageInfo[];
+    try {
+      items = await Promise.resolve(provider.search(target));
+    } catch {
+      return;
+    }
+    if (this.#destroyed || this.#readonly || epoch !== this.#docEpoch) return;
+    const lowerTarget = target.toLowerCase();
+    const exact = items.find(
+      item => (item.title.trim() || 'Untitled page').toLowerCase() === lowerTarget
+    );
+    if (!exact?.id) return;
+    const block = findBlock(this.store.doc.blocks, snapshot.blockId);
+    if (!block) return;
+    const currentText = plainText(block.text);
+    if (
+      snapshot.end > currentText.length ||
+      currentText.slice(snapshot.start, snapshot.end) !== expectedSlice
+    ) {
+      return;
+    }
+    const selectionBefore = this.#currentSelection();
+    const pageId = exact.id.trim();
+    if (!pageId) return;
+    const pageTitle = exact.title.trim() || 'Untitled page';
+    const pageIcon = exact.icon?.trim();
+    const runs = deleteTextRange(block.text, snapshot.start, snapshot.end);
+    const nextRuns = insertTextAt(runs, snapshot.start, pageTitle, {
+      page: {
+        id: pageId,
+        title: pageTitle,
+        ...(pageIcon ? { icon: pageIcon } : {}),
+      },
+    });
+    const next = replaceBlockText(this.store.doc, snapshot.blockId, nextRuns);
+    const delta = pageTitle.length - (snapshot.end - snapshot.start);
+    let caret: Point = {
+      blockId: snapshot.blockId,
+      offset: snapshot.start + pageTitle.length,
+    };
+    if (
+      selectionBefore &&
+      this.#isCollapsed(selectionBefore) &&
+      selectionBefore.focus.blockId === snapshot.blockId &&
+      selectionBefore.focus.offset >= snapshot.end
+    ) {
+      caret = {
+        blockId: snapshot.blockId,
+        offset: Math.max(0, selectionBefore.focus.offset + delta),
+      };
+    }
+    this.#commit(next, { anchor: caret, focus: caret });
+    this.#focusBlock(caret.blockId, caret.offset);
+  }
+
   async #createAndInsertPage(state: PageLinkState, title: string): Promise<void> {
-    const create = this.#options.pageProvider?.create;
-    if (!create || this.#readonly) return;
+    const provider = this.#options.pageProvider;
+    if (!provider?.create || this.#readonly) return;
     const blockBefore = findBlock(this.store.doc.blocks, state.blockId);
     if (!blockBefore) return;
     const textBefore = plainText(blockBefore.text);
@@ -3413,7 +3488,7 @@ export class NobitaEditor implements BlockHost {
     };
     const epoch = this.#docEpoch;
     try {
-      const created = await Promise.resolve(create(title));
+      const created = await Promise.resolve(provider.create(title));
       if (this.#destroyed || this.#readonly || epoch !== this.#docEpoch) return;
       if (!created?.id) return;
       const blockAfter = findBlock(this.store.doc.blocks, snapshot.blockId);
@@ -3425,15 +3500,15 @@ export class NobitaEditor implements BlockHost {
   }
 
   async #createSlashPage(blockId: string, offset: number): Promise<void> {
-    const create = this.#options.pageProvider?.create;
-    if (!create || this.#readonly) return;
+    const provider = this.#options.pageProvider;
+    if (!provider?.create || this.#readonly) return;
     const blockBefore = findBlock(this.store.doc.blocks, blockId);
     if (!blockBefore) return;
     const textBefore = plainText(blockBefore.text);
     const typeBefore = blockBefore.type;
     const epoch = this.#docEpoch;
     try {
-      const created = await Promise.resolve(create('Untitled'));
+      const created = await Promise.resolve(provider.create('Untitled'));
       if (this.#destroyed || this.#readonly || epoch !== this.#docEpoch) return;
       if (!created?.id) return;
       const blockAfter = findBlock(this.store.doc.blocks, blockId);

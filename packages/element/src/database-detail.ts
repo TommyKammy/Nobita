@@ -10,6 +10,7 @@ import type {
   DatabaseRow,
   DatabaseView as DatabaseViewConfig,
   InlineRun,
+  PageInfo,
 } from '@nobita/core';
 import { handleHistoryKey, placeCaret } from './dom.js';
 import { icon } from './icons.js';
@@ -60,6 +61,7 @@ export interface DatabaseDetailContext {
   openPeoplePopover(columnId: string, rowId: string, anchor: HTMLElement): void;
   openImagePopover(columnId: string, rowId: string, anchor: HTMLElement): void;
   richText: DatabaseRichTextController;
+  resolvePage?: (pageId: string) => PageInfo | null;
 }
 
 /** Manages the record page modal dialog, focus trap, field editors, and page body. */
@@ -367,7 +369,7 @@ export class DatabaseDetailController {
   #renderPageContent(element: HTMLElement, row: DatabaseRow): void {
     const runs = row.page?.content ?? [];
     element.dataset.runs = runsSignature(runs);
-    if (runs.length > 0) renderInlineRuns(element, runs);
+    if (runs.length > 0) renderInlineRuns(element, runs, this.#ctx.resolvePage);
     else element.replaceChildren();
   }
 
@@ -569,7 +571,7 @@ export class DatabaseDetailController {
     text.setAttribute('role', 'textbox');
     text.setAttribute('aria-label', column.name);
     text.setAttribute('aria-multiline', 'false');
-    renderTextCellContent(text, cell);
+    renderTextCellContent(text, cell, this.#ctx.resolvePage);
     if (!readonly) {
       const commitField = (): void => {
         const runs = readCellRuns(text);
@@ -767,7 +769,7 @@ export class DatabaseDetailController {
         ) {
           const focused = text.matches(':focus');
           const offsets = focused ? selectionOffsets(text) : null;
-          renderTextCellContent(text, cell);
+          renderTextCellContent(text, cell, this.#ctx.resolvePage);
           if (offsets) {
             setSelectionOffsets(
               text,

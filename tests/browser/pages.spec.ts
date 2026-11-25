@@ -745,3 +745,230 @@ test('navigates inline page chips inside database record detail overlays', async
     )
   ).toEqual(['p-spec']);
 });
+
+test('converts [[Exact Title]] when typed faster than an async PageProvider.search', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'wiki-async-brackets',
+    title: '',
+    blocks: [{ id: 'b1', type: 'paragraph', text: [], props: {}, children: [] }],
+  });
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: {
+        setPageProvider(provider: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    editor?.setPageProvider({
+      search: async (query: string) => {
+        await new Promise(resolve => setTimeout(resolve, 120));
+        const all = [{ id: 'p-road', title: 'Roadmap', icon: '🗺️' }];
+        const q = query.trim().toLowerCase();
+        return all.filter(item => !q || item.title.toLowerCase().includes(q));
+      },
+    });
+    editor?.focus('b1', 0);
+  });
+
+  await page.keyboard.type('[[Roadmap]]');
+  await expect
+    .poll(async () => blockById(await getDoc(page), 'b1')?.runs[0]?.marks?.page?.id)
+    .toBe('p-road');
+  expect(blockById(await getDoc(page), 'b1')?.text).toBe('Roadmap');
+});
+
+test('preserves stateful PageProvider this receiver during [[ and /new-page creation', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'wiki-stateful-provider',
+    title: '',
+    blocks: [
+      { id: 'b1', type: 'paragraph', text: [], props: {}, children: [] },
+      { id: 'b2', type: 'paragraph', text: [], props: {}, children: [] },
+    ],
+  });
+  await page.evaluate(() => {
+    class StatefulProvider {
+      prefix = 'ws-';
+      counter = 0;
+      search() {
+        return [];
+      }
+      create(title: string) {
+        this.counter += 1;
+        return { id: `${this.prefix}${this.counter}`, title };
+      }
+    }
+    const editor = (window as unknown as {
+      __editor?: {
+        setPageProvider(provider: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    editor?.setPageProvider(new StatefulProvider());
+    editor?.focus('b1', 0);
+  });
+
+  await page.keyboard.type('[[Stateful');
+  await expect(page.locator('.nb-menu-item', { hasText: 'Create "Stateful"' })).toBeVisible();
+  await page.locator('.nb-menu-item', { hasText: 'Create "Stateful"' }).click();
+  await expect
+    .poll(async () => blockById(await getDoc(page), 'b1')?.runs[0]?.marks?.page?.id)
+    .toBe('ws-1');
+
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { focus(blockId: string, offset?: number): void };
+    }).__editor;
+    editor?.focus('b2', 0);
+  });
+  await page.keyboard.type('/new-page');
+  await expect(page.locator('.nb-menu-item', { hasText: 'New page' })).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect
+    .poll(async () => (await getDoc(page)).blocks[1]?.props.pageId)
+    .toBe('ws-2');
+});
+
+test('strips marks.page from pending bold formatting in table cells and refreshes resolved chips in tables and databases', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'table-db-page-chips',
+    title: '',
+    blocks: [
+      {
+        id: 't1',
+        type: 'table',
+        text: [],
+        props: {
+          table: {
+            columns: [{ id: 'tc1' }],
+            rows: [
+              {
+                id: 'tr1',
+                cells: {
+                  tc1: {
+                    text: 'Road',
+                    runs: [
+                      { text: 'Road', marks: { page: { id: 'p1', title: 'Road', icon: '🗺️' } } },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        },
+        children: [],
+      },
+      {
+        id: 'db1',
+        type: 'database',
+        text: [],
+        props: {
+          database: {
+            variant: 'database',
+            columns: [{ id: 'c1', name: 'Task', type: 'text' }],
+            rows: [
+              {
+                id: 'r1',
+                cells: {
+                  c1: {
+                    text: 'Road',
+                    runs: [
+                      { text: 'Road', marks: { page: { id: 'p1', title: 'Road', icon: '🗺️' } } },
+                    ],
+                  },
+                },
+                page: {
+                  content: [
+                    { text: 'Road', marks: { page: { id: 'p1', title: 'Road', icon: '🗺️' } } },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+        children: [],
+      },
+    ],
+  });
+
+  // Open database detail modal so we can verify live refresh in all 3 surfaces simultaneously.
+  await page.locator('.nb-db-cell[data-row-id="r1"][data-column-id="c1"]').hover();
+  await page.locator('.nb-db-row-expand').first().click();
+  await expect(page.locator('.nb-db-detail')).toBeVisible();
+
+  // Set resolvePage and verify live refresh across simple table, database table, and detail modal.
+  await page.evaluate(() => {
+    const host = document.querySelector('nobita-editor') as HTMLElement & {
+      resolvePage?: (pageId: string) => { id: string; title: string; icon?: string } | null;
+    };
+    host.resolvePage = pageId =>
+      pageId === 'p1' ? { id: 'p1', title: 'Live Roadmap', icon: '🚀' } : null;
+  });
+
+  await expect(page.locator('.nb-table .nb-m-page')).toHaveText('Live Roadmap');
+  await expect(page.locator('.nb-table .nb-m-page')).toHaveAttribute('data-page-icon', '🚀');
+  await expect(page.locator('.nb-db .nb-m-page')).toHaveText('Live Roadmap');
+  await expect(page.locator('.nb-db-detail .nb-db-detail-page .nb-m-page')).toHaveText(
+    'Live Roadmap'
+  );
+
+  // Close detail modal, focus after the page chip in the simple table cell, press Mod+B, and type.
+  await page.locator('.nb-db-detail-close').click();
+  await expect(page.locator('.nb-db-detail')).toHaveCount(0);
+
+  await page.evaluate(() => {
+    const root = document.querySelector('nobita-editor')?.shadowRoot;
+    const cell = root?.querySelector<HTMLElement>('.nb-table-cell');
+    if (!cell || !root) return;
+    cell.focus();
+    const sel =
+      (root as ShadowRoot & { getSelection?: () => Selection | null }).getSelection?.() ??
+      window.getSelection();
+    const range = document.createRange();
+    range.setStart(cell, cell.childNodes.length);
+    range.collapse(true);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  });
+
+  await page.keyboard.press('ControlOrMeta+b');
+  await page.keyboard.type('X');
+
+  const runs = await page.evaluate(() => {
+    const doc = (
+      window as unknown as {
+        __editor?: {
+          getDoc(): {
+            blocks: Array<{
+              id: string;
+              props: {
+                table?: {
+                  rows: Array<{
+                    cells: Record<string, { runs?: Array<{ text: string; marks?: Record<string, unknown> }> }>;
+                  }>;
+                };
+              };
+            }>;
+          };
+        };
+      }
+    ).__editor?.getDoc();
+    const tableBlock = doc?.blocks.find(b => b.id === 't1');
+    return tableBlock?.props.table?.rows[0]?.cells.tc1?.runs ?? [];
+  });
+  const typed = runs.find(r => r.text === 'X');
+  expect(typed?.marks?.bold).toBe(true);
+  expect(typed?.marks?.page).toBeUndefined();
+});

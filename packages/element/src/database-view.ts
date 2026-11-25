@@ -35,6 +35,7 @@ import type {
   DatabaseView as DatabaseViewConfig,
   DatabaseViewColumn,
   InlineRun,
+  PageInfo,
 } from '@nobita/core';
 import { handleHistoryKey, nativeSelection, placeCaret } from './dom.js';
 import { beginWindowDrag } from './floating.js';
@@ -88,6 +89,7 @@ export type DatabaseImageUploader = (
 export interface DatabaseHost {
   readonly readonly: boolean;
   readonly uploadImage?: DatabaseImageUploader | undefined;
+  resolvePage?: (pageId: string) => PageInfo | null;
   commit(data: DatabaseData, options?: { mergeKey?: string }): void;
   undo(): void;
   redo(): void;
@@ -193,11 +195,15 @@ export class DatabaseView {
     this.element.tabIndex = -1;
     this.element.dataset.readonly = String(this.#readonly);
 
+    const resolvePage = (pageId: string): PageInfo | null =>
+      this.#host.resolvePage?.(pageId) ?? null;
+
     this.#richText = new DatabaseRichTextController({
       rootElement: this.element,
       getDetailElement: () => this.#detail.element,
       isReadonly: () => this.#readonly,
       getSignal: () => this.#events.signal,
+      resolvePage,
     });
     const baseCtx = {
       rootElement: this.element,
@@ -215,6 +221,7 @@ export class DatabaseView {
       ) => this.#commitCell(rowId, colId, cell, key),
       history: (redo: boolean) => this.#history(redo),
       richText: this.#richText,
+      resolvePage,
     };
     this.#board = new DatabaseBoardController({
       ...baseCtx,
@@ -1871,7 +1878,7 @@ export class DatabaseView {
             const signature = isRich ? runsSignature(cell?.runs) : '';
             if (isRich && target.dataset.runs !== signature) {
               const nextLength = cell?.runs ? runsLength(cell.runs) : value.length;
-              updateText(() => renderTextCellContent(target, cell), nextLength);
+              updateText(() => renderTextCellContent(target, cell, this.#host.resolvePage), nextLength);
             } else if ((!isRich || !cell?.runs) && target.textContent !== value) {
               updateText(() => {
                 target.textContent = value;
@@ -2307,7 +2314,7 @@ export class DatabaseView {
     text.setAttribute('aria-label', column.name);
     if (column.type === 'text') {
       text.classList.add('nb-db-rich-text');
-      renderTextCellContent(text, cell);
+      renderTextCellContent(text, cell, this.#host.resolvePage);
     } else {
       text.textContent = cell?.text ?? '';
     }
