@@ -1,6 +1,6 @@
 import { createBlock, createDoc } from './doc.js';
 import { cloneDatabaseData, databaseCellDisplay, normalizeDatabaseData, sortedDatabaseRows } from './database.js';
-import { parseInlineRuns, runsToHtml } from './text.js';
+import { cloneRuns, parseInlineRuns, runsToHtml } from './text.js';
 import { cloneTableData, normalizeTableData, tableToTsv } from './table.js';
 import type {
   Block,
@@ -148,7 +148,7 @@ export function cloneDoc(doc: Doc): Doc {
 function cloneBlockList(blocks: readonly Block[]): Block[] {
   return blocks.map(block => ({
     ...block,
-    text: block.text.map(run => ({ ...run, ...(run.marks ? { marks: { ...run.marks } } : {}) })),
+    text: cloneRuns(block.text),
     props: {
       ...block.props,
       ...(block.props.database ? { database: cloneDatabaseData(block.props.database) } : {}),

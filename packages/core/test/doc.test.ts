@@ -11,6 +11,7 @@ import {
   moveBlock,
   splitBlock,
 } from '../src/doc.js';
+import { cloneDoc } from '../src/serialize.js';
 
 function doc() {
   return createDoc({
@@ -75,5 +76,26 @@ describe('block tree', () => {
       ],
     });
     expect(moveBlock(base, 'a', 'b', 'child')).toBe(base);
+  });
+
+  it('deep-clones nested mention marks in cloneDoc', () => {
+    const base = createDoc({
+      blocks: [
+        createBlock('paragraph', {
+          id: 'a',
+          text: [
+            {
+              text: '@Ada',
+              marks: {
+                mention: { id: 'u1', label: 'Ada', kind: 'person' },
+              },
+            },
+          ],
+        }),
+      ],
+    });
+    const cloned = cloneDoc(base);
+    cloned.blocks[0]!.text[0]!.marks!.mention!.label = 'Edited';
+    expect(base.blocks[0]!.text[0]!.marks!.mention!.label).toBe('Ada');
   });
 });

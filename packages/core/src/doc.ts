@@ -132,8 +132,12 @@ export function countWords(doc: Doc): number {
     if (database) {
       for (const row of database.rows) {
         for (const cell of Object.values(row.cells)) {
-          const value = cell.text?.trim();
+          const value = (cell.text ?? (cell.runs ? plainText(cell.runs) : '')).trim();
           if (value) words += value.split(/\s+/u).length;
+        }
+        if (row.page?.content) {
+          const pageText = plainText(row.page.content).trim();
+          if (pageText) words += pageText.split(/\s+/u).length;
         }
       }
     }
