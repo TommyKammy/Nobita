@@ -447,7 +447,7 @@ export function readCellRuns(element: HTMLElement): InlineRun[] {
 }
 
 export function isMultilineRichText(target: HTMLElement): boolean {
-  return target.classList.contains('nb-db-page-text');
+  return target.classList.contains('nb-db-page-text') || target.dataset.multiline === 'true';
 }
 
 export function readRichTextRuns(target: HTMLElement): InlineRun[] {

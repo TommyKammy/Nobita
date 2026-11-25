@@ -27,6 +27,49 @@ describe('inline markdown', () => {
       { text: 'wow', marks: { bold: true, italic: true } },
     ]);
   });
+
+  it('parses inline formatting and escapes inside link labels', () => {
+    expect(
+      parseInlineMarkdown('[**bold** and `code` \\[1\\]](https://example.com)')
+    ).toEqual([
+      { text: 'bold', marks: { bold: true, link: 'https://example.com' } },
+      { text: ' and ', marks: { link: 'https://example.com' } },
+      { text: 'code', marks: { code: true, link: 'https://example.com' } },
+      { text: ' [1]', marks: { link: 'https://example.com' } },
+    ]);
+  });
+
+  it('handles escaped delimiters and code-fence padding', () => {
+    expect(parseInlineMarkdown('*2 \\* 3* and **a \\** b**')).toEqual([
+      { text: '2 * 3', marks: { italic: true } },
+      { text: ' and ' },
+      { text: 'a ** b', marks: { bold: true } },
+    ]);
+    expect(parseInlineMarkdown('`` a`b `` and `` `a` `` and `  pad  `')).toEqual([
+      { text: 'a`b', marks: { code: true } },
+      { text: ' and ' },
+      { text: '`a`', marks: { code: true } },
+      { text: ' and ' },
+      { text: ' pad ', marks: { code: true } },
+    ]);
+  });
+
+  it('parses links with balanced parentheses in destinations', () => {
+    expect(
+      parseInlineMarkdown(
+        'See [TypeScript](https://en.wikipedia.org/wiki/TypeScript_(programming_language)).'
+      )
+    ).toEqual([
+      { text: 'See ' },
+      {
+        text: 'TypeScript',
+        marks: {
+          link: 'https://en.wikipedia.org/wiki/TypeScript_(programming_language)',
+        },
+      },
+      { text: '.' },
+    ]);
+  });
 });
 
 describe('markdown documents', () => {

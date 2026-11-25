@@ -1,8 +1,8 @@
 import { createBlock } from './doc.js';
-import { createTableColumn, createTableData, createTableRow } from './table.js';
+import { createTableColumn, createTableData, createTableRow, hasRichMarks } from './table.js';
 import { databaseCellText, sortedDatabaseRows } from './database.js';
 import { normalizeRuns, plainText, runsLength, sliceRuns } from './text.js';
-import type { Block, Doc, InlineMark, InlineRun } from './types.js';
+import type { Block, Doc, InlineMark, InlineRun, TableCell } from './types.js';
 import { safeHref, safeImageSrc } from './url.js';
 
 const ESCAPABLE = new Set(['\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!', '|', '>', '~']);
@@ -11,11 +11,105 @@ function withMark(run: InlineRun, patch: InlineMark): InlineRun {
   return { text: run.text, marks: { ...(run.marks ?? {}), ...patch } };
 }
 
-/**
- * Parse the inline markdown subset Nobita understands. Unknown syntax is kept
- * literally. This is intentionally forgiving: pasted prose should never break.
- */
-export function parseInlineMarkdown(text: string): InlineRun[] {
+/** Find a closing backtick fence with the exact same backtick run length (CommonMark §6.1). */
+function findClosingCodeFence(text: string, fence: string, from: number): number {
+  let pos = from;
+  while (pos < text.length) {
+    const hit = text.indexOf(fence, pos);
+    if (hit < 0) return -1;
+    const prevBacktick = hit > 0 && text[hit - 1] === '`';
+    const nextBacktick = text[hit + fence.length] === '`';
+    if (!prevBacktick && !nextBacktick) return hit;
+    pos = hit + 1;
+  }
+  return -1;
+}
+
+/** CommonMark §6.1: strip one leading + trailing space when both exist and content isn't all spaces. */
+function stripCodeSpanPadding(inner: string): string {
+  if (
+    inner.length >= 2 &&
+    inner.startsWith(' ') &&
+    inner.endsWith(' ') &&
+    /[^ ]/u.test(inner)
+  ) {
+    return inner.slice(1, -1);
+  }
+  return inner;
+}
+
+/** Match `[label](destination "optional title")` with balanced parentheses in the destination. */
+function matchMarkdownLink(
+  text: string,
+  start: number
+): { rawLabel: string; href: string; length: number } | null {
+  if (text[start] !== '[') return null;
+  let cursor = start + 1;
+  while (cursor < text.length) {
+    const ch = text[cursor];
+    if (ch === '\\' && cursor + 1 < text.length) {
+      cursor += 2;
+      continue;
+    }
+    if (ch === ']') break;
+    cursor += 1;
+  }
+  if (text[cursor] !== ']' || text[cursor + 1] !== '(') return null;
+  const rawLabel = text.slice(start + 1, cursor);
+  let pos = cursor + 2;
+  const destStart = pos;
+  let depth = 0;
+  while (pos < text.length) {
+    const ch = text[pos];
+    if (ch === '\\' && pos + 1 < text.length) {
+      pos += 2;
+      continue;
+    }
+    if (/\s/u.test(ch ?? '')) break;
+    if (ch === '(') {
+      depth += 1;
+      pos += 1;
+      continue;
+    }
+    if (ch === ')') {
+      if (depth === 0) break;
+      depth -= 1;
+      pos += 1;
+      continue;
+    }
+    pos += 1;
+  }
+  if (depth !== 0 || pos === destStart) return null;
+  const href = text.slice(destStart, pos);
+  if (text[pos] === ')') {
+    return { rawLabel, href, length: pos + 1 - start };
+  }
+  const titleMatch = /^\s+"[^"]*"\)/u.exec(text.slice(pos));
+  if (!titleMatch) return null;
+  return { rawLabel, href, length: pos + titleMatch[0].length - start };
+}
+
+function hasBalancedParens(value: string): boolean {
+  let depth = 0;
+  for (const ch of value) {
+    if (ch === '(') depth += 1;
+    else if (ch === ')') {
+      if (depth === 0) return false;
+      depth -= 1;
+    }
+  }
+  return depth === 0;
+}
+
+function formatMarkdownHref(href: string, escapePipe: boolean): string {
+  let out = hasBalancedParens(href)
+    ? href
+    : href.replace(/\(/gu, '%28').replace(/\)/gu, '%29');
+  if (escapePipe) out = out.replace(/\|/gu, '\\|');
+  return out;
+}
+
+function parseInline(text: string, allowLinks: boolean): InlineRun[] {
   if (!text) return [];
   const runs: InlineRun[] = [];
   let buffer = '';
@@ -27,8 +121,28 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
   };
 
   const findClosing = (token: string, from: number): number => {
-    const index = text.indexOf(token, from);
-    return index;
+    let pos = from;
+    while (pos < text.length) {
+      const ch = text[pos];
+      if (ch === '\\' && pos + 1 < text.length) {
+        pos += 2;
+        continue;
+      }
+      if (ch === '`') {
+        let fence = '`';
+        while (text[pos + fence.length] === '`') fence += '`';
+        const close = findClosingCodeFence(text, fence, pos + fence.length);
+        if (close >= 0) {
+          pos = close + fence.length;
+          continue;
+        }
+        pos += fence.length;
+        continue;
+      }
+      if (text.startsWith(token, pos)) return pos;
+      pos += 1;
+    }
+    return -1;
   };
 
   let index = 0;
@@ -48,23 +162,27 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
     if (char === '`') {
       let fence = '`';
       while (text[index + fence.length] === '`') fence += '`';
-      const close = findClosing(fence, index + fence.length);
+      const close = findClosingCodeFence(text, fence, index + fence.length);
       if (close > index) {
         flush();
-        const inner = text.slice(index + fence.length, close);
+        const inner = stripCodeSpanPadding(text.slice(index + fence.length, close));
         runs.push({ text: inner, marks: { code: true } });
         index = close + fence.length;
         continue;
       }
+      buffer += fence;
+      index += fence.length;
+      continue;
     }
 
-    if (char === '[') {
-      const match = /^\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/u.exec(text.slice(index));
-      if (match?.[2]) {
+    if (allowLinks && char === '[') {
+      const linkMatch = matchMarkdownLink(text, index);
+      if (linkMatch) {
         flush();
-        const label = match[1] ?? match[2];
-        runs.push({ text: label, marks: { link: match[2] } });
-        index += match[0].length;
+        for (const run of parseInline(linkMatch.rawLabel, false)) {
+          runs.push(withMark(run, { link: linkMatch.href }));
+        }
+        index += linkMatch.length;
         continue;
       }
     }
@@ -76,7 +194,7 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
       if (close > index + 3) {
         flush();
         const inner = text.slice(index + 3, close);
-        for (const run of parseInlineMarkdown(inner)) {
+        for (const run of parseInline(inner, allowLinks)) {
           runs.push(withMark(withMark(run, { bold: true }), { italic: true }));
         }
         index = close + 3;
@@ -91,7 +209,7 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
       if (close > index + 2) {
         flush();
         const inner = text.slice(index + 2, close);
-        for (const run of parseInlineMarkdown(inner)) runs.push(withMark(run, { bold: true }));
+        for (const run of parseInline(inner, allowLinks)) runs.push(withMark(run, { bold: true }));
         index = close + 2;
         continue;
       }
@@ -102,7 +220,7 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
       if (close > index + 2) {
         flush();
         const inner = text.slice(index + 2, close);
-        for (const run of parseInlineMarkdown(inner)) runs.push(withMark(run, { strike: true }));
+        for (const run of parseInline(inner, allowLinks)) runs.push(withMark(run, { strike: true }));
         index = close + 2;
         continue;
       }
@@ -114,7 +232,7 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
         flush();
         const inner = text.slice(index + 1, close);
         if (inner.trim().length > 0) {
-          for (const run of parseInlineMarkdown(inner)) runs.push(withMark(run, { italic: true }));
+          for (const run of parseInline(inner, allowLinks)) runs.push(withMark(run, { italic: true }));
           index = close + 1;
           continue;
         }
@@ -127,6 +245,14 @@ export function parseInlineMarkdown(text: string): InlineRun[] {
 
   flush();
   return normalizeRuns(runs);
+}
+
+/**
+ * Parse the inline markdown subset Nobita understands. Unknown syntax is kept
+ * literally. This is intentionally forgiving: pasted prose should never break.
+ */
+export function parseInlineMarkdown(text: string): InlineRun[] {
+  return parseInline(text, true);
 }
 
 interface ListFrame {
@@ -172,7 +298,7 @@ function protectTableEscapes(value: string): string {
   return out;
 }
 
-function decodeTableText(value: string): string {
+function decodeTableCell(value: string): TableCell | undefined {
   const codeSpans: string[] = [];
   let protectedText = '';
   let index = 0;
@@ -186,30 +312,54 @@ function decodeTableText(value: string): string {
     if (char === '`') {
       let fence = '`';
       while (value[index + fence.length] === '`') fence += '`';
-      const close = value.indexOf(fence, index + fence.length);
+      const close = findClosingCodeFence(value, fence, index + fence.length);
       if (close >= 0) {
         const token = `\u0000CODE${codeSpans.length}\u0000`;
-        codeSpans.push(value.slice(index + fence.length, close));
+        codeSpans.push(stripCodeSpanPadding(value.slice(index + fence.length, close)));
         protectedText += token;
         index = close + fence.length;
         continue;
       }
+      protectedText += fence;
+      index += fence.length;
+      continue;
     }
     protectedText += char;
     index += 1;
   }
 
-  let text = plainText(
-    parseInlineMarkdown(
-      protectTableEscapes(protectedText).replace(/<br\s*\/?>/giu, '\n')
-    )
-  )
-    .replaceAll(TABLE_LT, '<')
-    .replaceAll(TABLE_GT, '>');
-  codeSpans.forEach((inner, codeIndex) => {
-    text = text.replaceAll(`\u0000CODE${codeIndex}\u0000`, inner);
-  });
-  return text;
+  const parsed = parseInlineMarkdown(
+    protectTableEscapes(protectedText).replace(/<br\s*\/?>/giu, '\n')
+  );
+  const expanded: InlineRun[] = [];
+  const codeTokenRe = /(\u0000CODE\d+\u0000)/gu;
+  for (const run of parsed) {
+    const restored = run.text.replaceAll(TABLE_LT, '<').replaceAll(TABLE_GT, '>');
+    if (codeSpans.length === 0 || !restored.includes('\u0000CODE')) {
+      expanded.push(run.marks ? { text: restored, marks: run.marks } : { text: restored });
+      continue;
+    }
+    for (const part of restored.split(codeTokenRe)) {
+      if (!part) continue;
+      const match = /^\u0000CODE(\d+)\u0000$/u.exec(part);
+      if (match?.[1]) {
+        const inner = codeSpans[Number(match[1])] ?? '';
+        if (inner) {
+          expanded.push({
+            text: inner,
+            marks: { ...(run.marks ?? {}), code: true },
+          });
+        }
+      } else {
+        expanded.push(run.marks ? { text: part, marks: run.marks } : { text: part });
+      }
+    }
+  }
+
+  const runs = normalizeRuns(expanded);
+  const text = plainText(runs);
+  if (!text) return undefined;
+  return hasRichMarks(runs) ? { text, runs } : { text };
 }
 
 function isTableSeparator(line: string): boolean {
@@ -301,7 +451,9 @@ export function markdownToBlocks(
       const tableRows = [createTableRow()];
       headerCells.forEach((value, columnIndex) => {
         const column = columns[columnIndex];
-        if (column && value) tableRows[0]!.cells[column.id] = { text: decodeTableText(value) };
+        if (!column || !value) return;
+        const cell = decodeTableCell(value);
+        if (cell) tableRows[0]!.cells[column.id] = cell;
       });
       index += 2;
       while (index < lines.length) {
@@ -310,8 +462,8 @@ export function markdownToBlocks(
         const cells = splitTableRow(line);
         const row = createTableRow();
         columns.forEach((column, columnIndex) => {
-          const value = decodeTableText(cells[columnIndex] ?? '');
-          if (value) row.cells[column.id] = { text: value };
+          const cell = decodeTableCell(cells[columnIndex] ?? '');
+          if (cell) row.cells[column.id] = cell;
         });
         tableRows.push(row);
         index += 1;
@@ -433,29 +585,98 @@ function escapeInline(text: string): string {
   return out;
 }
 
-function runsToMarkdown(runs: readonly InlineRun[]): string {
+function runStartsWithStar(run: InlineRun | undefined): boolean {
+  const marks = run?.marks;
+  if (!marks) return false;
+  if (marks.link && safeHref(marks.link)) return false;
+  if (marks.strike) return false;
+  return Boolean(marks.bold || marks.italic);
+}
+
+function serializeRunsToMarkdown(
+  runs: readonly InlineRun[],
+  escapePlain: (text: string) => string,
+  escapeCode: (text: string) => string,
+  escapeHrefPipe: boolean
+): string {
   let out = '';
-  for (const run of runs) {
+  for (let i = 0; i < runs.length; i += 1) {
+    const run = runs[i]!;
     const text = run.text;
     const marks = run.marks;
     if (!marks) {
-      out += escapeInline(text);
+      out += escapePlain(text);
       continue;
     }
-    let body = escapeInline(text);
+    let body = marks.code ? escapeCode(text) : escapePlain(text);
     if (marks.code) {
       let fence = '`';
       while (body.includes(fence)) fence += '`';
-      body = body.includes('`') ? `${fence} ${body} ${fence}` : `${fence}${body}${fence}`;
+      const needsPad =
+        body.startsWith('`') ||
+        body.endsWith('`') ||
+        (body.length >= 2 &&
+          body.startsWith(' ') &&
+          body.endsWith(' ') &&
+          /[^ ]/u.test(body));
+      body = needsPad ? `${fence} ${body} ${fence}` : `${fence}${body}${fence}`;
     }
-    if (marks.bold) body = `**${body}**`;
-    if (marks.italic) body = `*${body}*`;
-    if (marks.strike) body = `~~${body}~~`;
     const href = marks.link ? safeHref(marks.link) : null;
-    if (href) body = `[${body}](${href})`;
+    const outerIsEmphasis = !href && !marks.strike;
+    const prevEndsStar = out.endsWith('*');
+    const prevEndsUnderscore = out.endsWith('_');
+    const nextStartsStar = runStartsWithStar(runs[i + 1]);
+    const useUnderscore =
+      outerIsEmphasis && !prevEndsUnderscore && (prevEndsStar || nextStartsStar);
+
+    if (marks.bold && marks.italic) {
+      body = useUnderscore ? `_**${body}**_` : `***${body}***`;
+    } else if (marks.bold) {
+      body = useUnderscore ? `__${body}__` : `**${body}**`;
+    } else if (marks.italic) {
+      body = useUnderscore ? `_${body}_` : `*${body}*`;
+    }
+    if (marks.strike) body = `~~${body}~~`;
+    if (href) {
+      body = `[${body}](${formatMarkdownHref(href, escapeHrefPipe)})`;
+    }
     out += body;
   }
   return out;
+}
+
+function runsToMarkdown(runs: readonly InlineRun[]): string {
+  return serializeRunsToMarkdown(runs, escapeInline, escapeInline, false);
+}
+
+function expandTableCodeNewlines(runs: readonly InlineRun[]): InlineRun[] {
+  const out: InlineRun[] = [];
+  for (const run of runs) {
+    const marks = run.marks;
+    if (!marks?.code || !run.text.includes('\n')) {
+      out.push(run);
+      continue;
+    }
+    const parts = run.text.split('\n');
+    parts.forEach((part, index) => {
+      if (index > 0) out.push({ text: '\n' });
+      if (part) out.push({ text: part, marks });
+    });
+  }
+  return out;
+}
+
+function serializeTableCell(cell: TableCell | undefined): string {
+  if (!cell) return '';
+  if (cell.runs && cell.runs.length > 0) {
+    return serializeRunsToMarkdown(
+      expandTableCodeNewlines(cell.runs),
+      escapeTableText,
+      text => text.replace(/\|/gu, '\\|'),
+      true
+    );
+  }
+  return escapeTableText(cell.text ?? '');
 }
 
 function indentLines(text: string, prefix: string): string {
@@ -513,15 +734,15 @@ function serializeBlocks(blocks: readonly Block[], depth: number, lines: string[
       }
       case 'table': {
         const table = block.props.table ?? createTableData({ rows: 1, columns: 1 });
-        const header = table.columns.map(column => {
-          return escapeTableText(table.rows[0]?.cells[column.id]?.text ?? '');
-        });
+        const header = table.columns.map(column =>
+          serializeTableCell(table.rows[0]?.cells[column.id])
+        );
         lines.push(`${pad}| ${header.join(' | ')} |`);
         lines.push(`${pad}| ${table.columns.map(() => '---').join(' | ')} |`);
         for (const row of table.rows.slice(1)) {
           lines.push(
             `${pad}| ${table.columns
-              .map(column => escapeTableText(row.cells[column.id]?.text ?? ''))
+              .map(column => serializeTableCell(row.cells[column.id]))
               .join(' | ')} |`
           );
         }

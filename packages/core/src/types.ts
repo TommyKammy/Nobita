@@ -36,6 +36,8 @@ export type DatabaseVariant = 'table' | 'database';
 
 export interface TableCell {
   text: string;
+  /** Rich-text runs; `text` remains the plain projection. */
+  runs?: InlineRun[];
 }
 
 export interface TableRow {
