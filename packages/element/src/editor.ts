@@ -195,6 +195,8 @@ export class NobitaEditor implements BlockHost {
   #overlay!: HTMLElement;
   #views = new Map<string, BlockView>();
   #viewIndex = new Map<string, BlockView>();
+  #syncedBlocks: readonly Block[] | null = null;
+  #placeholderBlockId: string | null = null;
   #menu: Menu;
   #toolbar: Toolbar;
   #linkPopover: LinkPopover;
@@ -396,7 +398,7 @@ export class NobitaEditor implements BlockHost {
 
   /** Stable fragment for linking to a block inside the host page. */
   getBlockLink(blockId: string): string | null {
-    return findBlock(this.store.doc.blocks, blockId)
+    return this.#viewIndex.has(blockId) || findBlock(this.store.doc.blocks, blockId)
       ? `#block-${encodeURIComponent(blockId)}`
       : null;
   }
@@ -584,6 +586,8 @@ export class NobitaEditor implements BlockHost {
     for (const view of this.#views.values()) view.destroy();
     this.#views.clear();
     this.#viewIndex.clear();
+    this.#syncedBlocks = null;
+    this.#placeholderBlockId = null;
     this.store.destroy();
     this.root.replaceChildren();
   }
@@ -700,7 +704,7 @@ export class NobitaEditor implements BlockHost {
     }
     const mod = event.metaKey || event.ctrlKey;
     const selection = this.#currentSelection();
-    const block = findBlock(this.store.doc.blocks, blockId);
+    const block = this.#findView(blockId)?.block ?? findBlock(this.store.doc.blocks, blockId);
     const offset = selection ? this.#offsetInSelection(blockId, selection) : 0;
     const length = block ? runsLength(block.text) : 0;
 
@@ -1229,14 +1233,25 @@ export class NobitaEditor implements BlockHost {
     body.addEventListener(
       'click',
       event => {
-        const target = event.target as Element | null;
-        const link = target?.closest<HTMLElement>('[data-link]');
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) return;
+        const add = target.closest<HTMLElement>('.nb-add');
+        if (add) {
+          const blockId = add.closest<HTMLElement>('.nb-block')?.dataset.blockId;
+          if (blockId) {
+            event.preventDefault();
+            event.stopPropagation();
+            this.addBlockAfter(blockId);
+          }
+          return;
+        }
+        const link = target.closest<HTMLElement>('[data-link]');
         if (link) {
           const href = safeHref(link.dataset.link);
           if (href?.startsWith('#block-')) {
             event.preventDefault();
             const blockId = decodeURIComponent(href.slice('#block-'.length));
-            if (findBlock(this.store.doc.blocks, blockId)) {
+            if (this.#viewIndex.has(blockId) || findBlock(this.store.doc.blocks, blockId)) {
               this.#focusBlock(blockId, 0);
             }
             return;
@@ -1246,6 +1261,13 @@ export class NobitaEditor implements BlockHost {
             if (href) window.open(href, '_blank', 'noopener,noreferrer');
           }
         }
+        const row = target.closest<HTMLElement>('.nb-row');
+        if (!row) return;
+        if (target.closest('button, input, select, .nb-text, .nb-caption, .nb-db, .nb-table')) {
+          return;
+        }
+        const blockId = row.closest<HTMLElement>('.nb-block')?.dataset.blockId;
+        if (blockId) this.focusBlock(blockId, 0);
       },
       { signal }
     );
@@ -1253,6 +1275,16 @@ export class NobitaEditor implements BlockHost {
     body.addEventListener(
       'pointerdown',
       event => {
+        const target = event.target instanceof Element ? event.target : null;
+        const drag = target?.closest<HTMLElement>('.nb-drag');
+        if (drag) {
+          const blockId = drag.closest<HTMLElement>('.nb-block')?.dataset.blockId;
+          if (blockId) {
+            event.preventDefault();
+            this.beginDrag(blockId, event, drag);
+          }
+          return;
+        }
         if (this.#isNestedField(event.target)) return;
         if (closestElement(event.target as Node, '.nb-block')) return;
         const nearest = this.#nearestBlock(event.clientY);
@@ -1413,11 +1445,15 @@ export class NobitaEditor implements BlockHost {
   }
 
   #syncBody(blocks: readonly Block[]): void {
-    const ids = new Set(blocks.map(block => block.id));
-    for (const [id, view] of this.#views) {
-      if (ids.has(id)) continue;
-      view.destroy();
-      this.#views.delete(id);
+    if (blocks === this.#syncedBlocks) return;
+    this.#syncedBlocks = blocks;
+    if (this.#views.size > 0) {
+      const ids = new Set(blocks.map(block => block.id));
+      for (const [id, view] of this.#views) {
+        if (ids.has(id)) continue;
+        view.destroy();
+        this.#views.delete(id);
+      }
     }
     let cursor = this.#body.firstChild;
     let number = 0;
@@ -1445,12 +1481,20 @@ export class NobitaEditor implements BlockHost {
     const selection = this.#readonly || this.#composing ? null : this.#currentSelection();
     const activeId =
       selection && this.#isCollapsed(selection) ? selection.focus.blockId : null;
-    for (const view of this.#viewIndex.values()) {
-      const empty = runsLength(view.block.text) === 0;
-      view.setPlaceholder(
-        activeId === view.id && empty ? this.#placeholderFor(view.block) : ''
-      );
+    const activeView = activeId ? this.#findView(activeId) : null;
+    const nextText =
+      activeView && runsLength(activeView.block.text) === 0
+        ? this.#placeholderFor(activeView.block)
+        : '';
+    const nextId = nextText ? activeId : null;
+
+    if (this.#placeholderBlockId && this.#placeholderBlockId !== nextId) {
+      this.#findView(this.#placeholderBlockId)?.setPlaceholder('');
     }
+    if (nextId && activeView) {
+      activeView.setPlaceholder(nextText);
+    }
+    this.#placeholderBlockId = nextId;
   }
 
   #placeholderFor(block: Block): string {
@@ -1465,7 +1509,7 @@ export class NobitaEditor implements BlockHost {
 
   #focusBlock(blockId: string, offset: number): void {
     const view = this.#findView(blockId);
-    const block = findBlock(this.store.doc.blocks, blockId);
+    const block = view?.block ?? findBlock(this.store.doc.blocks, blockId);
     if (!view || !block) return;
     this.#menu.close();
     this.#slash = null;

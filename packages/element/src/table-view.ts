@@ -24,6 +24,8 @@ import {
 } from '@nobita/core';
 import type { TableCell, TableData } from '@nobita/core';
 import {
+  btn,
+  el,
   readRichTextRuns,
   runsSignature,
   selectionOffsets,
@@ -31,8 +33,8 @@ import {
   shortcutTag,
 } from './database-dom.js';
 import { DatabaseRichTextController } from './database-rich-text.js';
-import { nativeSelection, placeCaret } from './dom.js';
-import { dismissFloating, placeFloating } from './floating.js';
+import { handleHistoryKey, nativeSelection, placeCaret } from './dom.js';
+import { beginWindowDrag, openAnchoredPopover } from './floating.js';
 import { icon } from './icons.js';
 import { renderInlineRuns } from './inline-dom.js';
 import { parseTsv, tsvCell } from './tsv.js';
@@ -81,8 +83,7 @@ function writeCellText(element: HTMLElement, value: string): void {
 }
 
 function dots(vertical = false): HTMLElement {
-  const wrap = document.createElement('span');
-  wrap.className = vertical ? 'nb-table-dots nb-table-dots-vertical' : 'nb-table-dots';
+  const wrap = el('span', vertical ? 'nb-table-dots nb-table-dots-vertical' : 'nb-table-dots');
   wrap.setAttribute('aria-hidden', 'true');
   for (let index = 0; index < 3; index += 1) {
     wrap.append(document.createElement('i'));
@@ -100,6 +101,16 @@ export class SimpleTableView {
   #events = new AbortController();
   #richText: DatabaseRichTextController;
   #cells = new Map<string, HTMLElement>();
+  #cellTds = new Map<string, HTMLTableCellElement>();
+  #selectedTds = new Map<HTMLTableCellElement, number>();
+  #rowHandles = new Map<string, HTMLElement>();
+  #colHandles = new Map<string, HTMLElement>();
+  #shownRowHandles = new Set<HTMLElement>();
+  #shownColHandles = new Set<HTMLElement>();
+  #addColBtn: HTMLElement | null = null;
+  #addRowBtn: HTMLElement | null = null;
+  #addCornerBtn: HTMLElement | null = null;
+  #syncedData: TableData | null = null;
   #colElements: HTMLTableColElement[] = [];
   #popover: { element: HTMLElement; cleanup: () => void } | null = null;
   #structureKey = '';
@@ -129,8 +140,7 @@ export class SimpleTableView {
     this.#host = host;
     this.#data = data;
     this.#readonly = host.readonly;
-    this.element = document.createElement('div');
-    this.element.className = 'nb-table';
+    this.element = el('div', 'nb-table');
     this.element.contentEditable = 'false';
     this.element.dataset.readonly = String(this.#readonly);
     this.#richText = new DatabaseRichTextController({
@@ -193,12 +203,27 @@ export class SimpleTableView {
     placeCaret(cell, at);
   }
 
+  #resetRefs(): void {
+    this.#cells.clear();
+    this.#cellTds.clear();
+    this.#selectedTds.clear();
+    this.#rowHandles.clear();
+    this.#colHandles.clear();
+    this.#shownRowHandles.clear();
+    this.#shownColHandles.clear();
+    this.#addColBtn = null;
+    this.#addRowBtn = null;
+    this.#addCornerBtn = null;
+  }
+
   destroy(): void {
     this.#globalEvents.abort();
     this.#events.abort();
     this.#richText.destroy();
     this.#closePopover();
     this.#removeAddTip();
+    this.#resetRefs();
+    this.#syncedData = null;
     this.element.remove();
   }
 
@@ -230,7 +255,7 @@ export class SimpleTableView {
     this.#richText.clearPendingMarks();
     this.#richText.resetToolbar();
     this.#closePopover();
-    this.#cells.clear();
+    this.#resetRefs();
     this.#colElements = [];
     this.#selectionOverlay = null;
     this.#dropLine = null;
@@ -238,12 +263,9 @@ export class SimpleTableView {
     this.element.dataset.readonly = String(this.#readonly);
     this.element.replaceChildren();
 
-    const scroll = document.createElement('div');
-    scroll.className = 'nb-table-scroll';
-    const canvas = document.createElement('div');
-    canvas.className = 'nb-table-canvas';
-    const table = document.createElement('table');
-    table.className = 'nb-table-grid';
+    const scroll = el('div', 'nb-table-scroll');
+    const canvas = el('div', 'nb-table-canvas');
+    const table = el('table', 'nb-table-grid');
     const colgroup = document.createElement('colgroup');
     for (const column of this.#data.columns) {
       const col = document.createElement('col');
@@ -258,17 +280,16 @@ export class SimpleTableView {
       const tr = document.createElement('tr');
       tr.dataset.rowId = row.id;
       for (const [columnIndex, column] of this.#data.columns.entries()) {
-        const td = document.createElement('td');
-        td.className = 'nb-table-cell-wrap';
+        const td = el('td', 'nb-table-cell-wrap');
         td.dataset.rowId = row.id;
         td.dataset.columnId = column.id;
+        td.setAttribute('aria-selected', 'false');
         const color = column.backgroundColor ?? row.backgroundColor;
         if (color) {
           td.dataset.background = 'true';
           td.style.setProperty('--nb-cell-bg', color);
         }
-        const cell = document.createElement('div');
-        cell.className = 'nb-table-cell';
+        const cell = el('div', 'nb-table-cell');
         cell.contentEditable = this.#readonly ? 'false' : 'true';
         cell.spellcheck = false;
         cell.dataset.rowId = row.id;
@@ -287,56 +308,28 @@ export class SimpleTableView {
             true
           );
         }
-        cell.addEventListener(
-          'input',
-          event => {
-            if (this.#richText.isComposing(cell) || (event as InputEvent).isComposing) return;
-            this.#clearAreaSelection();
-            this.#commitCell(row.id, column.id, cell);
-          },
-          { signal: this.#events.signal }
-        );
-        cell.addEventListener(
-          'focus',
-          () => {
-            this.#activeCell = { rowId: row.id, columnId: column.id };
-          },
-          { signal: this.#events.signal }
-        );
-        cell.addEventListener(
-          'pointerdown',
-          event => this.#beginCellRange(event, row.id, column.id),
-          { signal: this.#events.signal }
-        );
-        cell.addEventListener(
-          'keydown',
-          event => this.#onCellKeyDown(event, row.id, column.id),
-          { signal: this.#events.signal }
-        );
-        cell.addEventListener(
-          'mouseenter',
-          () => {
-            this.#hoverRowId = row.id;
-            this.#hoverColumnId = column.id;
-            this.#syncHover();
-          },
-          { signal: this.#events.signal }
-        );
         td.append(cell);
 
-        if (rowIndex === 0 && !this.#readonly) {
-          const columnHandle = document.createElement('div');
-          columnHandle.className = 'nb-table-column-handle';
-          columnHandle.dataset.columnId = column.id;
-          columnHandle.setAttribute('role', 'button');
-          columnHandle.setAttribute('aria-label', `Column ${columnIndex + 1} actions`);
-          columnHandle.append(dots());
-          columnHandle.addEventListener(
+        const makeHandle = (
+          axis: 'row' | 'column',
+          id: string,
+          label: string,
+          vertical: boolean,
+          map: Map<string, HTMLElement>
+        ): HTMLElement => {
+          const handle = el('div', `nb-table-${axis}-handle`);
+          handle.dataset[`${axis}Id`] = id;
+          handle.dataset.visible = 'false';
+          handle.dataset.active = 'false';
+          handle.setAttribute('role', 'button');
+          handle.setAttribute('aria-label', label);
+          handle.append(dots(vertical));
+          handle.addEventListener(
             'pointerdown',
-            event => this.#beginColumnDrag(event, column.id),
+            event => this.#beginAxisDrag(event, axis, id),
             { signal: this.#events.signal }
           );
-          columnHandle.addEventListener(
+          handle.addEventListener(
             'click',
             event => {
               event.preventDefault();
@@ -345,56 +338,104 @@ export class SimpleTableView {
                 this.#suppressHandleClick = false;
                 return;
               }
-              this.#openColumnMenu(column.id, columnHandle);
+              this.#openAxisMenu(axis, id, handle);
             },
             { signal: this.#events.signal }
           );
-          td.append(columnHandle);
+          map.set(id, handle);
+          return handle;
+        };
+        if (rowIndex === 0 && !this.#readonly) {
+          td.append(
+            makeHandle('column', column.id, `Column ${columnIndex + 1} actions`, false, this.#colHandles)
+          );
         }
         if (columnIndex === 0 && !this.#readonly) {
-          const rowHandle = document.createElement('div');
-          rowHandle.className = 'nb-table-row-handle';
-          rowHandle.dataset.rowId = row.id;
-          rowHandle.setAttribute('role', 'button');
-          rowHandle.setAttribute('aria-label', `Row ${rowIndex + 1} actions`);
-          rowHandle.append(dots(true));
-          rowHandle.addEventListener(
-            'pointerdown',
-            event => this.#beginRowDrag(event, row.id),
-            { signal: this.#events.signal }
+          td.append(
+            makeHandle('row', row.id, `Row ${rowIndex + 1} actions`, true, this.#rowHandles)
           );
-          rowHandle.addEventListener(
-            'click',
-            event => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (this.#suppressHandleClick) {
-                this.#suppressHandleClick = false;
-                return;
-              }
-              this.#openRowMenu(row.id, rowHandle);
-            },
-            { signal: this.#events.signal }
-          );
-          td.append(rowHandle);
         }
         this.#createCellResizer(td, column.id);
         tr.append(td);
-        this.#cells.set(cellKey(row.id, column.id), cell);
+        const key = cellKey(row.id, column.id);
+        this.#cells.set(key, cell);
+        this.#cellTds.set(key, td);
       }
       body.append(tr);
     });
+
+    const cellFromTarget = (target: EventTarget | null): HTMLElement | null =>
+      target instanceof Element ? target.closest<HTMLElement>('.nb-table-cell') : null;
+    body.addEventListener(
+      'input',
+      event => {
+        const cell = cellFromTarget(event.target);
+        const rowId = cell?.dataset.rowId;
+        const columnId = cell?.dataset.columnId;
+        if (!cell || !rowId || !columnId) return;
+        if (this.#richText.isComposing(cell) || (event as InputEvent).isComposing) return;
+        this.#clearAreaSelection();
+        this.#commitCell(rowId, columnId, cell);
+      },
+      { signal: this.#events.signal }
+    );
+    body.addEventListener(
+      'focusin',
+      event => {
+        const cell = cellFromTarget(event.target);
+        const rowId = cell?.dataset.rowId;
+        const columnId = cell?.dataset.columnId;
+        if (!rowId || !columnId) return;
+        this.#activeCell = { rowId, columnId };
+      },
+      { signal: this.#events.signal }
+    );
+    body.addEventListener(
+      'pointerdown',
+      event => {
+        const cell = cellFromTarget(event.target);
+        const rowId = cell?.dataset.rowId;
+        const columnId = cell?.dataset.columnId;
+        if (!rowId || !columnId) return;
+        this.#beginCellRange(event, rowId, columnId);
+      },
+      { signal: this.#events.signal }
+    );
+    body.addEventListener(
+      'keydown',
+      event => {
+        const cell = cellFromTarget(event.target);
+        const rowId = cell?.dataset.rowId;
+        const columnId = cell?.dataset.columnId;
+        if (!rowId || !columnId) return;
+        this.#onCellKeyDown(event, rowId, columnId);
+      },
+      { signal: this.#events.signal }
+    );
+    body.addEventListener(
+      'mouseover',
+      event => {
+        const cell = cellFromTarget(event.target);
+        const rowId = cell?.dataset.rowId;
+        const columnId = cell?.dataset.columnId;
+        if (!rowId || !columnId) return;
+        if (this.#hoverRowId === rowId && this.#hoverColumnId === columnId) return;
+        this.#hoverRowId = rowId;
+        this.#hoverColumnId = columnId;
+        this.#syncHover();
+      },
+      { signal: this.#events.signal }
+    );
+
     table.append(body);
     canvas.append(table);
 
-    const selection = document.createElement('div');
-    selection.className = 'nb-table-selection';
+    const selection = el('div', 'nb-table-selection');
     selection.dataset.visible = 'false';
     canvas.append(selection);
     this.#selectionOverlay = selection;
 
-    const dropLine = document.createElement('div');
-    dropLine.className = 'nb-table-drop-line';
+    const dropLine = el('div', 'nb-table-drop-line');
     dropLine.dataset.visible = 'false';
     canvas.append(dropLine);
     this.#dropLine = dropLine;
@@ -404,73 +445,73 @@ export class SimpleTableView {
     });
 
     if (!this.#readonly) {
-      const addColumn = document.createElement('button');
-      addColumn.type = 'button';
-      addColumn.className = 'nb-table-add-column';
-      addColumn.setAttribute('aria-label', 'Add column');
-      addColumn.innerHTML = icon.plus;
-      addColumn.addEventListener('pointerdown', event => {
-        this.#beginAddDrag(event, 'column');
-      }, { signal: this.#events.signal });
-      addColumn.addEventListener('click', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (this.#suppressAddClick) {
-          this.#suppressAddClick = false;
-          return;
-        }
-        this.#addColumn();
-      }, { signal: this.#events.signal });
-      const addRow = document.createElement('button');
-      addRow.type = 'button';
-      addRow.className = 'nb-table-add-row';
-      addRow.setAttribute('aria-label', 'Add row');
-      addRow.innerHTML = icon.plus;
-      addRow.addEventListener('pointerdown', event => {
-        this.#beginAddDrag(event, 'row');
-      }, { signal: this.#events.signal });
-      addRow.addEventListener('click', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (this.#suppressAddClick) {
-          this.#suppressAddClick = false;
-          return;
-        }
-        this.#addRow();
-      }, { signal: this.#events.signal });
-      const addCorner = document.createElement('button');
-      addCorner.type = 'button';
-      addCorner.className = 'nb-table-add-corner';
-      addCorner.setAttribute('aria-label', 'Add row and column');
-      addCorner.innerHTML = icon.plus;
-      addCorner.addEventListener('pointerdown', event => {
-        this.#beginAddDrag(event, 'corner');
-      }, { signal: this.#events.signal });
-      addCorner.addEventListener('click', event => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (this.#suppressAddClick) {
-          this.#suppressAddClick = false;
-          return;
-        }
-        this.#addCorner();
-      }, { signal: this.#events.signal });
+      const makeAddBtn = (
+        className: string,
+        ariaLabel: string,
+        axis: 'row' | 'column' | 'corner',
+        onClick: () => void
+      ): HTMLButtonElement => {
+        const button = btn(className, { html: icon.plus, ariaLabel });
+        button.addEventListener(
+          'pointerdown',
+          event => this.#beginAddDrag(event, axis),
+          { signal: this.#events.signal }
+        );
+        button.addEventListener(
+          'click',
+          event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (this.#suppressAddClick) {
+              this.#suppressAddClick = false;
+              return;
+            }
+            onClick();
+          },
+          { signal: this.#events.signal }
+        );
+        return button;
+      };
+      const addColumn = makeAddBtn('nb-table-add-column', 'Add column', 'column', () =>
+        this.#addColumn()
+      );
+      const addRow = makeAddBtn('nb-table-add-row', 'Add row', 'row', () =>
+        this.#addRow()
+      );
+      const addCorner = makeAddBtn(
+        'nb-table-add-corner',
+        'Add row and column',
+        'corner',
+        () => this.#addCorner()
+      );
+      this.#addColBtn = addColumn;
+      this.#addRowBtn = addRow;
+      this.#addCornerBtn = addCorner;
       canvas.append(addColumn, addRow, addCorner);
     }
 
     scroll.append(canvas);
     this.element.append(scroll);
+    this.#syncedData = this.#data;
     this.#syncHover();
     this.#syncSelection();
   }
 
   #syncValues(): void {
     const root = this.element.getRootNode() as ShadowRoot;
+    const prev = this.#syncedData;
+    const prevRowById = prev
+      ? new Map(prev.rows.map(row => [row.id, row]))
+      : null;
+
     for (const row of this.#data.rows) {
+      const prevRow = prevRowById?.get(row.id);
+      if (prevRow === row) continue;
       for (const column of this.#data.columns) {
+        const tableCell = row.cells[column.id];
+        if (prevRow && prevRow.cells[column.id] === tableCell) continue;
         const cell = this.#cells.get(cellKey(row.id, column.id));
         if (!cell || this.#richText.isComposing(cell)) continue;
-        const tableCell = row.cells[column.id];
         const expectedSig =
           tableCell?.runs && tableCell.runs.length > 0 ? runsSignature(tableCell.runs) : '';
         const expectedText =
@@ -495,35 +536,60 @@ export class SimpleTableView {
         }
       }
     }
+    this.#syncedData = this.#data;
   }
 
   #syncHover(): void {
-    for (const handle of this.element.querySelectorAll<HTMLElement>('.nb-table-row-handle')) {
-      const selected = this.#selected?.type === 'row' && handle.dataset.rowId === this.#selected.id;
-      const visible = handle.dataset.rowId === this.#hoverRowId || selected;
-      handle.dataset.visible = String(visible);
-      handle.dataset.active = String(selected);
-    }
-    for (const handle of this.element.querySelectorAll<HTMLElement>('.nb-table-column-handle')) {
-      const selected =
-        this.#selected?.type === 'column' && handle.dataset.columnId === this.#selected.id;
-      const visible = handle.dataset.columnId === this.#hoverColumnId || selected;
-      handle.dataset.visible = String(visible);
-      handle.dataset.active = String(selected);
-    }
+    const syncHandles = (
+      shown: Set<HTMLElement>,
+      handles: Map<string, HTMLElement>,
+      hoverId: string | null,
+      selectedId: string | null,
+      attr: 'rowId' | 'columnId'
+    ): Set<HTMLElement> => {
+      const next = new Set<HTMLElement>();
+      if (hoverId) {
+        const handle = handles.get(hoverId);
+        if (handle) next.add(handle);
+      }
+      if (selectedId) {
+        const handle = handles.get(selectedId);
+        if (handle) next.add(handle);
+      }
+      for (const handle of shown) {
+        if (next.has(handle)) continue;
+        handle.dataset.visible = 'false';
+        handle.dataset.active = 'false';
+      }
+      for (const handle of next) {
+        handle.dataset.visible = 'true';
+        handle.dataset.active = String(selectedId !== null && handle.dataset[attr] === selectedId);
+      }
+      return next;
+    };
+
+    this.#shownRowHandles = syncHandles(
+      this.#shownRowHandles,
+      this.#rowHandles,
+      this.#hoverRowId,
+      this.#selected?.type === 'row' ? this.#selected.id : null,
+      'rowId'
+    );
+    this.#shownColHandles = syncHandles(
+      this.#shownColHandles,
+      this.#colHandles,
+      this.#hoverColumnId,
+      this.#selected?.type === 'column' ? this.#selected.id : null,
+      'columnId'
+    );
+
     const lastRow = this.#data.rows[this.#data.rows.length - 1];
     const lastColumn = this.#data.columns[this.#data.columns.length - 1];
     const atLastRow = Boolean(lastRow && this.#hoverRowId === lastRow.id);
     const atLastColumn = Boolean(lastColumn && this.#hoverColumnId === lastColumn.id);
-    for (const button of this.element.querySelectorAll<HTMLElement>('.nb-table-add-column')) {
-      button.dataset.visible = String(atLastColumn);
-    }
-    for (const button of this.element.querySelectorAll<HTMLElement>('.nb-table-add-row')) {
-      button.dataset.visible = String(atLastRow);
-    }
-    for (const button of this.element.querySelectorAll<HTMLElement>('.nb-table-add-corner')) {
-      button.dataset.visible = String(atLastRow && atLastColumn);
-    }
+    if (this.#addColBtn) this.#addColBtn.dataset.visible = String(atLastColumn);
+    if (this.#addRowBtn) this.#addRowBtn.dataset.visible = String(atLastRow);
+    if (this.#addCornerBtn) this.#addCornerBtn.dataset.visible = String(atLastRow && atLastColumn);
   }
 
   #areaBounds(): TableAreaBounds | null {
@@ -551,7 +617,21 @@ export class SimpleTableView {
 
   #syncSelection(): void {
     const bounds = this.#areaBounds();
-    const areaCells = new Set<string>();
+    const next = new Map<HTMLTableCellElement, number>();
+    const setFlag = (td: HTMLTableCellElement | undefined, flag: number): void => {
+      if (td) next.set(td, (next.get(td) ?? 0) | flag);
+    };
+
+    if (this.#selected?.type === 'row') {
+      for (const column of this.#data.columns) {
+        setFlag(this.#cellTds.get(cellKey(this.#selected.id, column.id)), 1);
+      }
+    } else if (this.#selected?.type === 'column') {
+      for (const row of this.#data.rows) {
+        setFlag(this.#cellTds.get(cellKey(row.id, this.#selected.id)), 2);
+      }
+    }
+
     if (bounds) {
       for (let rowIndex = bounds.rowStart; rowIndex <= bounds.rowEnd; rowIndex += 1) {
         const row = this.#data.rows[rowIndex];
@@ -562,26 +642,26 @@ export class SimpleTableView {
           columnIndex += 1
         ) {
           const column = this.#data.columns[columnIndex];
-          if (column) areaCells.add(cellKey(row.id, column.id));
+          if (column) setFlag(this.#cellTds.get(cellKey(row.id, column.id)), 4);
         }
       }
     }
-    for (const [key, cell] of this.#cells) {
-      const td = cell.closest<HTMLElement>('td');
-      if (!td) continue;
-      const [rowId, columnId] = key.split('\u0000');
-      const rowSelected = this.#selected?.type === 'row' && rowId === this.#selected.id;
-      const columnSelected =
-        this.#selected?.type === 'column' && columnId === this.#selected.id;
-      const areaSelected = areaCells.has(key);
-      td.classList.toggle('is-row-selected', Boolean(rowSelected));
-      td.classList.toggle('is-column-selected', Boolean(columnSelected));
-      td.classList.toggle('is-area-selected', areaSelected);
-      td.setAttribute(
-        'aria-selected',
-        String(rowSelected || columnSelected || areaSelected)
-      );
+
+    for (const [td] of this.#selectedTds) {
+      if (next.has(td)) continue;
+      td.classList.remove('is-row-selected', 'is-column-selected', 'is-area-selected');
+      td.setAttribute('aria-selected', 'false');
     }
+
+    for (const [td, mask] of next) {
+      if (this.#selectedTds.get(td) === mask) continue;
+      td.classList.toggle('is-row-selected', (mask & 1) !== 0);
+      td.classList.toggle('is-column-selected', (mask & 2) !== 0);
+      td.classList.toggle('is-area-selected', (mask & 4) !== 0);
+      td.setAttribute('aria-selected', 'true');
+    }
+
+    this.#selectedTds = next;
     this.#positionSelectionOverlay(bounds);
   }
 
@@ -600,12 +680,8 @@ export class SimpleTableView {
       overlay.dataset.visible = 'false';
       return;
     }
-    const firstCell = this.#cells
-      .get(cellKey(firstRow.id, firstColumn.id))
-      ?.closest<HTMLElement>('td');
-    const lastCell = this.#cells
-      .get(cellKey(lastRow.id, lastColumn.id))
-      ?.closest<HTMLElement>('td');
+    const firstCell = this.#cellTds.get(cellKey(firstRow.id, firstColumn.id));
+    const lastCell = this.#cellTds.get(cellKey(lastRow.id, lastColumn.id));
     const canvas = overlay.parentElement;
     if (!firstCell || !lastCell || !canvas) {
       overlay.dataset.visible = 'false';
@@ -631,32 +707,6 @@ export class SimpleTableView {
     this.#syncSelection();
   }
 
-  #beginWindowDrag(
-    onMove: (event: PointerEvent) => void,
-    onFinish: (event: PointerEvent) => void,
-    onCancel?: () => void
-  ): void {
-    const eventsSignal = this.#events.signal;
-    if (eventsSignal.aborted) return;
-    const controller = new AbortController();
-    const { signal } = controller;
-    eventsSignal.addEventListener(
-      'abort',
-      () => {
-        onCancel?.();
-        controller.abort();
-      },
-      { once: true, signal }
-    );
-    window.addEventListener('pointermove', onMove, { signal });
-    const finish = (event: PointerEvent): void => {
-      controller.abort();
-      onFinish(event);
-    };
-    window.addEventListener('pointerup', finish, { signal });
-    window.addEventListener('pointercancel', finish, { signal });
-  }
-
   #beginCellRange(event: PointerEvent, rowId: string, columnId: string): void {
     if (this.#readonly || event.button !== 0 || !event.isPrimary) return;
     this.#clearAreaSelection();
@@ -667,7 +717,8 @@ export class SimpleTableView {
     };
     this.#drag = drag;
     const root = this.element.getRootNode() as ShadowRoot;
-    this.#beginWindowDrag(
+    beginWindowDrag(
+      this.#events.signal,
       moveEvent => {
         if (this.#drag !== drag) return;
         const target = this.#cellFromEvent(moveEvent);
@@ -931,7 +982,8 @@ export class SimpleTableView {
     if (this.#readonly || event.button !== 0) return;
     const startX = event.clientX;
     const startY = event.clientY;
-    this.#beginWindowDrag(
+    beginWindowDrag(
+      this.#events.signal,
       moveEvent => {
         this.#syncAddTip(moveEvent.clientX, moveEvent.clientY, axis, startX, startY);
       },
@@ -960,8 +1012,7 @@ export class SimpleTableView {
   #syncAddTip(x: number, y: number, axis: 'row' | 'column' | 'corner', startX: number, startY: number): void {
     let tip = this.#addTip;
     if (!tip) {
-      tip = document.createElement('div');
-      tip.className = 'nb-table-add-tip';
+      tip = el('div', 'nb-table-add-tip');
       (this.element.getRootNode() as ShadowRoot).append(tip);
       this.#addTip = tip;
     }
@@ -1067,7 +1118,8 @@ export class SimpleTableView {
       col.style.width = originalWidth;
       this.#syncSelection();
     };
-    this.#beginWindowDrag(
+    beginWindowDrag(
+      this.#events.signal,
       moveEvent => {
         const width = Math.max(
           MIN_COLUMN_WIDTH,
@@ -1109,7 +1161,8 @@ export class SimpleTableView {
       }
       if (this.#dropLine) this.#dropLine.dataset.visible = 'false';
     };
-    this.#beginWindowDrag(
+    beginWindowDrag(
+      this.#events.signal,
       moveEvent => {
         if (!dragging) {
           if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 5) {
@@ -1139,101 +1192,69 @@ export class SimpleTableView {
     );
   }
 
-  #beginRowDrag(event: PointerEvent, rowId: string): void {
-    let target: { rowId: string; position: 'before' | 'after' } | null = null;
+  #beginAxisDrag(event: PointerEvent, axis: 'row' | 'column', id: string): void {
+    let target: { id: string; position: 'before' | 'after' } | null = null;
+    const isRow = axis === 'row';
+    const escaped = CSS.escape(id);
     this.#startReorderDrag(
       event,
       () => {
-        this.element
-          .querySelector<HTMLElement>(`.nb-table-grid tbody tr[data-row-id="${CSS.escape(rowId)}"]`)
-          ?.classList.add('is-drag-source');
-      },
-      moveEvent => {
-        const dropLine = this.#dropLine;
-        const canvas = dropLine?.parentElement;
-        const table = this.element.querySelector<HTMLElement>('.nb-table-grid');
-        const rows = Array.from(
-          this.element.querySelectorAll<HTMLTableRowElement>('.nb-table-grid tbody tr[data-row-id]')
-        );
-        if (!dropLine || !canvas || !table || rows.length === 0) return false;
-        const canvasRect = canvas.getBoundingClientRect();
-        const tableRect = table.getBoundingClientRect();
-        let chosen: { rowId: string; position: 'before' | 'after'; y: number } | null = null;
-        for (const tr of rows) {
-          const id = tr.dataset.rowId;
-          if (!id) continue;
-          const rect = tr.getBoundingClientRect();
-          if (moveEvent.clientY < rect.top + rect.height / 2) {
-            chosen = { rowId: id, position: 'before', y: rect.top - canvasRect.top };
-            break;
-          }
-          chosen = { rowId: id, position: 'after', y: rect.bottom - canvasRect.top };
-        }
-        if (!chosen) return false;
-        target = { rowId: chosen.rowId, position: chosen.position };
-        dropLine.dataset.axis = 'row';
-        dropLine.style.left = `${tableRect.left - canvasRect.left}px`;
-        dropLine.style.top = `${chosen.y}px`;
-        dropLine.style.width = `${tableRect.width}px`;
-        dropLine.style.height = '';
-        dropLine.dataset.visible = 'true';
-        return true;
-      },
-      () => {
-        if (!target) return;
-        const next = moveTableRowTo(this.#data, rowId, target.rowId, target.position);
-        if (next !== this.#data) this.#host.commit(next);
-      }
-    );
-  }
-
-  #beginColumnDrag(event: PointerEvent, columnId: string): void {
-    let target: { columnId: string; position: 'before' | 'after' } | null = null;
-    this.#startReorderDrag(
-      event,
-      () => {
-        for (const td of this.element.querySelectorAll<HTMLElement>(
-          `.nb-table-grid td[data-column-id="${CSS.escape(columnId)}"]`
-        )) {
-          td.classList.add('is-drag-source');
+        const selector = isRow
+          ? `.nb-table-grid tbody tr[data-row-id="${escaped}"]`
+          : `.nb-table-grid td[data-column-id="${escaped}"]`;
+        for (const node of this.element.querySelectorAll<HTMLElement>(selector)) {
+          node.classList.add('is-drag-source');
         }
       },
       moveEvent => {
         const dropLine = this.#dropLine;
         const canvas = dropLine?.parentElement;
         const table = this.element.querySelector<HTMLElement>('.nb-table-grid');
-        const cells = Array.from(
-          this.element.querySelectorAll<HTMLTableCellElement>(
-            '.nb-table-grid tbody tr:first-child td[data-column-id]'
-          )
+        const nodes = this.element.querySelectorAll<HTMLElement>(
+          isRow
+            ? '.nb-table-grid tbody tr[data-row-id]'
+            : '.nb-table-grid tbody tr:first-child td[data-column-id]'
         );
-        if (!dropLine || !canvas || !table || cells.length === 0) return false;
+        if (!dropLine || !canvas || !table || nodes.length === 0) return false;
         const canvasRect = canvas.getBoundingClientRect();
         const tableRect = table.getBoundingClientRect();
-        let chosen: { columnId: string; position: 'before' | 'after'; x: number } | null = null;
-        for (const td of cells) {
-          const id = td.dataset.columnId;
-          if (!id) continue;
-          const rect = td.getBoundingClientRect();
-          if (moveEvent.clientX < rect.left + rect.width / 2) {
-            chosen = { columnId: id, position: 'before', x: rect.left - canvasRect.left };
+        let chosen: { id: string; position: 'before' | 'after'; coord: number } | null = null;
+        for (const node of nodes) {
+          const itemId = isRow ? node.dataset.rowId : node.dataset.columnId;
+          if (!itemId) continue;
+          const rect = node.getBoundingClientRect();
+          const before = isRow
+            ? moveEvent.clientY < rect.top + rect.height / 2
+            : moveEvent.clientX < rect.left + rect.width / 2;
+          if (before) {
+            chosen = {
+              id: itemId,
+              position: 'before',
+              coord: (isRow ? rect.top - canvasRect.top : rect.left - canvasRect.left),
+            };
             break;
           }
-          chosen = { columnId: id, position: 'after', x: rect.right - canvasRect.left };
+          chosen = {
+            id: itemId,
+            position: 'after',
+            coord: (isRow ? rect.bottom - canvasRect.top : rect.right - canvasRect.left),
+          };
         }
         if (!chosen) return false;
-        target = { columnId: chosen.columnId, position: chosen.position };
-        dropLine.dataset.axis = 'column';
-        dropLine.style.left = `${chosen.x}px`;
-        dropLine.style.top = `${tableRect.top - canvasRect.top}px`;
-        dropLine.style.width = '';
-        dropLine.style.height = `${tableRect.height}px`;
+        target = { id: chosen.id, position: chosen.position };
+        dropLine.dataset.axis = axis;
+        dropLine.style.left = `${isRow ? tableRect.left - canvasRect.left : chosen.coord}px`;
+        dropLine.style.top = `${isRow ? chosen.coord : tableRect.top - canvasRect.top}px`;
+        dropLine.style.width = isRow ? `${tableRect.width}px` : '';
+        dropLine.style.height = isRow ? '' : `${tableRect.height}px`;
         dropLine.dataset.visible = 'true';
         return true;
       },
       () => {
         if (!target) return;
-        const next = moveTableColumnTo(this.#data, columnId, target.columnId, target.position);
+        const next = isRow
+          ? moveTableRowTo(this.#data, id, target.id, target.position)
+          : moveTableColumnTo(this.#data, id, target.id, target.position);
         if (next !== this.#data) this.#host.commit(next);
       }
     );
@@ -1249,16 +1270,7 @@ export class SimpleTableView {
       return;
     }
     const mod = event.metaKey || event.ctrlKey;
-    if (mod && event.key.toLowerCase() === 'z') {
-      event.preventDefault();
-      this.#history(event.shiftKey);
-      return;
-    }
-    if (mod && event.key.toLowerCase() === 'y') {
-      event.preventDefault();
-      this.#history(true);
-      return;
-    }
+    if (handleHistoryKey(event, redo => this.#history(redo))) return;
     if (this.#area) {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -1310,38 +1322,29 @@ export class SimpleTableView {
   }
 
   #menuContent(): HTMLElement {
-    const content = document.createElement('div');
-    content.className = 'nb-table-menu-content';
-    return content;
+    return el('div', 'nb-table-menu-content');
   }
 
   #addColors(content: HTMLElement, current: string | undefined, select: (color: string | undefined) => void): void {
-    const section = document.createElement('div');
-    section.className = 'nb-table-menu-colors';
-    const label = document.createElement('span');
-    label.className = 'nb-table-menu-label';
-    label.textContent = 'Background color';
-    section.append(label);
-    const colors = document.createElement('div');
-    colors.className = 'nb-table-color-list';
-    const defaultButton = document.createElement('button');
-    defaultButton.type = 'button';
-    defaultButton.className = 'nb-table-color nb-table-color-default';
-    defaultButton.title = 'Default';
-    defaultButton.setAttribute('aria-label', 'Default background');
+    const section = el('div', 'nb-table-menu-colors');
+    section.append(el('span', 'nb-table-menu-label', 'Background color'));
+    const colors = el('div', 'nb-table-color-list');
+    const defaultButton = btn('nb-table-color nb-table-color-default', {
+      title: 'Default',
+      ariaLabel: 'Default background',
+    });
     defaultButton.addEventListener('click', () => {
       select(undefined);
       this.#closePopover();
     });
     colors.append(defaultButton);
     for (const item of TABLE_COLORS) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'nb-table-color';
+      const button = btn('nb-table-color', {
+        title: item.name,
+        ariaLabel: `${item.name} background`,
+        dataset: { active: String(item.color === current) },
+      });
       button.style.background = item.color;
-      button.title = item.name;
-      button.setAttribute('aria-label', `${item.name} background`);
-      button.dataset.active = String(item.color === current);
       button.addEventListener('click', () => {
         select(item.color);
         this.#closePopover();
@@ -1360,16 +1363,11 @@ export class SimpleTableView {
     danger = false,
     iconMarkup?: string
   ): void {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.disabled = disabled;
-    if (danger) button.className = 'danger';
+    const button = btn(danger ? 'danger' : undefined, { disabled });
     if (iconMarkup) {
-      const glyph = document.createElement('span');
+      const glyph = el('span');
       glyph.innerHTML = iconMarkup;
-      const text = document.createElement('span');
-      text.textContent = label;
-      button.append(glyph, text);
+      button.append(glyph, el('span', undefined, label));
     } else {
       button.textContent = label;
     }
@@ -1380,131 +1378,138 @@ export class SimpleTableView {
     content.append(button);
   }
 
-  #openRowMenu(rowId: string, anchor: HTMLElement): void {
+  #openAxisMenu(axis: 'row' | 'column', id: string, anchor: HTMLElement): void {
     if (this.#readonly) return;
-    const row = this.#data.rows.find(item => item.id === rowId);
-    if (!row) return;
-    const index = this.#data.rows.findIndex(item => item.id === rowId);
+    const isRow = axis === 'row';
+    const items = isRow ? this.#data.rows : this.#data.columns;
+    const index = items.findIndex(item => item.id === id);
+    const item = items[index];
+    if (!item) return;
     this.#clearAreaSelection();
-    this.#selected = { type: 'row', id: rowId };
+    this.#selected = { type: axis, id };
     this.#syncSelection();
     this.#syncHover();
     const content = this.#menuContent();
-    this.#addColors(content, row.backgroundColor, color => {
-      this.#host.commit(setTableRowColor(this.#data, rowId, color));
+    this.#addColors(content, item.backgroundColor, color => {
+      this.#host.commit(
+        isRow
+          ? setTableRowColor(this.#data, id, color)
+          : setTableColumnColor(this.#data, id, color)
+      );
     });
-    const actions = document.createElement('div');
-    actions.className = 'nb-table-menu-actions';
-    this.#addMenuItem(actions, 'Insert Above', () => {
-      const result = insertTableRow(this.#data, rowId, 'before');
-      this.#host.commit(result.data);
-      requestAnimationFrame(() =>
-        this.focusCell(result.rowId, this.#data.columns[0]?.id ?? '', 'start')
-      );
-    }, false, false, icon.arrowUp);
-    this.#addMenuItem(actions, 'Insert Below', () => {
-      const result = insertTableRow(this.#data, rowId, 'after');
-      this.#host.commit(result.data);
-      requestAnimationFrame(() =>
-        this.focusCell(result.rowId, this.#data.columns[0]?.id ?? '', 'start')
-      );
-    }, false, false, icon.arrowDown);
-    this.#addMenuItem(actions, 'Move Up', () => {
-      this.#host.commit(moveTableRow(this.#data, rowId, -1));
-    }, index === 0, false, icon.arrowUp);
-    this.#addMenuItem(actions, 'Move Down', () => {
-      this.#host.commit(moveTableRow(this.#data, rowId, 1));
-    }, index === this.#data.rows.length - 1, false, icon.arrowDown);
-    this.#addMenuItem(actions, 'Duplicate', () => {
-      const result = duplicateTableRow(this.#data, rowId);
-      if (!result.rowId) return;
-      this.#host.commit(result.data);
-    }, false, false, icon.duplicate);
-    this.#addMenuItem(actions, 'Clear row contents', () => {
-      this.#host.commit(clearTableRow(this.#data, rowId));
-    }, false, false, icon.x);
-    this.#addMenuItem(actions, 'Delete', () => {
-      const next = deleteTableRow(this.#data, rowId);
-      if (next === this.#data) return;
-      this.#host.commit(next);
-    }, this.#data.rows.length <= 1, true, icon.trash);
-    content.append(actions);
-    this.#showMenu(anchor, content);
-  }
-
-  #openColumnMenu(columnId: string, anchor: HTMLElement): void {
-    if (this.#readonly) return;
-    const column = this.#data.columns.find(item => item.id === columnId);
-    if (!column) return;
-    const index = this.#data.columns.findIndex(item => item.id === columnId);
-    this.#clearAreaSelection();
-    this.#selected = { type: 'column', id: columnId };
-    this.#syncSelection();
-    this.#syncHover();
-    const content = this.#menuContent();
-    this.#addColors(content, column.backgroundColor, color => {
-      this.#host.commit(setTableColumnColor(this.#data, columnId, color));
-    });
-    const actions = document.createElement('div');
-    actions.className = 'nb-table-menu-actions';
-    this.#addMenuItem(actions, 'Insert Left', () => {
-      const result = insertTableColumn(this.#data, columnId, 'before');
-      this.#host.commit(result.data);
-      requestAnimationFrame(() =>
-        this.focusCell(this.#data.rows[0]?.id ?? '', result.columnId, 'start')
-      );
-    }, false, false, icon.arrowLeft);
-    this.#addMenuItem(actions, 'Insert Right', () => {
-      const result = insertTableColumn(this.#data, columnId, 'after');
-      this.#host.commit(result.data);
-      requestAnimationFrame(() =>
-        this.focusCell(this.#data.rows[0]?.id ?? '', result.columnId, 'start')
-      );
-    }, false, false, icon.arrowRight);
-    this.#addMenuItem(actions, 'Move Left', () => {
-      this.#host.commit(moveTableColumn(this.#data, columnId, -1));
-    }, index === 0, false, icon.arrowLeft);
-    this.#addMenuItem(actions, 'Move Right', () => {
-      this.#host.commit(moveTableColumn(this.#data, columnId, 1));
-    }, index === this.#data.columns.length - 1, false, icon.arrowRight);
-    this.#addMenuItem(actions, 'Duplicate', () => {
-      const result = duplicateTableColumn(this.#data, columnId);
-      if (!result.columnId) return;
-      this.#host.commit(result.data);
-    }, false, false, icon.duplicate);
-    this.#addMenuItem(actions, 'Clear column contents', () => {
-      this.#host.commit(clearTableColumn(this.#data, columnId));
-    }, false, false, icon.x);
-    this.#addMenuItem(actions, 'Delete', () => {
-      const next = deleteTableColumn(this.#data, columnId);
-      if (next === this.#data) return;
-      this.#host.commit(next);
-    }, this.#data.columns.length <= 1, true, icon.trash);
+    const actions = el('div', 'nb-table-menu-actions');
+    const focusInserted = (position: 'before' | 'after'): void => {
+      if (isRow) {
+        const result = insertTableRow(this.#data, id, position);
+        this.#host.commit(result.data);
+        requestAnimationFrame(() =>
+          this.focusCell(result.rowId, this.#data.columns[0]?.id ?? '', 'start')
+        );
+      } else {
+        const result = insertTableColumn(this.#data, id, position);
+        this.#host.commit(result.data);
+        requestAnimationFrame(() =>
+          this.focusCell(this.#data.rows[0]?.id ?? '', result.columnId, 'start')
+        );
+      }
+    };
+    const prevIcon = isRow ? icon.arrowUp : icon.arrowLeft;
+    const nextIcon = isRow ? icon.arrowDown : icon.arrowRight;
+    this.#addMenuItem(
+      actions,
+      isRow ? 'Insert Above' : 'Insert Left',
+      () => focusInserted('before'),
+      false,
+      false,
+      prevIcon
+    );
+    this.#addMenuItem(
+      actions,
+      isRow ? 'Insert Below' : 'Insert Right',
+      () => focusInserted('after'),
+      false,
+      false,
+      nextIcon
+    );
+    this.#addMenuItem(
+      actions,
+      isRow ? 'Move Up' : 'Move Left',
+      () =>
+        this.#host.commit(
+          isRow ? moveTableRow(this.#data, id, -1) : moveTableColumn(this.#data, id, -1)
+        ),
+      index === 0,
+      false,
+      prevIcon
+    );
+    this.#addMenuItem(
+      actions,
+      isRow ? 'Move Down' : 'Move Right',
+      () =>
+        this.#host.commit(
+          isRow ? moveTableRow(this.#data, id, 1) : moveTableColumn(this.#data, id, 1)
+        ),
+      index === items.length - 1,
+      false,
+      nextIcon
+    );
+    this.#addMenuItem(
+      actions,
+      'Duplicate',
+      () => {
+        if (isRow) {
+          const result = duplicateTableRow(this.#data, id);
+          if (result.rowId) this.#host.commit(result.data);
+        } else {
+          const result = duplicateTableColumn(this.#data, id);
+          if (result.columnId) this.#host.commit(result.data);
+        }
+      },
+      false,
+      false,
+      icon.duplicate
+    );
+    this.#addMenuItem(
+      actions,
+      isRow ? 'Clear row contents' : 'Clear column contents',
+      () =>
+        this.#host.commit(
+          isRow ? clearTableRow(this.#data, id) : clearTableColumn(this.#data, id)
+        ),
+      false,
+      false,
+      icon.x
+    );
+    this.#addMenuItem(
+      actions,
+      'Delete',
+      () => {
+        const next = isRow ? deleteTableRow(this.#data, id) : deleteTableColumn(this.#data, id);
+        if (next !== this.#data) this.#host.commit(next);
+      },
+      items.length <= 1,
+      true,
+      icon.trash
+    );
     content.append(actions);
     this.#showMenu(anchor, content);
   }
 
   #showMenu(anchor: HTMLElement, content: HTMLElement): void {
     this.#closePopover();
-    const menu = document.createElement('div');
-    menu.className = 'nb-table-menu';
-    menu.contentEditable = 'false';
-    menu.append(content);
     const root = this.element.getRootNode() as ShadowRoot;
     const overlay = root.querySelector<HTMLElement>('.nb-overlay');
-    (overlay ?? root).append(menu);
-    placeFloating(menu, anchor.getBoundingClientRect(), {
-      side: 'below',
-      gap: 6,
-      margin: 10,
-      fallback: 'flip',
-    });
-    const cleanup = dismissFloating({
-      element: menu,
-      pointerTarget: root,
+    const popover = openAnchoredPopover({
+      host: overlay ?? root,
+      anchor,
+      content,
+      className: 'nb-table-menu',
       onDismiss: () => this.#closePopover(),
+      place: { side: 'below', gap: 6, margin: 10, fallback: 'flip' },
+      dismiss: { pointerTarget: root },
     });
-    this.#popover = { element: menu, cleanup };
+    popover.element.contentEditable = 'false';
+    this.#popover = popover;
   }
 
   #closePopover(): void {
@@ -1522,8 +1527,7 @@ export class SimpleTableView {
 
   #createCellResizer(td: HTMLTableCellElement, columnId: string): void {
     if (this.#readonly) return;
-    const resizer = document.createElement('span');
-    resizer.className = 'nb-table-resizer';
+    const resizer = el('span', 'nb-table-resizer');
     resizer.setAttribute('role', 'separator');
     resizer.setAttribute('aria-orientation', 'vertical');
     resizer.setAttribute('aria-label', 'Resize column');

@@ -160,21 +160,25 @@ export function updateBlocks(
   id: string,
   updater: (block: Block) => Block
 ): Block[] {
-  let changed = false;
-  const next = blocks.map(block => {
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i]!;
     if (block.id === id) {
       const updated = updater(block);
-      if (updated !== block) changed = true;
-      return updated;
+      if (updated === block) return blocks as Block[];
+      const next = blocks.slice();
+      next[i] = updated;
+      return next;
     }
-    const children = updateBlocks(block.children, id, updater);
-    if (children !== block.children) {
-      changed = true;
-      return { ...block, children };
+    if (block.children.length > 0) {
+      const children = updateBlocks(block.children, id, updater);
+      if (children !== block.children) {
+        const next = blocks.slice();
+        next[i] = { ...block, children };
+        return next;
+      }
     }
-    return block;
-  });
-  return changed ? next : (blocks as Block[]);
+  }
+  return blocks as Block[];
 }
 
 export function updateBlock(doc: Doc, id: string, updater: (block: Block) => Block): Doc {
@@ -204,22 +208,25 @@ function modifyContainer(
     const next = modify(blocks as Block[]);
     return next ? { blocks: next, changed: true } : { blocks: blocks as Block[], changed: false };
   }
-  let changed = false;
-  const next = blocks.map(block => {
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i]!;
     if (block.id === parentId) {
       const modified = modify(block.children);
-      if (!modified) return block;
-      changed = true;
-      return { ...block, children: modified };
+      if (!modified) return { blocks: blocks as Block[], changed: false };
+      const next = blocks.slice();
+      next[i] = { ...block, children: modified };
+      return { blocks: next, changed: true };
     }
-    const childResult = modifyContainer(block.children, parentId, modify);
-    if (childResult.changed) {
-      changed = true;
-      return { ...block, children: childResult.blocks };
+    if (block.children.length > 0) {
+      const childResult = modifyContainer(block.children, parentId, modify);
+      if (childResult.changed) {
+        const next = blocks.slice();
+        next[i] = { ...block, children: childResult.blocks };
+        return { blocks: next, changed: true };
+      }
     }
-    return block;
-  });
-  return changed ? { blocks: next, changed: true } : { blocks: blocks as Block[], changed: false };
+  }
+  return { blocks: blocks as Block[], changed: false };
 }
 
 export function insertBlocksAfter(doc: Doc, afterId: string | null, blocks: Block[]): Doc {

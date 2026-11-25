@@ -6,6 +6,7 @@ import {
   safeHref,
 } from '@nobita/core';
 import type { InlineMark, InlineRun } from '@nobita/core';
+import { childIndex } from './dom.js';
 
 function marksFromElement(element: Element, inherited: InlineMark | undefined): InlineMark | undefined {
   let next: InlineMark | undefined = inherited ? { ...inherited } : undefined;
@@ -137,21 +138,20 @@ export function domPointToRunsOffset(
     if (current !== root && isBlockElement(element) && total > 0 && !endsWithNewline) {
       addNewline();
     }
-    const children = Array.from(element.childNodes);
-    const limit =
-      current === node
-        ? Math.max(0, Math.min(offset, children.length))
-        : children.length;
-    for (let index = 0; index < limit; index += 1) {
-      const child = children[index];
-      if (!child) continue;
+    const isTarget = current === node;
+    let index = 0;
+    for (
+      let child = element.firstChild;
+      child && (!isTarget || index < offset);
+      child = child.nextSibling, index += 1
+    ) {
       if (current === root && child.nodeName === 'BR' && child === root.lastChild) {
         continue;
       }
       visit(child);
       if (found) return;
     }
-    if (current === node) {
+    if (isTarget) {
       result = total;
       found = true;
     }
@@ -194,7 +194,7 @@ export function runsOffsetToDomPoint(
     const element = node as Element;
     if (element.tagName === 'BR') {
       const parent = element.parentNode ?? root;
-      const index = Array.from(parent.childNodes).indexOf(element as ChildNode);
+      const index = childIndex(element as ChildNode);
       if (target <= total) return { node: parent, offset: Math.max(0, index) };
       if (target <= total + 1) return { node: parent, offset: Math.max(0, index + 1) };
       total += 1;
@@ -213,7 +213,7 @@ export function runsOffsetToDomPoint(
       );
       const end = total + length;
       const parent = element.parentNode ?? root;
-      const index = Array.from(parent.childNodes).indexOf(element as ChildNode);
+      const index = childIndex(element as ChildNode);
       if (target <= total) return { node: parent, offset: Math.max(0, index) };
       if (target <= end) return { node: parent, offset: Math.max(0, index + 1) };
       total = end;
@@ -225,14 +225,14 @@ export function runsOffsetToDomPoint(
       if (target <= total) {
         if (lastText) return { node: lastText, offset: lastText.data.length };
         const parent = element.parentNode ?? root;
-        const index = Array.from(parent.childNodes).indexOf(element as ChildNode);
+        const index = childIndex(element as ChildNode);
         return { node: parent, offset: Math.max(0, index) };
       }
       total += 1;
       endsWithNewline = true;
       lastText = null;
     }
-    for (const child of Array.from(element.childNodes)) {
+    for (let child = element.firstChild; child; child = child.nextSibling) {
       if (element === root && child.nodeName === 'BR' && child === root.lastChild) {
         continue;
       }
@@ -318,7 +318,9 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
     if (isBlockElement(element) && lastChar && lastChar !== '\n') {
       append('\n', undefined);
     }
-    for (const child of Array.from(element.childNodes)) walk(child, nextMarks);
+    for (let child = element.firstChild; child; child = child.nextSibling) {
+      walk(child, nextMarks);
+    }
     const mentionId =
       element.getAttribute('data-nb-mention-id') ??
       element.getAttribute('data-mention-id');
@@ -329,7 +331,7 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
     if (mentionId && mentionLabel) flush();
   };
 
-  for (const child of Array.from(root.childNodes)) {
+  for (let child = root.firstChild; child; child = child.nextSibling) {
     if (child.nodeName === 'BR' && child === root.lastChild) continue;
     walk(child, undefined);
   }

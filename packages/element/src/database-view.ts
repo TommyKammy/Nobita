@@ -36,7 +36,8 @@ import type {
   DatabaseViewColumn,
   InlineRun,
 } from '@nobita/core';
-import { nativeSelection, placeCaret } from './dom.js';
+import { handleHistoryKey, nativeSelection, placeCaret } from './dom.js';
+import { beginWindowDrag } from './floating.js';
 import { icon } from './icons.js';
 import { parseTsv, tsvCell } from './tsv.js';
 import {
@@ -198,49 +199,49 @@ export class DatabaseView {
       isReadonly: () => this.#readonly,
       getSignal: () => this.#events.signal,
     });
-    this.#board = new DatabaseBoardController({
+    const baseCtx = {
       rootElement: this.element,
-      instanceId: this.#instanceId,
       getReadonly: () => this.#readonly,
       getData: () => this.#data,
+      activeView: () => this.#activeView(),
+      visibleColumns: (view?: DatabaseViewConfig) => this.#visibleColumns(view),
+      titleColumn: (view?: DatabaseViewConfig) => this.#titleColumn(view),
+      currentCell: (rowId: string, columnId: string) => this.#currentCell(rowId, columnId),
+      commitCell: (
+        rowId: string,
+        colId: string,
+        cell: DatabaseCell,
+        key?: string
+      ) => this.#commitCell(rowId, colId, cell, key),
+      history: (redo: boolean) => this.#history(redo),
+      richText: this.#richText,
+    };
+    this.#board = new DatabaseBoardController({
+      ...baseCtx,
+      instanceId: this.#instanceId,
       getSyncedData: () => this.#syncedData,
       getScrollElement: () => this.#scrollElement,
       getContentSignal: () => this.#contentEvents.signal,
-      activeView: () => this.#activeView(),
       views: () => this.#views(),
-      visibleColumns: view => this.#visibleColumns(view),
-      titleColumn: view => this.#titleColumn(view),
       groupsFor: view => this.#groupsFor(view),
-      currentCell: (rowId, columnId) => this.#currentCell(rowId, columnId),
       commit: (next, options) => this.#host.commit(next, options),
-      commitCell: (rowId, colId, cell, key) => this.#commitCell(rowId, colId, cell, key),
       commitDeletedRows: ids => this.#commitDeletedRows(ids),
       clearSelectedRow: id => this.#selectedRows.delete(id),
       setPendingBoardFocus: id => {
         this.#pendingBoardFocus = id;
       },
-      history: redo => this.#history(redo),
       render: () => this.render(),
       openDetailPanel: rowId => this.#detail.open(rowId),
       openRowPopover: (rowId, anchor) => this.#popovers.openRowPopover(rowId, anchor),
       showPopover: (anchor, content) => this.#popovers.showPopover(anchor, content),
       closePopover: () => this.#popovers.closePopover(),
-      richText: this.#richText,
     });
     this.#detail = new DatabaseDetailController({
-      rootElement: this.element,
-      getReadonly: () => this.#readonly,
-      getData: () => this.#data,
-      activeView: () => this.#activeView(),
-      visibleColumns: view => this.#visibleColumns(view),
-      titleColumn: view => this.#titleColumn(view),
+      ...baseCtx,
       navigationRows: view => this.#navigationRows(view),
-      currentCell: (rowId, columnId) => this.#currentCell(rowId, columnId),
-      commitCell: (rowId, colId, cell, key) => this.#commitCell(rowId, colId, cell, key),
       commitTextRuns: (rowId, colId, runs, key) =>
         this.#commitTextRuns(rowId, colId, runs, key),
       commitRowPage: (rowId, runs, key) => this.#commitRowPage(rowId, runs, key),
-      history: redo => this.#history(redo),
       openAddPropertyMenu: anchor => this.#popovers.openAddPropertyMenu(anchor),
       openFilesPopover: (colId, rowId, anchor) =>
         this.#popovers.openFilesPopover(colId, rowId, anchor),
@@ -248,26 +249,20 @@ export class DatabaseView {
         this.#popovers.openPeoplePopover(colId, rowId, anchor),
       openImagePopover: (colId, rowId, anchor) =>
         this.#popovers.openImagePopover(colId, rowId, anchor),
-      richText: this.#richText,
     });
     this.#popovers = new DatabasePopoversController({
-      rootElement: this.element,
+      ...baseCtx,
       getEventsSignal: () => this.#events.signal,
-      getReadonly: () => this.#readonly,
       getUploadImage: () => this.#host.uploadImage,
-      getData: () => this.#data,
-      activeView: () => this.#activeView(),
       views: () => this.#views(),
       columnStates: view => this.#columnStates(view),
       viewColumns: view => this.#viewColumns(view),
-      titleColumn: view => this.#titleColumn(view),
       groupsFor: view => this.#groupsFor(view),
       commit: (next, options) => this.#host.commit(next, options),
       updateActiveView: patch => this.#updateActiveView(patch),
       patchViewColumn: (colId, patch, opts) => this.#patchViewColumn(colId, patch, opts),
       setFilterTree: filter => this.#setFilterTree(filter),
       setGroupProperty: (key, patch) => this.#setGroupProperty(key, patch),
-      commitCell: (rowId, colId, cell, key) => this.#commitCell(rowId, colId, cell, key),
       addView: type => this.#addView(type),
       moveView: dir => this.#moveView(dir),
       moveGroup: (key, dir) => this.#moveGroup(key, dir),
@@ -323,10 +318,43 @@ export class DatabaseView {
 
   update(data: DatabaseData): void {
     if (data === this.#data) return;
+    const prev = this.#data;
     this.#data = data;
     const view = databaseView(data);
     if (this.#board.isEditingGroupTitle(view)) {
       this.#updateCount(view);
+      return;
+    }
+    const sameStructure =
+      this.#structureKey !== '' &&
+      prev.variant === data.variant &&
+      prev.columns === data.columns &&
+      prev.views === data.views &&
+      prev.view === data.view &&
+      prev.activeViewId === data.activeViewId &&
+      prev.titleColumnId === data.titleColumnId &&
+      prev.sort === data.sort &&
+      prev.rows.length === data.rows.length &&
+      prev.rows.every((row, index) => row.id === data.rows[index]?.id);
+    if (sameStructure) {
+      const activeView = this.#activeView();
+      const plainTableOrder =
+        activeView.type === 'table' &&
+        !activeView.groupBy &&
+        !this.#searchQuery.trim() &&
+        databaseFilterGroup(activeView).conditions.length === 0 &&
+        databaseSorts(activeView).length === 0 &&
+        !data.sort;
+      if (plainTableOrder) {
+        this.#syncValues();
+        return;
+      }
+      const visibleKey = this.#visibleKeyFor(data);
+      if (visibleKey !== this.#visibleKey) {
+        this.render();
+      } else {
+        this.#syncValues();
+      }
       return;
     }
     const nextKey = this.#keyFor(data);
@@ -1494,7 +1522,8 @@ export class DatabaseView {
     event.stopPropagation();
     const startX = event.clientX;
     const startWidth = col.getBoundingClientRect().width;
-    this.#beginWindowDrag(
+    beginWindowDrag(
+      this.#contentEvents.signal,
       moveEvent => {
         const width = Math.max(
           MIN_DATABASE_COLUMN_WIDTH,
@@ -1587,15 +1616,20 @@ export class DatabaseView {
     this.#patchViewColumn(columnId, {}, { move: direction });
   }
 
-  #beginColumnDrag(event: PointerEvent, columnId: string): void {
-    if (this.#readonly || event.button !== 0) return;
-    if ((event.target as Element | null)?.closest('.nb-db-resizer')) return;
+  #beginThresholdDrag(
+    event: PointerEvent,
+    onDrop: (endEvent: PointerEvent) => void
+  ): void {
     const startX = event.clientX;
     const startY = event.clientY;
     let moved = false;
-    this.#beginWindowDrag(
+    beginWindowDrag(
+      this.#contentEvents.signal,
       moveEvent => {
-        if (Math.abs(moveEvent.clientX - startX) < 6 && Math.abs(moveEvent.clientY - startY) < 6) {
+        if (
+          Math.abs(moveEvent.clientX - startX) < 6 &&
+          Math.abs(moveEvent.clientY - startY) < 6
+        ) {
           return;
         }
         moved = true;
@@ -1606,10 +1640,18 @@ export class DatabaseView {
         window.setTimeout(() => {
           this.#suppressClick = false;
         }, 0);
-        const target = this.#headerColumnFromEvent(endEvent);
-        if (target && target !== columnId) this.#moveColumnTo(columnId, target);
+        onDrop(endEvent);
       }
     );
+  }
+
+  #beginColumnDrag(event: PointerEvent, columnId: string): void {
+    if (this.#readonly || event.button !== 0) return;
+    if ((event.target as Element | null)?.closest('.nb-db-resizer')) return;
+    this.#beginThresholdDrag(event, endEvent => {
+      const target = this.#headerColumnFromEvent(endEvent);
+      if (target && target !== columnId) this.#moveColumnTo(columnId, target);
+    });
   }
 
   #headerColumnFromEvent(event: Event): string | undefined {
@@ -1635,26 +1677,10 @@ export class DatabaseView {
 
   #beginRowDrag(event: PointerEvent, rowId: string, groupKey?: string): void {
     if (this.#readonly || event.button !== 0) return;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    let moved = false;
-    this.#beginWindowDrag(
-      moveEvent => {
-        if (Math.abs(moveEvent.clientX - startX) < 6 && Math.abs(moveEvent.clientY - startY) < 6) {
-          return;
-        }
-        moved = true;
-      },
-      endEvent => {
-        if (!moved) return;
-        this.#suppressClick = true;
-        window.setTimeout(() => {
-          this.#suppressClick = false;
-        }, 0);
-        const target = this.#rowFromEvent(endEvent);
-        if (target && target !== rowId) this.#moveRowTo(rowId, target, groupKey);
-      }
-    );
+    this.#beginThresholdDrag(event, endEvent => {
+      const target = this.#rowFromEvent(endEvent);
+      if (target && target !== rowId) this.#moveRowTo(rowId, target, groupKey);
+    });
   }
 
   #rowFromEvent(event: Event): string | undefined {
@@ -1841,17 +1867,12 @@ export class DatabaseView {
                 );
               }
             };
-            if (target.dataset.richText === 'true') {
-              const signature = runsSignature(cell?.runs);
-              if (target.dataset.runs !== signature) {
-                const nextLength = cell?.runs ? runsLength(cell.runs) : value.length;
-                updateText(() => renderTextCellContent(target, cell), nextLength);
-              } else if (!cell?.runs && target.textContent !== value) {
-                updateText(() => {
-                  target.textContent = value;
-                }, value.length);
-              }
-            } else if (target.textContent !== value) {
+            const isRich = target.dataset.richText === 'true';
+            const signature = isRich ? runsSignature(cell?.runs) : '';
+            if (isRich && target.dataset.runs !== signature) {
+              const nextLength = cell?.runs ? runsLength(cell.runs) : value.length;
+              updateText(() => renderTextCellContent(target, cell), nextLength);
+            } else if ((!isRich || !cell?.runs) && target.textContent !== value) {
               updateText(() => {
                 target.textContent = value;
               }, value.length);
@@ -1864,26 +1885,11 @@ export class DatabaseView {
                 : value;
             if (nodes.input.value !== inputValue) nodes.input.value = inputValue;
           }
-          if (nodes.button && column.type === 'checkbox') {
-            nodes.button.setAttribute('aria-checked', String(Boolean(cell?.checked)));
-          }
-          if (nodes.button && column.type === 'select') {
-            applySelectLabel(nodes.button, value, column.options, column.name);
-          }
-          if (nodes.button && column.type === 'multi-select') {
-            applyMultiLabel(nodes.button, cell?.values ?? [], column.name);
-          }
-          if (nodes.button && column.type === 'files') {
-            applyFilesLabel(nodes.button, cell?.files ?? [], column.name);
-          }
-          if (nodes.button && column.type === 'people') {
-            applyPeopleLabel(nodes.button, cell?.people ?? [], column.name);
+          if (nodes.button) {
+            this.#applyButtonLabel(nodes.button, column, cell);
           }
           if (nodes.progress && column.type === 'progress') {
             applyProgressState(nodes.progress, value, column.name);
-          }
-          if (nodes.button && column.type === 'image') {
-            applyImageLabel(nodes.button, value, column.name);
           }
         }
       }
@@ -1960,14 +1966,12 @@ export class DatabaseView {
       this.#createCheckboxCell(td, nodes, row, column, cell);
     } else if (column.type === 'progress') {
       this.#createProgressCell(td, nodes, row, column, cell);
-    } else if (column.type === 'image') {
-      this.#createImageCell(td, nodes, row, column, cell);
-    } else if (column.type === 'select') {
-      this.#createSelectCell(td, nodes, row, column, cell);
     } else if (
+      column.type === 'select' ||
       column.type === 'multi-select' ||
       column.type === 'files' ||
-      column.type === 'people'
+      column.type === 'people' ||
+      column.type === 'image'
     ) {
       this.#createPickerCell(td, nodes, row, column, cell);
     } else if (column.type === 'number' || column.type === 'date') {
@@ -2017,35 +2021,32 @@ export class DatabaseView {
     nodes.button = button;
   }
 
-  #createSelectCell(
-    td: HTMLTableCellElement,
-    nodes: CellNodes,
-    row: DatabaseRow,
+  #applyButtonLabel(
+    button: HTMLButtonElement,
     column: DatabaseColumn,
     cell: DatabaseCell | undefined
   ): void {
-    const signal = this.#contentEvents.signal;
-    const button = btn('nb-db-select', { disabled: this.#readonly });
-    applySelectLabel(button, cell?.text ?? '', column.options, column.name);
-    button.addEventListener(
-      'click',
-      () => this.#popovers.openSelectPopover(column.id, row.id, button),
-      { signal }
-    );
-    button.addEventListener(
-      'keydown',
-      event => {
-        if (!(event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.shiftKey) {
-          event.preventDefault();
-          this.#popovers.openSelectPopover(column.id, row.id, button);
-          return;
-        }
-        this.#onCellKeyDown(event, row.id, column.id, 'select');
-      },
-      { signal }
-    );
-    td.append(button);
-    nodes.button = button;
+    const value = cell?.text ?? '';
+    switch (column.type) {
+      case 'checkbox':
+        button.setAttribute('aria-checked', String(Boolean(cell?.checked)));
+        break;
+      case 'select':
+        applySelectLabel(button, value, column.options, column.name);
+        break;
+      case 'multi-select':
+        applyMultiLabel(button, cell?.values ?? [], column.name);
+        break;
+      case 'files':
+        applyFilesLabel(button, cell?.files ?? [], column.name);
+        break;
+      case 'people':
+        applyPeopleLabel(button, cell?.people ?? [], column.name);
+        break;
+      case 'image':
+        applyImageLabel(button, value, column.name);
+        break;
+    }
   }
 
   #createPickerCell(
@@ -2056,33 +2057,34 @@ export class DatabaseView {
     cell: DatabaseCell | undefined
   ): void {
     const signal = this.#contentEvents.signal;
-    const button = btn('nb-db-select nb-db-multi', { disabled: this.#readonly });
-    if (column.type === 'multi-select') {
-      applyMultiLabel(button, cell?.values ?? [], column.name);
-    } else if (column.type === 'files') {
-      applyFilesLabel(button, cell?.files ?? [], column.name);
-    } else {
-      applyPeopleLabel(button, cell?.people ?? [], column.name);
-    }
-    button.addEventListener(
-      'click',
-      () => {
-        if (column.type === 'multi-select') {
-          this.#popovers.openMultiSelectPopover(column.id, row.id, button);
-        } else if (column.type === 'files') {
-          this.#popovers.openFilesPopover(column.id, row.id, button);
-        } else {
-          this.#popovers.openPeoplePopover(column.id, row.id, button);
-        }
-      },
-      { signal }
-    );
+    const className =
+      column.type === 'select'
+        ? 'nb-db-select'
+        : column.type === 'image'
+          ? 'nb-db-select nb-db-image-cell'
+          : 'nb-db-select nb-db-multi';
+    const button = btn(className, { disabled: this.#readonly });
+    this.#applyButtonLabel(button, column, cell);
+    const open = (): void => {
+      if (column.type === 'select') {
+        this.#popovers.openSelectPopover(column.id, row.id, button);
+      } else if (column.type === 'image') {
+        this.#popovers.openImagePopover(column.id, row.id, button);
+      } else if (column.type === 'multi-select') {
+        this.#popovers.openMultiSelectPopover(column.id, row.id, button);
+      } else if (column.type === 'files') {
+        this.#popovers.openFilesPopover(column.id, row.id, button);
+      } else {
+        this.#popovers.openPeoplePopover(column.id, row.id, button);
+      }
+    };
+    button.addEventListener('click', open, { signal });
     button.addEventListener(
       'keydown',
       event => {
         if (!(event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();
-          button.click();
+          open();
           return;
         }
         this.#onCellKeyDown(event, row.id, column.id, column.type as CellKind);
@@ -2156,7 +2158,8 @@ export class DatabaseView {
           if (initial !== null) {
             applyProgressState(control, String(initial), column.name);
           }
-          this.#beginWindowDrag(
+          beginWindowDrag(
+      this.#contentEvents.signal,
             moveEvent => {
               const nextPct = percentAt(moveEvent.clientX);
               if (nextPct === null || nextPct === lastPct) return;
@@ -2233,37 +2236,6 @@ export class DatabaseView {
 
     td.append(control);
     nodes.progress = control;
-  }
-
-  #createImageCell(
-    td: HTMLTableCellElement,
-    nodes: CellNodes,
-    row: DatabaseRow,
-    column: DatabaseColumn,
-    cell: DatabaseCell | undefined
-  ): void {
-    const signal = this.#contentEvents.signal;
-    const button = btn('nb-db-select nb-db-image-cell', { disabled: this.#readonly });
-    applyImageLabel(button, cell?.text, column.name);
-    button.addEventListener(
-      'click',
-      () => this.#popovers.openImagePopover(column.id, row.id, button),
-      { signal }
-    );
-    button.addEventListener(
-      'keydown',
-      event => {
-        if (!(event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.shiftKey) {
-          event.preventDefault();
-          button.click();
-          return;
-        }
-        this.#onCellKeyDown(event, row.id, column.id, 'image');
-      },
-      { signal }
-    );
-    td.append(button);
-    nodes.button = button;
   }
 
   #createValueCell(
@@ -2682,29 +2654,7 @@ export class DatabaseView {
   }
 
   #moveTab(rowId: string, columnId: string, backwards: boolean): void {
-    const rows = this.#rows();
-    const columns = this.#visibleColumns(this.#activeView());
-    const rowIndex = rows.findIndex(row => row.id === rowId);
-    const columnIndex = columns.findIndex(column => column.id === columnId);
-    if (rowIndex < 0 || columnIndex < 0) return;
-    let nextRow = rowIndex;
-    let nextColumn = columnIndex + (backwards ? -1 : 1);
-    if (nextColumn >= columns.length) {
-      nextColumn = 0;
-      nextRow += 1;
-    } else if (nextColumn < 0) {
-      nextColumn = columns.length - 1;
-      nextRow -= 1;
-    }
-    if (nextRow >= rows.length) {
-      if (this.#readonly) return;
-      this.#addRow();
-      return;
-    }
-    if (nextRow < 0) return;
-    const targetRow = rows[nextRow];
-    const targetColumn = columns[nextColumn];
-    if (targetRow && targetColumn) this.focusCell(targetRow.id, targetColumn.id, 'end');
+    this.#moveHorizontal(rowId, columnId, backwards ? -1 : 1, true);
   }
 
   #moveVertical(rowId: string, columnId: string, direction: 1 | -1): void {
@@ -2719,7 +2669,12 @@ export class DatabaseView {
     this.focusCell(next.id, columnId, direction > 0 ? 'start' : 'end');
   }
 
-  #moveHorizontal(rowId: string, columnId: string, direction: 1 | -1): void {
+  #moveHorizontal(
+    rowId: string,
+    columnId: string,
+    direction: 1 | -1,
+    addOnEnd = false
+  ): void {
     const rows = this.#rows();
     const columns = this.#visibleColumns(this.#activeView());
     const rowIndex = rows.findIndex(row => row.id === rowId);
@@ -2734,10 +2689,18 @@ export class DatabaseView {
       nextColumn = columns.length - 1;
       nextRow -= 1;
     }
+    if (addOnEnd && nextRow >= rows.length) {
+      if (!this.#readonly) this.#addRow();
+      return;
+    }
     const targetRow = rows[nextRow];
     const targetColumn = columns[nextColumn];
     if (targetRow && targetColumn) {
-      this.focusCell(targetRow.id, targetColumn.id, direction > 0 ? 'start' : 'end');
+      this.focusCell(
+        targetRow.id,
+        targetColumn.id,
+        addOnEnd || direction < 0 ? 'end' : 'start'
+      );
     }
   }
 
@@ -2756,15 +2719,9 @@ export class DatabaseView {
       return;
     }
     const mod = event.metaKey || event.ctrlKey;
-    if (mod && event.key.toLowerCase() === 'z') {
-      event.preventDefault();
-      if (event.shiftKey) this.#host.redo();
-      else this.#host.undo();
-      return;
-    }
-    if (mod && event.key.toLowerCase() === 'y') {
-      event.preventDefault();
-      this.#host.redo();
+    if (
+      handleHistoryKey(event, redo => (redo ? this.#host.redo() : this.#host.undo()))
+    ) {
       return;
     }
     if (mod && kind === 'text') {
@@ -2825,26 +2782,26 @@ export class DatabaseView {
       kind === 'progress' ||
       kind === 'image'
     ) {
-      if (event.key === 'ArrowDown') {
-        if (kind === 'text' && activeNode?.text && !caretAtBoundary(activeNode.text, 'end')) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        const dir = event.key === 'ArrowDown' ? 1 : -1;
+        if (
+          kind === 'text' &&
+          activeNode?.text &&
+          !caretAtBoundary(activeNode.text, dir > 0 ? 'end' : 'start')
+        ) {
           return;
         }
         event.preventDefault();
-        this.#moveVertical(rowId, columnId, 1);
-      } else if (event.key === 'ArrowUp') {
-        if (kind === 'text' && activeNode?.text && !caretAtBoundary(activeNode.text, 'start')) {
-          return;
-        }
+        this.#moveVertical(rowId, columnId, dir);
+      } else if (
+        (event.key === 'ArrowLeft' || event.key === 'ArrowRight') &&
+        kind === 'text' &&
+        activeNode?.text
+      ) {
+        const dir = event.key === 'ArrowRight' ? 1 : -1;
+        if (!caretAtBoundary(activeNode.text, dir > 0 ? 'end' : 'start')) return;
         event.preventDefault();
-        this.#moveVertical(rowId, columnId, -1);
-      } else if (event.key === 'ArrowLeft' && kind === 'text' && activeNode?.text) {
-        if (!caretAtBoundary(activeNode.text, 'start')) return;
-        event.preventDefault();
-        this.#moveHorizontal(rowId, columnId, -1);
-      } else if (event.key === 'ArrowRight' && kind === 'text' && activeNode?.text) {
-        if (!caretAtBoundary(activeNode.text, 'end')) return;
-        event.preventDefault();
-        this.#moveHorizontal(rowId, columnId, 1);
+        this.#moveHorizontal(rowId, columnId, dir);
       }
     }
   }
@@ -2897,7 +2854,8 @@ export class DatabaseView {
     };
     this.#dragSelect = drag;
     const root = this.element.getRootNode() as ShadowRoot;
-    this.#beginWindowDrag(
+    beginWindowDrag(
+      this.#contentEvents.signal,
       moveEvent => {
         if (this.#dragSelect !== drag) return;
         const cell = this.#cellFromEvent(moveEvent);
@@ -3097,32 +3055,6 @@ export class DatabaseView {
     handle.dataset.visible = 'true';
   }
 
-  #beginWindowDrag(
-    onMove: (event: PointerEvent) => void,
-    onFinish: (event: PointerEvent) => void,
-    onCancel?: () => void
-  ): void {
-    const contentSignal = this.#contentEvents.signal;
-    if (contentSignal.aborted) return;
-    const controller = new AbortController();
-    const { signal } = controller;
-    contentSignal.addEventListener(
-      'abort',
-      () => {
-        onCancel?.();
-        controller.abort();
-      },
-      { once: true, signal }
-    );
-    window.addEventListener('pointermove', onMove, { signal });
-    const finish = (event: PointerEvent): void => {
-      controller.abort();
-      onFinish(event);
-    };
-    window.addEventListener('pointerup', finish, { signal });
-    window.addEventListener('pointercancel', finish, { signal });
-  }
-
   #beginFillDrag(): void {
     if (this.#readonly) return;
     const active = this.#active;
@@ -3136,7 +3068,8 @@ export class DatabaseView {
     if (!source) return;
     const groupKey = active.groupKey;
     let moved = false;
-    this.#beginWindowDrag(
+    beginWindowDrag(
+      this.#contentEvents.signal,
       moveEvent => {
         const target = this.#cellFromEvent(moveEvent);
         if (!target || target.dataset.columnId !== active.columnId) return;
@@ -3314,20 +3247,11 @@ export class DatabaseView {
   #onDatabaseKeyDown = (event: KeyboardEvent): void => {
     if (this.#readonly) return;
     const target = event.target;
-    if (target === this.element) {
-      const mod = event.metaKey || event.ctrlKey;
-      if (mod && event.key.toLowerCase() === 'z') {
-        event.preventDefault();
-        event.stopPropagation();
-        this.#history(event.shiftKey);
-        return;
-      }
-      if (mod && event.key.toLowerCase() === 'y') {
-        event.preventDefault();
-        event.stopPropagation();
-        this.#history(true);
-        return;
-      }
+    if (
+      target === this.element &&
+      handleHistoryKey(event, redo => this.#history(redo), true)
+    ) {
+      return;
     }
     const editing =
       target instanceof HTMLInputElement ||
@@ -3408,46 +3332,41 @@ export class DatabaseView {
     });
   }
 
-  #onCopy = (event: ClipboardEvent): void => {
-    const target = event.target as Element | null;
-    if (target?.closest('.nb-db-popover, .nb-db-detail')) return;
-    if (
+  #isNonCellTarget(target: Element | null, skipSelector: string): boolean {
+    if (target?.closest(skipSelector)) return true;
+    return (
       (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
       !target.closest('.nb-db-cell')
-    ) {
+    );
+  }
+
+  #writeRowsClipboard(event: ClipboardEvent, rowText: string): void {
+    event.clipboardData?.setData('text/plain', rowText);
+    event.clipboardData?.setData(DATABASE_ROWS_MIME, this.#selectedRowsPayload());
+    event.preventDefault();
+  }
+
+  #onCopy = (event: ClipboardEvent): void => {
+    const target = event.target as Element | null;
+    if (this.#isNonCellTarget(target, '.nb-db-popover, .nb-db-detail')) return;
+    const rowText = this.#selectedRowsText();
+    if (rowText) {
+      this.#writeRowsClipboard(event, rowText);
       return;
     }
-    const rowText = this.#selectedRowsText();
-    const text = rowText || (this.#rangeCells.size > 1 ? this.#rangeText() : '');
+    const text = this.#rangeCells.size > 1 ? this.#rangeText() : '';
     if (!text) return;
     event.clipboardData?.setData('text/plain', text);
-    if (rowText) {
-      event.clipboardData?.setData(
-        DATABASE_ROWS_MIME,
-        this.#selectedRowsPayload()
-      );
-    }
     event.preventDefault();
   };
 
   #onCut = (event: ClipboardEvent): void => {
     if (this.#readonly) return;
     const target = event.target as Element | null;
-    if (target?.closest('.nb-db-popover, .nb-db-detail')) return;
-    if (
-      (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
-      !target.closest('.nb-db-cell')
-    ) {
-      return;
-    }
+    if (this.#isNonCellTarget(target, '.nb-db-popover, .nb-db-detail')) return;
     const rowText = this.#selectedRowsText();
     if (rowText) {
-      event.clipboardData?.setData('text/plain', rowText);
-      event.clipboardData?.setData(
-        DATABASE_ROWS_MIME,
-        this.#selectedRowsPayload()
-      );
-      event.preventDefault();
+      this.#writeRowsClipboard(event, rowText);
       this.#deleteSelectedRows();
       return;
     }
@@ -3475,13 +3394,7 @@ export class DatabaseView {
   #onPaste = (event: ClipboardEvent): void => {
     if (this.#readonly) return;
     const target = event.target as Element | null;
-    if (target?.closest('.nb-db-popover, .nb-db-card-title')) return;
-    if (
-      (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
-      !target.closest('.nb-db-cell')
-    ) {
-      return;
-    }
+    if (this.#isNonCellTarget(target, '.nb-db-popover, .nb-db-card-title')) return;
     const typed = event.clipboardData?.getData(DATABASE_ROWS_MIME) ?? '';
     if (typed) {
       try {

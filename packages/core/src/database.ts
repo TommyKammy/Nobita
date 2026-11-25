@@ -1220,24 +1220,21 @@ function hasFilterConditions(node: DatabaseFilterNode): boolean {
 function matchesFilterNode(
   row: DatabaseRow,
   node: DatabaseFilterNode,
-  data: DatabaseData
+  columnById: ReadonlyMap<string, DatabaseColumn>
 ): boolean {
   if (node.type === 'group') {
     const matches: boolean[] = [];
     for (const item of node.conditions) {
       if (item.type === 'group' && !hasFilterConditions(item)) continue;
-      if (
-        item.type !== 'group' &&
-        !data.columns.some(column => column.id === item.columnId)
-      ) {
+      if (item.type !== 'group' && !columnById.has(item.columnId)) {
         continue;
       }
-      matches.push(matchesFilterNode(row, item, data));
+      matches.push(matchesFilterNode(row, item, columnById));
     }
     if (matches.length === 0) return true;
     return node.op === 'or' ? matches.some(Boolean) : matches.every(Boolean);
   }
-  const column = data.columns.find(item => item.id === node.columnId);
+  const column = columnById.get(node.columnId);
   if (!column) return true;
   return matchesFilter(row, column, node);
 }
@@ -1260,10 +1257,13 @@ export function filteredDatabaseRows(
   view: DatabaseView = databaseView(data)
 ): DatabaseRow[] {
   const filter = databaseFilterGroup(view);
-  const rows =
-    filter.conditions.length === 0
-      ? [...data.rows]
-      : data.rows.filter(row => matchesFilterNode(row, filter, data));
+  let rows: DatabaseRow[];
+  if (filter.conditions.length === 0) {
+    rows = [...data.rows];
+  } else {
+    const columnById = new Map(data.columns.map(column => [column.id, column]));
+    rows = data.rows.filter(row => matchesFilterNode(row, filter, columnById));
+  }
   return sortRows(rows, data.columns, effectiveSorts(data, view));
 }
 
