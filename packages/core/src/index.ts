@@ -17,6 +17,7 @@ export type {
   DatabaseGroupProperty,
   DatabasePerson,
   DatabaseRow,
+  DatabaseRowPage,
   DatabaseSort,
   DatabaseStatType,
   DatabaseVariant,
