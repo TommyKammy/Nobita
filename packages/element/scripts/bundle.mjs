@@ -11,21 +11,28 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
  */
 function minifyCss(css) {
   const strings = [];
+  const hold = value => {
+    const token = `\uE000${strings.length}\uE001`;
+    strings.push(value);
+    return token;
+  };
   let out = css.replace(
     /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\*[\s\S]*?\*\//g,
-    match => {
-      if (match.startsWith('/*')) return ' ';
-      const token = `\uE000${strings.length}\uE001`;
-      strings.push(match);
-      return token;
-    }
+    match => (match.startsWith('/*') ? ' ' : hold(match))
   );
+
+  // Protect calc(...) expressions so spacing around +/- and 0px units stay intact.
+  out = out.replace(/calc\((?:[^()]+|\((?:[^()]+|\([^()]*\))*\))*\)/g, hold);
 
   out = out
     .replace(/\s+/g, ' ')
     .replace(/\s*([{};,])\s*/g, '$1')
     .replace(/: /g, ':')
     .replace(/\s*>\s*/g, '>')
+    .replace(/#ffffff\b/gi, '#fff')
+    .replace(/#000000\b/gi, '#000')
+    .replace(/([: ,(])0px(?=[ ;,})])/g, '$10')
+    .replace(/([: ,(])0\.([0-9]+)/g, '$1.$2')
     .replace(/;}/g, '}')
     .replace(/\uE000(\d+)\uE001/g, (_, index) => strings[Number(index)])
     .trim();
@@ -62,6 +69,7 @@ const shared = {
   target: 'es2022',
   conditions: ['nobita-source'],
   sourcemap: true,
+  legalComments: 'none',
   plugins: [minifyStylesPlugin],
 };
 

@@ -1,5 +1,14 @@
 /** DOM ⇄ text-offset mapping shared by the inline editor and selection code. */
 
+/** Return the zero-based child index of `node` among its siblings without allocating. */
+export function childIndex(node: ChildNode): number {
+  let index = 0;
+  for (let prev = node.previousSibling; prev; prev = prev.previousSibling) {
+    index += 1;
+  }
+  return index;
+}
+
 export function isTextNode(node: Node | null): node is Text {
   return node?.nodeType === Node.TEXT_NODE;
 }
@@ -8,7 +17,9 @@ export function textLengthOfSubtree(node: Node): number {
   if (isTextNode(node)) return node.data.length;
   if (node.nodeName === 'BR') return 1;
   let total = 0;
-  for (const child of Array.from(node.childNodes)) total += textLengthOfSubtree(child);
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    total += textLengthOfSubtree(child);
+  }
   return total;
 }
 
@@ -24,12 +35,14 @@ export function domPointToOffset(root: HTMLElement, node: Node, offset: number):
       if (isTextNode(current)) {
         result = total + Math.max(0, Math.min(offset, current.data.length));
       } else {
-        const children = Array.from(current.childNodes);
-        const limit = Math.max(0, Math.min(offset, children.length));
         let added = 0;
-        for (let index = 0; index < limit; index += 1) {
-          const child = children[index];
-          if (child) added += textLengthOfSubtree(child);
+        let index = 0;
+        for (
+          let child = current.firstChild;
+          child && index < offset;
+          child = child.nextSibling, index += 1
+        ) {
+          added += textLengthOfSubtree(child);
         }
         result = total + added;
       }
@@ -44,7 +57,7 @@ export function domPointToOffset(root: HTMLElement, node: Node, offset: number):
       total += 1;
       return;
     }
-    for (const child of Array.from(current.childNodes)) {
+    for (let child = current.firstChild; child; child = child.nextSibling) {
       visit(child);
       if (found) return;
     }
@@ -74,7 +87,7 @@ export function offsetToDomPoint(root: HTMLElement, offset: number): { node: Nod
     if (node.nodeName === 'BR') {
       if (target <= total + 1) {
         const parent = node.parentNode ?? root;
-        const index = Array.from(parent.childNodes).indexOf(node as ChildNode);
+        const index = childIndex(node as ChildNode);
         return { node: parent, offset: Math.max(0, index) };
       }
       total += 1;
@@ -88,14 +101,14 @@ export function offsetToDomPoint(root: HTMLElement, offset: number): { node: Nod
       // Atomic inline embeds (mentions) only accept a caret on either side.
       const end = total + textLengthOfSubtree(node);
       const parent = node.parentNode ?? root;
-      const index = Array.from(parent.childNodes).indexOf(node as ChildNode);
+      const index = childIndex(node as ChildNode);
       if (target <= total) return { node: parent, offset: Math.max(0, index) };
       if (target <= end) return { node: parent, offset: Math.max(0, index + 1) };
       total = end;
       lastText = null;
       return null;
     }
-    for (const child of Array.from(node.childNodes)) {
+    for (let child = node.firstChild; child; child = child.nextSibling) {
       const point = visit(child);
       if (point) return point;
     }
@@ -192,4 +205,19 @@ export function closestElement(node: Node | null, selector: string): HTMLElement
   if (!node) return null;
   const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
   return (element?.closest(selector) as HTMLElement | null) ?? null;
+}
+
+/** Handle Cmd/Ctrl+Z / Shift+Z / Y undo/redo shortcuts. */
+export function handleHistoryKey(
+  event: KeyboardEvent,
+  onHistory: (redo: boolean) => void,
+  stopPropagation = false
+): boolean {
+  if (!(event.metaKey || event.ctrlKey)) return false;
+  const key = event.key.toLowerCase();
+  if (key !== 'z' && key !== 'y') return false;
+  event.preventDefault();
+  if (stopPropagation) event.stopPropagation();
+  onHistory(key === 'y' || event.shiftKey);
+  return true;
 }

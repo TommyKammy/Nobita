@@ -24,7 +24,7 @@ import type {
   DatabaseView as DatabaseViewConfig,
   DatabaseViewColumn,
 } from '@nobita/core';
-import { dismissFloating, placeFloating } from './floating.js';
+import { openAnchoredPopover } from './floating.js';
 import { icon } from './icons.js';
 import {
   COLUMN_TYPES,
@@ -95,26 +95,18 @@ export class DatabasePopoversController {
 
   showPopover(anchor: HTMLElement, content: HTMLElement): void {
     this.closePopover();
-    const popover = el('div', 'nb-db-popover');
-    popover.append(content);
-    this.#ctx.rootElement.append(popover);
-    placeFloating(popover, anchor.getBoundingClientRect(), {
-      align: 'start',
-      side: 'below',
-      gap: 6,
-      margin: 10,
-    });
-
-    const dismiss = dismissFloating({
-      element: popover,
-      pointerTarget: document,
-      scroll: true,
-      dismissOnInsideScroll: true,
+    const { element, cleanup } = openAnchoredPopover({
+      host: this.#ctx.rootElement,
+      anchor,
+      content,
+      className: 'nb-db-popover',
       onDismiss: () => this.closePopover(),
+      place: { align: 'start', side: 'below', gap: 6, margin: 10 },
+      dismiss: { pointerTarget: document, scroll: true, dismissOnInsideScroll: true },
     });
     this.#popoverCleanup = () => {
-      dismiss();
-      popover.remove();
+      cleanup();
+      element.remove();
     };
   }
 
@@ -128,22 +120,47 @@ export class DatabasePopoversController {
     this.closePopover();
   }
 
-  openAddViewMenu(anchor: HTMLElement): void {
+  #openMenuPopover(
+    anchor: HTMLElement,
+    title: string,
+    items: ReadonlyArray<{ label: string; action: () => void; danger?: boolean }>
+  ): HTMLElement {
     const content = document.createElement('div');
-    content.append(popTitle('Add view'));
+    content.append(popTitle(title));
     const actions = el('div', 'nb-db-pop-actions');
-    for (const type of ['table', 'board'] as const) {
-      const button = btn(undefined, {
-        text: type === 'board' ? 'Board view' : 'Table view',
-      });
+    for (const item of items) {
+      const button = btn(item.danger ? 'danger' : undefined, { text: item.label });
       button.addEventListener('click', () => {
         this.closePopover();
-        this.#ctx.addView(type);
+        item.action();
       });
       actions.append(button);
     }
     content.append(actions);
     this.showPopover(anchor, content);
+    return actions;
+  }
+
+  #cellContext(
+    columnId: string,
+    rowId: string
+  ): { data: DatabaseData; column: DatabaseColumn; row: DatabaseRow } | null {
+    if (this.#ctx.getReadonly()) return null;
+    const data = this.#ctx.getData();
+    const column = data.columns.find(item => item.id === columnId);
+    const row = data.rows.find(item => item.id === rowId);
+    return column && row ? { data, column, row } : null;
+  }
+
+  openAddViewMenu(anchor: HTMLElement): void {
+    this.#openMenuPopover(
+      anchor,
+      'Add view',
+      (['table', 'board'] as const).map(type => ({
+        label: type === 'board' ? 'Board view' : 'Table view',
+        action: () => this.#ctx.addView(type),
+      }))
+    );
   }
 
   openViewMenu(anchor: HTMLElement): void {
@@ -221,66 +238,34 @@ export class DatabasePopoversController {
     const actions = el('div', 'nb-db-pop-actions');
     const add = (text: string, action: () => void, danger = false): void => {
       const button = btn(danger ? 'danger' : undefined, { text });
-      button.addEventListener('click', action);
+      button.addEventListener('click', () => {
+        this.closePopover();
+        action();
+      });
       actions.append(button);
     };
     const propertyCount = this.#ctx.columnStates(view).filter(item => !item.hide).length;
-    add(`Properties (${propertyCount} shown)`, () => {
-      this.closePopover();
-      this.openViewProperties(anchor);
-    });
-    add('Filter', () => {
-      this.closePopover();
-      this.openFilterPopover(anchor);
-    });
+    add(`Properties (${propertyCount} shown)`, () => this.openViewProperties(anchor));
+    add('Filter', () => this.openFilterPopover(anchor));
     add(
       `Sort${databaseSorts(view).length > 0 ? ` (${databaseSorts(view).length})` : ''}`,
-      () => {
-        this.closePopover();
-        this.openSortPopover(anchor);
-      }
+      () => this.openSortPopover(anchor)
     );
     add(
       `Group${view.groupBy ? `: ${data.columns.find(column => column.id === view.groupBy)?.name ?? ''}` : ''}`,
-      () => {
-        this.closePopover();
-        this.openGroupPopover(anchor);
-      }
+      () => this.openGroupPopover(anchor)
     );
-    add('Rename view', () => {
-      this.closePopover();
-      this.openRenameView(anchor);
-    });
+    add('Rename view', () => this.openRenameView(anchor));
     add('Duplicate view', () => {
-      this.closePopover();
       const views = this.#ctx.views();
       if (views.length >= 100) return;
       const active = this.#ctx.activeView();
       const index = views.findIndex(item => item.id === active.id);
       const copy = {
-        ...active,
+        ...(JSON.parse(JSON.stringify(active)) as typeof active),
         id: createId('v'),
         name: `${active.name} copy`,
-        filters: active.filters.map(filter => ({ ...filter })),
-        ...(active.filter
-          ? { filter: JSON.parse(JSON.stringify(active.filter)) as DatabaseFilterGroup }
-          : {}),
-        ...(active.groupProperties
-          ? {
-              groupProperties: active.groupProperties.map(group => ({
-                ...group,
-                ...(group.manuallyCardSort
-                  ? { manuallyCardSort: [...group.manuallyCardSort] }
-                  : {}),
-              })),
-            }
-          : {}),
-        ...(active.sorts ? { sorts: active.sorts.map(sort => ({ ...sort })) } : {}),
-        ...(active.columns ? { columns: active.columns.map(column => ({ ...column })) } : {}),
-        ...(active.hiddenColumns ? { hiddenColumns: [...active.hiddenColumns] } : {}),
-        ...(active.stats ? { stats: { ...active.stats } } : {}),
-        ...(active.header ? { header: { ...active.header } } : {}),
-      } satisfies DatabaseViewConfig;
+      };
       const next = [...views];
       next.splice(index + 1, 0, copy);
       const { view: _legacyView, sort: _legacySort, ...rest } = data;
@@ -288,21 +273,12 @@ export class DatabasePopoversController {
     });
     const views = this.#ctx.views();
     const index = views.findIndex(item => item.id === view.id);
-    if (index > 0) {
-      add('Move view left', () => {
-        this.closePopover();
-        this.#ctx.moveView(-1);
-      });
-    }
+    if (index > 0) add('Move view left', () => this.#ctx.moveView(-1));
     if (index >= 0 && index < views.length - 1) {
-      add('Move view right', () => {
-        this.closePopover();
-        this.#ctx.moveView(1);
-      });
+      add('Move view right', () => this.#ctx.moveView(1));
     }
     if (views.length > 1) {
       add('Delete view', () => {
-        this.closePopover();
         const active = this.#ctx.activeView();
         const remaining = this.#ctx.views().filter(item => item.id !== active.id);
         const { view: _legacyView, sort: _legacySort, ...rest } = this.#ctx.getData();
@@ -318,6 +294,50 @@ export class DatabasePopoversController {
     this.showPopover(anchor, content);
     name.focus();
     name.select();
+  }
+
+  #orderRow(
+    rowClass: string,
+    nameClass: string,
+    label: string,
+    count: number | undefined,
+    subject: string,
+    kind: string,
+    hidden: boolean,
+    first: boolean,
+    last: boolean,
+    onMove: (direction: -1 | 1) => void,
+    onToggle: () => void,
+    signal: AbortSignal
+  ): HTMLElement {
+    const row = el('div', rowClass);
+    row.append(el('span', nameClass, label));
+    if (count !== undefined) {
+      row.append(el('span', 'nb-db-group-count', String(count)));
+    }
+    const up = iconBtn('nb-db-property-move', icon.arrowUp, `Move ${subject} up`, {
+      title: kind ? `Move ${kind} up` : 'Move up',
+      disabled: first,
+    });
+    up.addEventListener('click', () => onMove(-1), { signal });
+    const down = iconBtn('nb-db-property-move', icon.arrowDown, `Move ${subject} down`, {
+      title: kind ? `Move ${kind} down` : 'Move down',
+      disabled: last,
+    });
+    down.addEventListener('click', () => onMove(1), { signal });
+    const toggleLabel = `${hidden ? 'Show' : 'Hide'} ${kind ? subject : 'property'}`;
+    const toggle = iconBtn(
+      'nb-db-property-eye',
+      hidden ? icon.expand : icon.checkboxSquare,
+      toggleLabel,
+      {
+        ...(kind ? { title: `${hidden ? 'Show' : 'Hide'} ${kind}` } : {}),
+        dataset: { hidden: String(hidden) },
+      }
+    );
+    toggle.addEventListener('click', onToggle, { signal });
+    row.append(up, down, toggle);
+    return row;
   }
 
   openViewProperties(anchor: HTMLElement): void {
@@ -352,40 +372,28 @@ export class DatabasePopoversController {
     content.append(bulk);
     const list = el('div', 'nb-db-column-list');
     states.forEach((state, index) => {
-      const row = el('div', 'nb-db-property-row');
-      const label = el('span', 'nb-db-property-name', state.column.name);
-      const up = iconBtn(
-        'nb-db-property-move',
-        icon.arrowUp,
-        `Move ${state.column.name} up`,
-        { title: 'Move up', disabled: index === 0 }
+      list.append(
+        this.#orderRow(
+          'nb-db-property-row',
+          'nb-db-property-name',
+          state.column.name,
+          undefined,
+          state.column.name,
+          '',
+          state.hide,
+          index === 0,
+          index === states.length - 1,
+          direction => {
+            this.closePopover();
+            this.#ctx.patchViewColumn(state.column.id, {}, { move: direction });
+          },
+          () => {
+            this.closePopover();
+            this.#ctx.patchViewColumn(state.column.id, { hide: !state.hide });
+          },
+          signal
+        )
       );
-      up.addEventListener('click', () => {
-        this.closePopover();
-        this.#ctx.patchViewColumn(state.column.id, {}, { move: -1 });
-      }, { signal });
-      const down = iconBtn(
-        'nb-db-property-move',
-        icon.arrowDown,
-        `Move ${state.column.name} down`,
-        { title: 'Move down', disabled: index === states.length - 1 }
-      );
-      down.addEventListener('click', () => {
-        this.closePopover();
-        this.#ctx.patchViewColumn(state.column.id, {}, { move: 1 });
-      }, { signal });
-      const toggle = iconBtn(
-        'nb-db-property-eye',
-        state.hide ? icon.expand : icon.checkboxSquare,
-        state.hide ? 'Show property' : 'Hide property',
-        { dataset: { hidden: String(state.hide) } }
-      );
-      toggle.addEventListener('click', () => {
-        this.closePopover();
-        this.#ctx.patchViewColumn(state.column.id, { hide: !state.hide });
-      }, { signal });
-      row.append(label, up, down, toggle);
-      list.append(row);
     });
     content.append(list);
     this.showPopover(anchor, content);
@@ -814,38 +822,25 @@ export class DatabasePopoversController {
       const groups = this.#ctx.groupsFor(view);
       const list = el('div', 'nb-db-group-setting-list');
       groups.forEach((group, index) => {
-        const row = el('div', 'nb-db-group-setting');
-        const label = el('span', 'nb-db-group-setting-name', group.label || 'No value');
-        const count = el('span', 'nb-db-group-count', String(group.rows.length));
-        const up = iconBtn(
-          'nb-db-property-move',
-          icon.arrowUp,
-          `Move ${group.label || 'group'} up`,
-          { title: 'Move group up', disabled: index === 0 }
+        list.append(
+          this.#orderRow(
+            'nb-db-group-setting',
+            'nb-db-group-setting-name',
+            group.label || 'No value',
+            group.rows.length,
+            group.label || 'group',
+            'group',
+            Boolean(group.hidden),
+            index === 0,
+            index === groups.length - 1,
+            direction => this.#ctx.moveGroup(group.key, direction),
+            () => {
+              this.closePopover();
+              this.#ctx.setGroupProperty(group.key, { hide: !group.hidden });
+            },
+            signal
+          )
         );
-        up.addEventListener('click', () => this.#ctx.moveGroup(group.key, -1), { signal });
-        const down = iconBtn(
-          'nb-db-property-move',
-          icon.arrowDown,
-          `Move ${group.label || 'group'} down`,
-          { title: 'Move group down', disabled: index === groups.length - 1 }
-        );
-        down.addEventListener('click', () => this.#ctx.moveGroup(group.key, 1), { signal });
-        const toggle = iconBtn(
-          'nb-db-property-eye',
-          group.hidden ? icon.expand : icon.checkboxSquare,
-          group.hidden ? `Show ${group.label || 'group'}` : `Hide ${group.label || 'group'}`,
-          {
-            title: group.hidden ? 'Show group' : 'Hide group',
-            dataset: { hidden: String(Boolean(group.hidden)) },
-          }
-        );
-        toggle.addEventListener('click', () => {
-          this.closePopover();
-          this.#ctx.setGroupProperty(group.key, { hide: !group.hidden });
-        }, { signal });
-        row.append(label, count, up, down, toggle);
-        list.append(row);
       });
       content.append(list);
     }
@@ -854,19 +849,14 @@ export class DatabasePopoversController {
   }
 
   openAddPropertyMenu(anchor: HTMLElement): void {
-    const content = document.createElement('div');
-    content.append(popTitle('Add property'));
-    const list = el('div', 'nb-db-pop-actions');
-    for (const type of COLUMN_TYPES) {
-      const button = btn(undefined, { text: type.label });
-      button.addEventListener('click', () => {
-        this.closePopover();
-        this.#ctx.addColumnOfType(type.type, false);
-      });
-      list.append(button);
-    }
-    content.append(list);
-    this.showPopover(anchor, content);
+    this.#openMenuPopover(
+      anchor,
+      'Add property',
+      COLUMN_TYPES.map(type => ({
+        label: type.label,
+        action: () => this.#ctx.addColumnOfType(type.type, false),
+      }))
+    );
   }
 
   openMultiSelectPopover(
@@ -874,11 +864,9 @@ export class DatabasePopoversController {
     rowId: string,
     anchor: HTMLElement
   ): void {
-    if (this.#ctx.getReadonly()) return;
-    const data = this.#ctx.getData();
-    const column = data.columns.find(item => item.id === columnId);
-    const row = data.rows.find(item => item.id === rowId);
-    if (!column || !row) return;
+    const ctx = this.#cellContext(columnId, rowId);
+    if (!ctx) return;
+    const { column, row } = ctx;
     const draft = [...(row.cells[columnId]?.values ?? [])];
     const content = document.createElement('div');
     content.append(popTitle(column.name));
@@ -926,11 +914,9 @@ export class DatabasePopoversController {
     rowId: string,
     anchor: HTMLElement
   ): void {
-    if (this.#ctx.getReadonly()) return;
-    const data = this.#ctx.getData();
-    const column = data.columns.find(item => item.id === columnId);
-    const row = data.rows.find(item => item.id === rowId);
-    if (!column || !row) return;
+    const ctx = this.#cellContext(columnId, rowId);
+    if (!ctx) return;
+    const { column, row } = ctx;
     const files: DatabaseFile[] = (row.cells[columnId]?.files ?? []).map(file => ({
       ...file,
     }));
@@ -1002,11 +988,9 @@ export class DatabasePopoversController {
     rowId: string,
     anchor: HTMLElement
   ): void {
-    if (this.#ctx.getReadonly()) return;
-    const data = this.#ctx.getData();
-    const column = data.columns.find(item => item.id === columnId);
-    const row = data.rows.find(item => item.id === rowId);
-    if (!column || !row) return;
+    const ctx = this.#cellContext(columnId, rowId);
+    if (!ctx) return;
+    const { column, row } = ctx;
     const current = safeImageSrc(row.cells[columnId]?.text);
     const content = document.createElement('div');
     content.append(popTitle(column.name));
@@ -1068,15 +1052,13 @@ export class DatabasePopoversController {
         uploadBtn.disabled = true;
         uploadBtn.textContent = 'Uploading…';
         error.hidden = true;
+        const stale = (): boolean =>
+          !content.isConnected ||
+          !this.#ctx.rootElement.isConnected ||
+          this.#ctx.getReadonly();
         try {
           const res = await activeUpload(file);
-          if (
-            !content.isConnected ||
-            !this.#ctx.rootElement.isConnected ||
-            this.#ctx.getReadonly()
-          ) {
-            return;
-          }
+          if (stale()) return;
           const latest = this.#ctx.getData();
           if (
             !latest.rows.some(item => item.id === rowId) ||
@@ -1094,13 +1076,7 @@ export class DatabasePopoversController {
           error.textContent = 'Could not upload image.';
           error.hidden = false;
         } catch {
-          if (
-            !content.isConnected ||
-            !this.#ctx.rootElement.isConnected ||
-            this.#ctx.getReadonly()
-          ) {
-            return;
-          }
+          if (stale()) return;
           error.textContent = 'Could not upload image.';
           error.hidden = false;
         } finally {
@@ -1135,11 +1111,9 @@ export class DatabasePopoversController {
     rowId: string,
     anchor: HTMLElement
   ): void {
-    if (this.#ctx.getReadonly()) return;
-    const data = this.#ctx.getData();
-    const column = data.columns.find(item => item.id === columnId);
-    const row = data.rows.find(item => item.id === rowId);
-    if (!column || !row) return;
+    const ctx = this.#cellContext(columnId, rowId);
+    if (!ctx) return;
+    const { column, row } = ctx;
     const existing = row.cells[columnId]?.people ?? [];
     const content = document.createElement('div');
     content.append(popTitle(column.name));
@@ -1276,18 +1250,6 @@ export class DatabasePopoversController {
     syncOptionsVisibility();
 
     const actions = el('div', 'nb-db-pop-actions');
-    const action = (
-      label: string,
-      iconMarkup: string,
-      handler: () => void,
-      danger = false
-    ): void => {
-      const button = btn(danger ? 'danger' : undefined, {
-        html: `${iconMarkup}<span>${label}</span>`,
-      });
-      button.addEventListener('click', handler);
-      actions.append(button);
-    };
     const apply = (): void => {
       this.#ctx.commitColumnFields(
         columnId,
@@ -1311,66 +1273,75 @@ export class DatabasePopoversController {
         }
       );
     };
-    action('Done', icon.check, () => {
-      apply();
-      this.closePopover();
-    });
+    const action = (
+      label: string,
+      iconMarkup: string,
+      handler: () => void,
+      options: { applyFirst?: boolean; danger?: boolean } = {}
+    ): void => {
+      const button = btn(options.danger ? 'danger' : undefined, {
+        html: `${iconMarkup}<span>${label}</span>`,
+      });
+      button.addEventListener('click', () => {
+        if (options.applyFirst) apply();
+        this.closePopover();
+        handler();
+      });
+      actions.append(button);
+    };
+    action('Done', icon.check, () => {}, { applyFirst: true });
     const hidden = state?.hide ?? false;
     action(hidden ? 'Show In View' : 'Hide In View', icon.checkboxSquare, () => {
-      this.closePopover();
       this.#ctx.patchViewColumn(columnId, { hide: !hidden });
     });
-    action('Filter', icon.filter, () => {
-      apply();
-      this.#ctx.addFilterForColumn(columnId);
-      this.closePopover();
-      queueMicrotask(() => {
-        const current =
-          this.#ctx.rootElement.querySelector<HTMLElement>(
-            `th[data-column-id="${CSS.escape(columnId)}"] .nb-db-col-head`
-          ) ?? anchor;
-        this.openFilterPopover(current);
-      });
-    });
-    action('Sort Ascending', icon.sortAsc, () => {
-      apply();
-      this.#ctx.updateActiveView({ sorts: [{ columnId, direction: 'asc' }], sort: null });
-      this.closePopover();
-    });
-    action('Sort Descending', icon.sortDesc, () => {
-      apply();
-      this.#ctx.updateActiveView({ sorts: [{ columnId, direction: 'desc' }], sort: null });
-      this.closePopover();
-    });
-    action('Insert Left Column', icon.arrowLeft, () => {
-      apply();
-      this.#ctx.insertColumn(columnId, false);
-      this.closePopover();
-    });
-    action('Insert Right Column', icon.arrowRight, () => {
-      apply();
-      this.#ctx.insertColumn(columnId, true);
-      this.closePopover();
-    });
+    action(
+      'Filter',
+      icon.filter,
+      () => {
+        this.#ctx.addFilterForColumn(columnId);
+        queueMicrotask(() => {
+          const current =
+            this.#ctx.rootElement.querySelector<HTMLElement>(
+              `th[data-column-id="${CSS.escape(columnId)}"] .nb-db-col-head`
+            ) ?? anchor;
+          this.openFilterPopover(current);
+        });
+      },
+      { applyFirst: true }
+    );
+    action(
+      'Sort Ascending',
+      icon.sortAsc,
+      () => this.#ctx.updateActiveView({ sorts: [{ columnId, direction: 'asc' }], sort: null }),
+      { applyFirst: true }
+    );
+    action(
+      'Sort Descending',
+      icon.sortDesc,
+      () => this.#ctx.updateActiveView({ sorts: [{ columnId, direction: 'desc' }], sort: null }),
+      { applyFirst: true }
+    );
+    action(
+      'Insert Left Column',
+      icon.arrowLeft,
+      () => this.#ctx.insertColumn(columnId, false),
+      { applyFirst: true }
+    );
+    action(
+      'Insert Right Column',
+      icon.arrowRight,
+      () => this.#ctx.insertColumn(columnId, true),
+      { applyFirst: true }
+    );
     if (!isTitle) {
-      action('Move Left', icon.arrowLeft, () => {
-        this.closePopover();
-        this.#ctx.moveColumn(columnId, -1);
-      });
-      action('Move Right', icon.arrowRight, () => {
-        this.closePopover();
-        this.#ctx.moveColumn(columnId, 1);
-      });
+      action('Move Left', icon.arrowLeft, () => this.#ctx.moveColumn(columnId, -1));
+      action('Move Right', icon.arrowRight, () => this.#ctx.moveColumn(columnId, 1));
     }
-    action('Duplicate', icon.duplicate, () => {
-      this.closePopover();
-      this.#ctx.duplicateColumn(columnId);
-    });
+    action('Duplicate', icon.duplicate, () => this.#ctx.duplicateColumn(columnId));
     if (data.columns.length > 1) {
-      action('Delete', icon.trashSmall, () => {
-        this.closePopover();
-        this.#ctx.deleteColumn(columnId);
-      }, true);
+      action('Delete', icon.trashSmall, () => this.#ctx.deleteColumn(columnId), {
+        danger: true,
+      });
     }
 
     if (column.type === 'number') {
@@ -1410,23 +1381,12 @@ export class DatabasePopoversController {
 
   openRowPopover(rowId: string, anchor: HTMLElement): void {
     if (this.#ctx.getReadonly()) return;
-    const content = document.createElement('div');
-    content.append(popTitle('Row'));
-    const actions = el('div', 'nb-db-pop-actions');
-    const add = (label: string, handler: () => void, danger = false): void => {
-      const button = btn(danger ? 'danger' : undefined, { text: label });
-      button.addEventListener('click', () => {
-        handler();
-        this.closePopover();
-      });
-      actions.append(button);
-    };
-    add('Insert above', () => this.#ctx.insertRow(rowId, false));
-    add('Insert below', () => this.#ctx.insertRow(rowId, true));
-    add('Duplicate', () => this.#ctx.duplicateRow(rowId));
-    add('Delete', () => this.#ctx.deleteRow(rowId), true);
-    content.append(actions);
-    this.showPopover(anchor, content);
+    const actions = this.#openMenuPopover(anchor, 'Row', [
+      { label: 'Insert above', action: () => this.#ctx.insertRow(rowId, false) },
+      { label: 'Insert below', action: () => this.#ctx.insertRow(rowId, true) },
+      { label: 'Duplicate', action: () => this.#ctx.duplicateRow(rowId) },
+      { label: 'Delete', action: () => this.#ctx.deleteRow(rowId), danger: true },
+    ]);
     actions.querySelector<HTMLButtonElement>('button')?.focus();
   }
 

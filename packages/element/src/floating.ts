@@ -132,3 +132,53 @@ export function dismissFloating(options: DismissFloatingOptions): () => void {
     for (const cleanup of cleanups) cleanup();
   };
 }
+
+/** Attach window-level pointermove/up/cancel drag listeners scoped to `parentSignal`. */
+export function beginWindowDrag(
+  parentSignal: AbortSignal,
+  onMove: (event: PointerEvent) => void,
+  onFinish: (event: PointerEvent) => void,
+  onCancel?: () => void
+): void {
+  if (parentSignal.aborted) return;
+  const controller = new AbortController();
+  const { signal } = controller;
+  parentSignal.addEventListener(
+    'abort',
+    () => {
+      onCancel?.();
+      controller.abort();
+    },
+    { once: true, signal }
+  );
+  window.addEventListener('pointermove', onMove, { signal });
+  const finish = (event: PointerEvent): void => {
+    controller.abort();
+    onFinish(event);
+  };
+  window.addEventListener('pointerup', finish, { signal });
+  window.addEventListener('pointercancel', finish, { signal });
+}
+
+/** Mount, position, and register outside-dismiss listeners for an anchored popover. */
+export function openAnchoredPopover(options: {
+  host: ParentNode;
+  anchor: HTMLElement;
+  content: HTMLElement;
+  className: string;
+  onDismiss: () => void;
+  place?: PlaceFloatingOptions;
+  dismiss?: Omit<DismissFloatingOptions, 'element' | 'onDismiss'>;
+}): { element: HTMLElement; cleanup: () => void } {
+  const element = document.createElement('div');
+  element.className = options.className;
+  element.append(options.content);
+  options.host.append(element);
+  placeFloating(element, options.anchor.getBoundingClientRect(), options.place);
+  const cleanup = dismissFloating({
+    element,
+    onDismiss: options.onDismiss,
+    ...options.dismiss,
+  });
+  return { element, cleanup };
+}

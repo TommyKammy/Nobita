@@ -32,6 +32,21 @@ const CALLOUT_TONES = [
   { value: 'danger', label: 'Danger' },
 ] as const;
 
+let plusIconNode: Node | null = null;
+let dragIconNode: Node | null = null;
+
+function cloneIcon(cache: 'plus' | 'drag'): Node {
+  let template = cache === 'plus' ? plusIconNode : dragIconNode;
+  if (!template) {
+    const host = document.createElement('span');
+    host.innerHTML = cache === 'plus' ? icon.plus : icon.drag;
+    template = host.firstChild ?? document.createTextNode('');
+    if (cache === 'plus') plusIconNode = template;
+    else dragIconNode = template;
+  }
+  return template.cloneNode(true);
+}
+
 export interface BlockRenderContext {
   depth: number;
   index: number;
@@ -84,22 +99,13 @@ export class BlockView {
     add.className = 'nb-gutter-btn nb-add';
     add.setAttribute('aria-label', 'Add block below');
     add.title = 'Add block below';
-    add.innerHTML = icon.plus;
-    add.addEventListener('click', event => {
-      event.preventDefault();
-      event.stopPropagation();
-      host.addBlockAfter(this.id);
-    });
+    add.append(cloneIcon('plus'));
     const drag = document.createElement('button');
     drag.type = 'button';
     drag.className = 'nb-gutter-btn nb-drag';
     drag.setAttribute('aria-label', 'Drag to move, click for actions');
     drag.title = 'Drag to move · click for actions';
-    drag.innerHTML = icon.drag;
-    drag.addEventListener('pointerdown', event => {
-      event.preventDefault();
-      host.beginDrag(this.id, event, drag);
-    });
+    drag.append(cloneIcon('drag'));
     gutter.append(add, drag);
 
     this.#marker = document.createElement('div');
@@ -113,13 +119,6 @@ export class BlockView {
     this.#children.className = 'nb-children';
     this.element.append(this.#row, this.#children);
 
-    this.#row.addEventListener('click', event => {
-      const target = event.target as Element | null;
-      if (!target) return;
-      if (target.closest('button, input, select, .nb-text, .nb-caption, .nb-db, .nb-table')) return;
-      host.focusBlock(this.id, 0);
-    });
-
     this.update(block, context, true);
   }
 
@@ -127,7 +126,6 @@ export class BlockView {
     const previous = this.block;
     const contextChanged =
       !this.#context ||
-      this.#context.index !== context.index ||
       this.#context.depth !== context.depth ||
       this.#context.number !== context.number;
     if (!force && previous === block && !contextChanged) return;
@@ -540,11 +538,14 @@ export class BlockView {
   }
 
   #syncChildren(blocks: readonly Block[], depth: number): void {
-    const ids = new Set(blocks.map(block => block.id));
-    for (const [id, view] of this.#childViews) {
-      if (ids.has(id)) continue;
-      view.destroy();
-      this.#childViews.delete(id);
+    if (blocks.length === 0 && this.#childViews.size === 0) return;
+    if (this.#childViews.size > 0) {
+      const ids = new Set(blocks.map(block => block.id));
+      for (const [id, view] of this.#childViews) {
+        if (ids.has(id)) continue;
+        view.destroy();
+        this.#childViews.delete(id);
+      }
     }
 
     let cursor = this.#children.firstChild;
@@ -574,7 +575,9 @@ export class BlockView {
   }
 
   setPlaceholder(value: string): void {
-    if (this.#text) this.#text.dataset.placeholder = value;
+    if (this.#text && (this.#text.dataset.placeholder ?? '') !== value) {
+      this.#text.dataset.placeholder = value;
+    }
   }
 
   focusTable(): void {

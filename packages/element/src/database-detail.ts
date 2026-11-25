@@ -11,7 +11,7 @@ import type {
   DatabaseView as DatabaseViewConfig,
   InlineRun,
 } from '@nobita/core';
-import { placeCaret } from './dom.js';
+import { handleHistoryKey, placeCaret } from './dom.js';
 import { icon } from './icons.js';
 import { readRunsFromDom, renderInlineRuns } from './inline-dom.js';
 import {
@@ -228,19 +228,7 @@ export class DatabaseDetailController {
       if (event.target === backdrop) this.close();
     });
     backdrop.addEventListener('keydown', event => {
-      const mod = event.metaKey || event.ctrlKey;
-      if (mod && event.key.toLowerCase() === 'z') {
-        event.preventDefault();
-        event.stopPropagation();
-        this.#ctx.history(event.shiftKey);
-        return;
-      }
-      if (mod && event.key.toLowerCase() === 'y') {
-        event.preventDefault();
-        event.stopPropagation();
-        this.#ctx.history(true);
-        return;
-      }
+      if (handleHistoryKey(event, redo => this.#ctx.history(redo), true)) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
@@ -381,6 +369,53 @@ export class DatabaseDetailController {
     else element.replaceChildren();
   }
 
+  #applyPickerLabel(
+    button: HTMLButtonElement,
+    column: DatabaseColumn,
+    cell: DatabaseCell | undefined
+  ): void {
+    if (column.type === 'files') applyFilesLabel(button, cell?.files ?? [], column.name);
+    else if (column.type === 'people') applyPeopleLabel(button, cell?.people ?? [], column.name);
+    else if (column.type === 'image') applyImageLabel(button, cell?.text, column.name);
+  }
+
+  #restoreOffsets(text: HTMLElement, maxLength: number): void {
+    const offsets = selectionOffsets(text);
+    if (offsets) {
+      setSelectionOffsets(
+        text,
+        Math.min(offsets.start, maxLength),
+        Math.min(offsets.end, maxLength)
+      );
+    }
+  }
+
+  #syncSelectOptions(
+    select: HTMLSelectElement,
+    column: DatabaseColumn,
+    cell: DatabaseCell | undefined
+  ): void {
+    const selected =
+      column.type === 'multi-select'
+        ? new Set(cell?.values ?? [])
+        : new Set(cell?.text ? [cell.text] : []);
+    const optionValues = new Set(Array.from(select.options).map(option => option.value));
+    const appendOption = (value: string, label: string): void => {
+      if (optionValues.has(value)) return;
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      select.append(option);
+      optionValues.add(value);
+    };
+    if (select.options.length === 0) appendOption('', 'Empty');
+    for (const value of column.options ?? []) appendOption(value, value);
+    for (const value of selected) if (value) appendOption(value, value);
+    for (const option of select.options) {
+      if (option.value) option.selected = selected.has(option.value);
+    }
+  }
+
   #renderField(row: DatabaseRow, column: DatabaseColumn): HTMLElement {
     const readonly = this.#ctx.getReadonly();
     const field = el(column.type === 'text' ? 'div' : 'label', 'nb-db-detail-field');
@@ -418,24 +453,7 @@ export class DatabaseDetailController {
       const select = el('select', 'nb-db-detail-input');
       select.disabled = readonly;
       select.multiple = column.type === 'multi-select';
-      const empty = document.createElement('option');
-      empty.value = '';
-      empty.textContent = 'Empty';
-      select.append(empty);
-      const selected = column.type === 'multi-select'
-        ? new Set(cell?.values ?? [])
-        : new Set(cell?.text ? [cell.text] : []);
-      const options = [...(column.options ?? [])];
-      for (const value of selected) {
-        if (!options.includes(value)) options.push(value);
-      }
-      for (const option of options) {
-        const item = document.createElement('option');
-        item.value = option;
-        item.textContent = option;
-        item.selected = selected.has(option);
-        select.append(item);
-      }
+      this.#syncSelectOptions(select, column, cell);
       select.addEventListener('change', () => {
         const values = Array.from(select.selectedOptions)
           .map(item => item.value)
@@ -530,11 +548,7 @@ export class DatabaseDetailController {
       const button = btn('nb-db-select nb-db-multi nb-db-detail-picker', {
         disabled: readonly,
       });
-      if (column.type === 'files') {
-        applyFilesLabel(button, cell?.files ?? [], column.name);
-      } else {
-        applyPeopleLabel(button, cell?.people ?? [], column.name);
-      }
+      this.#applyPickerLabel(button, column, cell);
       button.addEventListener('click', () => {
         if (column.type === 'files') {
           this.#ctx.openFilesPopover(column.id, row.id, button);
@@ -722,36 +736,12 @@ export class DatabaseDetailController {
         'button.nb-db-detail-picker'
       );
       if (picker) {
-        if (column.type === 'files') {
-          applyFilesLabel(picker, cell?.files ?? [], column.name);
-        } else if (column.type === 'people') {
-          applyPeopleLabel(picker, cell?.people ?? [], column.name);
-        } else if (column.type === 'image') {
-          applyImageLabel(picker, cell?.text, column.name);
-        }
+        this.#applyPickerLabel(picker, column, cell);
         continue;
       }
       const select = field.querySelector<HTMLSelectElement>('select');
       if (select) {
-        const selected =
-          column.type === 'multi-select'
-            ? new Set(cell?.values ?? [])
-            : new Set(cell?.text ? [cell.text] : []);
-        const optionValues = new Set(
-          Array.from(select.options).map(option => option.value)
-        );
-        for (const value of selected) {
-          if (!value || optionValues.has(value)) continue;
-          const option = document.createElement('option');
-          option.value = value;
-          option.textContent = value;
-          select.append(option);
-          optionValues.add(value);
-        }
-        for (const option of select.options) {
-          if (!option.value) continue;
-          option.selected = selected.has(option.value);
-        }
+        this.#syncSelectOptions(select, column, cell);
         continue;
       }
       const input = field.querySelector<HTMLInputElement>('input');
@@ -785,19 +775,9 @@ export class DatabaseDetailController {
           }
         }
       } else if (text && text.textContent !== textValue) {
-        if (text.matches(':focus')) {
-          const offsets = selectionOffsets(text);
-          text.textContent = textValue;
-          if (offsets) {
-            setSelectionOffsets(
-              text,
-              Math.min(offsets.start, textValue.length),
-              Math.min(offsets.end, textValue.length)
-            );
-          }
-        } else {
-          text.textContent = textValue;
-        }
+        const focused = text.matches(':focus');
+        text.textContent = textValue;
+        if (focused) this.#restoreOffsets(text, textValue.length);
       }
     }
   }

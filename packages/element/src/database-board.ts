@@ -12,7 +12,7 @@ import type {
   DatabaseRow,
   DatabaseView as DatabaseViewConfig,
 } from '@nobita/core';
-import { placeCaret } from './dom.js';
+import { handleHistoryKey, placeCaret } from './dom.js';
 import { icon } from './icons.js';
 import {
   TYPE_ICON,
@@ -366,12 +366,14 @@ export class DatabaseBoardController {
         },
         { signal }
       );
+      const cleanTitle = (raw: string): string => {
+        const single = raw.replace(/\r?\n/gu, ' ');
+        return titleColumn.type === 'number'
+          ? single.replace(/[^0-9eE+.-]/gu, '')
+          : single;
+      };
       const commitTitle = (): void => {
-        const raw = (title.textContent ?? '').replace(/\r?\n/gu, ' ');
-        const nextVal =
-          titleColumn.type === 'number'
-            ? raw.replace(/[^0-9eE+.-]/gu, '')
-            : raw;
+        const nextVal = cleanTitle(title.textContent ?? '');
         const current = this.#ctx.currentCell(row.id, titleColumn.id);
         if ((current?.text ?? '') === nextVal) return;
         this.#ctx.commitCell(
@@ -396,17 +398,7 @@ export class DatabaseBoardController {
         'keydown',
         event => {
           if (this.#ctx.richText.isComposingKey(event, title)) return;
-          const mod = event.metaKey || event.ctrlKey;
-          if (mod && event.key.toLowerCase() === 'z') {
-            event.preventDefault();
-            this.#ctx.history(event.shiftKey);
-            return;
-          }
-          if (mod && event.key.toLowerCase() === 'y') {
-            event.preventDefault();
-            this.#ctx.history(true);
-            return;
-          }
+          if (handleHistoryKey(event, redo => this.#ctx.history(redo))) return;
           if (event.key === 'Enter') {
             event.preventDefault();
             title.blur();
@@ -418,14 +410,7 @@ export class DatabaseBoardController {
         'paste',
         event => {
           event.preventDefault();
-          const raw = (event.clipboardData?.getData('text/plain') ?? '').replace(
-            /\r?\n/gu,
-            ' '
-          );
-          const nextVal =
-            titleColumn.type === 'number'
-              ? raw.replace(/[^0-9eE+.-]/gu, '')
-              : raw;
+          const nextVal = cleanTitle(event.clipboardData?.getData('text/plain') ?? '');
           if (!nextVal) return;
           this.#ctx.richText.pastePlainText(title, nextVal);
         },
