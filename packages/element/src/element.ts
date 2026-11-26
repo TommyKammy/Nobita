@@ -34,6 +34,14 @@ export class NobitaEditorElement extends Base {
   #mentionProvider: MentionProvider | undefined;
   #pageProvider: PageProvider | undefined;
   #uploadImage: ImageUploadHandler | undefined;
+  databaseProvider?: NobitaOptions['databaseProvider'];
+  resolveDatabase?: NobitaOptions['resolveDatabase'];
+  #onRelationSync: NobitaOptions['onRelationSync'];
+  get onRelationSync() { return this.#onRelationSync; }
+  set onRelationSync(callback: NobitaOptions['onRelationSync']) {
+    this.#onRelationSync = callback;
+    this.#editor?.setRelationSync(callback);
+  }
   #onOpenPage: ((pageId: string) => void) | undefined;
   #resolvePage: ((pageId: string) => PageInfo | null) | undefined;
 
@@ -84,6 +92,9 @@ export class NobitaEditorElement extends Base {
           })
         );
       },
+      databaseProvider: query => this.databaseProvider?.(query) ?? [],
+      resolveDatabase: (id,page) => this.resolveDatabase?.(id,page),
+      onRelationSync: this.onRelationSync,
       resolvePage: pageId => this.#resolvePage?.(pageId) ?? null,
     });
     this.#applyMinHeight();

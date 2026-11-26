@@ -58,13 +58,18 @@ for (const count of counts) {
   );
 }
 
+const formulas = [];
+for (let i = 0; i < 15; i++) formulas.push(await page.evaluate(() => window.__benchFormulas()));
+const formulaMedian = formulas.sort((a,b) => a-b)[7];
+console.log(`100 rows × 5 formulas: ${formulaMedian.toFixed(2)} ms (median of 15 full evaluations)`);
 await browser.close();
 if (server) server.kill();
 
 const baseline = existsSync(baselinePath)
   ? JSON.parse(readFileSync(baselinePath, 'utf8'))
   : {};
-let failed = false;
+let failed = strict && formulaMedian >= 2;
+if (formulaMedian >= 2) console.warn('  warning: formula evaluation reached the 2 ms limit');
 for (const count of counts) {
   const before = baseline[count];
   if (before === undefined) continue;

@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 
 const root = fileURLToPath(new URL('./fixture', import.meta.url));
 const element = fileURLToPath(
-  new URL('../../packages/element/src/index.ts', import.meta.url)
+  new URL(process.env.NOBITA_TEST_BUNDLE === '1' ? '../../packages/element/dist/nobita.js' : '../../packages/element/src/index.ts', import.meta.url)
 );
 const core = fileURLToPath(
   new URL('../../packages/core/src/index.ts', import.meta.url)

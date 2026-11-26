@@ -1,4 +1,10 @@
 import {
+  clearDatabaseColumnCells,
+  cloneDatabaseCell as cloneCell,
+  DatabaseEvalContext,
+  databaseCellDisplay,
+  type DatabaseResolver,
+  type DatabaseTarget,
   cloneRuns,
   createDatabaseColumn,
   createDatabaseRow,
@@ -58,7 +64,6 @@ import {
   caretAtBoundary,
   cellForGroupValue,
   cellKey,
-  cloneCell,
   convertCell,
   defaultFilterForColumn,
   el,
@@ -76,6 +81,7 @@ import {
   setSelectionOffsets,
   shortcutTag,
   withText,
+  isComputedColumn,
 } from './database-dom.js';
 import { DatabaseBoardController } from './database-board.js';
 import { DatabaseDetailController } from './database-detail.js';
@@ -87,6 +93,11 @@ export type DatabaseImageUploader = (
 ) => string | { src: string } | Promise<string | { src: string }>;
 
 export interface DatabaseHost {
+  databaseId: string;
+  readonly pageId: string;
+  resolveDatabase: DatabaseResolver;
+  databaseTargets(query: string): Promise<readonly DatabaseTarget[]>;
+  observeDatabases(fn: () => void): () => void;
   readonly readonly: boolean;
   readonly uploadImage?: DatabaseImageUploader | undefined;
   resolvePage?: (pageId: string) => PageInfo | null;
@@ -99,6 +110,9 @@ export interface DatabaseHost {
 export class DatabaseView {
   readonly element: HTMLElement;
   #host: DatabaseHost;
+  #source: DatabaseData;
+  #evaluation: DatabaseEvalContext;
+  #unobserve: () => void;
   #data: DatabaseData;
   #readonly: boolean;
   #structureKey = '';
@@ -188,7 +202,10 @@ export class DatabaseView {
 
   constructor(host: DatabaseHost, data: DatabaseData) {
     this.#host = host;
-    this.#data = data;
+    this.#source = data;
+    this.#evaluation = new DatabaseEvalContext(host.resolveDatabase);
+    this.#data = this.#evaluation.project(data);
+    this.#unobserve = host.observeDatabases(() => this.update(this.#source));
     this.#readonly = host.readonly;
     this.element = el('div', 'nb-db');
     this.element.contentEditable = 'false';
@@ -252,6 +269,7 @@ export class DatabaseView {
       openAddPropertyMenu: anchor => this.#popovers.openAddPropertyMenu(anchor),
       openFilesPopover: (colId, rowId, anchor) =>
         this.#popovers.openFilesPopover(colId, rowId, anchor),
+      openComputed: (columnId,anchor,rowId) => { void this.#popovers.openComputed(columnId,anchor,rowId); },
       openPeoplePopover: (colId, rowId, anchor) =>
         this.#popovers.openPeoplePopover(colId, rowId, anchor),
       openImagePopover: (colId, rowId, anchor) =>
@@ -259,6 +277,7 @@ export class DatabaseView {
     });
     this.#popovers = new DatabasePopoversController({
       ...baseCtx,
+      host,
       getEventsSignal: () => this.#events.signal,
       getUploadImage: () => this.#host.uploadImage,
       views: () => this.#views(),
@@ -325,6 +344,8 @@ export class DatabaseView {
   }
 
   update(data: DatabaseData): void {
+    this.#source = data;
+    data = this.#evaluation.project(data);
     if (data === this.#data) return;
     const prev = this.#data;
     this.#data = data;
@@ -418,6 +439,7 @@ export class DatabaseView {
   }
 
   destroy(): void {
+    this.#unobserve();
     this.#cancelFillHandleFrame();
     this.#contentEvents.abort();
     this.#events.abort();
@@ -1791,6 +1813,11 @@ export class DatabaseView {
       source.options ?? [],
       source.data
     );
+    if (source.formula) column.formula = { ...source.formula };
+    if (source.relation) {
+      const { syncedColumnId: _reverse, ...relation } = source.relation;
+      column.relation = relation;
+    }
     const columns = [...this.#data.columns];
     columns.splice(index + 1, 0, column);
     const rows = this.#data.rows.map(row => {
@@ -1991,7 +2018,7 @@ export class DatabaseView {
       column.type === 'select' ||
       column.type === 'multi-select' ||
       column.type === 'files' ||
-      column.type === 'people' ||
+      column.type === 'people' || isComputedColumn(column) ||
       column.type === 'image'
     ) {
       this.#createPickerCell(td, nodes, row, column, cell);
@@ -2049,6 +2076,15 @@ export class DatabaseView {
   ): void {
     const value = cell?.text ?? '';
     switch (column.type) {
+      case 'formula':
+        button.textContent = databaseCellDisplay(cell,'formula');
+        const failed = /^#(?:SYNTAX|REF|CYCLE|TYPE|DIV0|LIMIT)$/.test(value);
+        button.classList.toggle('nb-db-error', failed);
+        button.title = failed ? 'Formula error ' + value : 'Edit formula';
+        break;
+      case 'relation':
+        applyMultiLabel(button, cell?.values ?? [], column.name);
+        break;
       case 'checkbox':
         button.setAttribute('aria-checked', String(Boolean(cell?.checked)));
         break;
@@ -2087,7 +2123,9 @@ export class DatabaseView {
     const button = btn(className, { disabled: this.#readonly });
     this.#applyButtonLabel(button, column, cell);
     const open = (): void => {
-      if (column.type === 'select') {
+      if (isComputedColumn(column)) {
+        this.#popovers.openComputed(column.id,button,column.type === 'relation' ? row.id : undefined);
+      } else if (column.type === 'select') {
         this.#popovers.openSelectPopover(column.id, row.id, button);
       } else if (column.type === 'image') {
         this.#popovers.openImagePopover(column.id, row.id, button);
@@ -2427,6 +2465,7 @@ export class DatabaseView {
   }
 
   #commitCell(rowId: string, columnId: string, cell: DatabaseCell, mergeKey?: string): void {
+    if (this.#data.columns.find(c=>c.id === columnId)?.type === 'formula') return;
     const rows = this.#data.rows.map(row => {
       if (row.id !== rowId) return row;
       const cells = { ...row.cells };
@@ -2435,7 +2474,7 @@ export class DatabaseView {
         !cell.checked &&
         !(cell.values?.length) &&
         !(cell.files?.length) &&
-        !(cell.people?.length);
+        !(cell.people?.length) && !(cell.relations?.length);
       if (!empty) cells[columnId] = cell;
       else delete cells[columnId];
       return { ...row, cells };
@@ -2550,6 +2589,8 @@ export class DatabaseView {
         id: column.id,
         name: patch.name ?? column.name,
         type,
+        ...(type === 'formula' && column.formula ? { formula: column.formula } : {}),
+        ...(type === 'relation' && column.relation ? { relation: column.relation } : {}),
         ...(column.width ? { width: column.width } : {}),
         ...((patch.data ?? column.data)
           ? { data: { ...(patch.data ?? column.data) } }
@@ -2566,11 +2607,7 @@ export class DatabaseView {
   #deleteColumn(columnId: string): void {
     if (this.#data.columns.length <= 1) return;
     const columns = this.#data.columns.filter(column => column.id !== columnId);
-    const rows = this.#data.rows.map(row => {
-      const cells = { ...row.cells };
-      delete cells[columnId];
-      return { ...row, cells };
-    });
+    const rows = clearDatabaseColumnCells(this.#data.rows, columnId);
     const next: DatabaseData = {
       ...this.#data,
       columns,
@@ -3225,7 +3262,8 @@ export class DatabaseView {
           const src = safeImageSrc(value);
           if (src) cells[column.id] = withText(cell, src);
           else delete cells[column.id];
-        } else if (column.type === 'files' || column.type === 'people') {
+        } else if (column.type === 'formula') return;
+        else if (column.type === 'files' || column.type === 'people' || column.type === 'relation') {
           if (clearReferences) delete cells[column.id];
         } else if (value) {
           cells[column.id] = withText(cell, value);
@@ -3345,6 +3383,7 @@ export class DatabaseView {
         id: column.id,
         name: column.name,
         type: column.type,
+        relation: column.relation,
       })),
       rows: this.#selectedVisibleRows().map(row => ({
         cells: row.cells,
@@ -3420,7 +3459,7 @@ export class DatabaseView {
     if (typed) {
       try {
         const parsed = JSON.parse(typed) as {
-          columns?: Array<{ id?: unknown; name?: unknown; type?: unknown }>;
+          columns?: Array<{ id?: unknown; name?: unknown; type?: unknown; relation?: DatabaseColumn['relation'] }>;
           rows?: Array<{
             cells?: Record<string, DatabaseCell>;
             page?: { content?: unknown };
@@ -3450,6 +3489,9 @@ export class DatabaseView {
               this.#data.columns.find(
                 column => column.name === name && !used.has(column.id)
               );
+            if (targetColumn?.type === 'relation' && (!source.relation ||
+              source.relation.databaseId !== targetColumn.relation?.databaseId ||
+              source.relation.pageId !== targetColumn.relation?.pageId)) continue;
             if (targetColumn) {
               used.add(targetColumn.id);
               columnMap.set(source.id, {

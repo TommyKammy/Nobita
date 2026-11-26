@@ -36,6 +36,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/element
     devDependencies:
+      terser:
+        specifier: ^5.51.4
+        version: 5.51.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2

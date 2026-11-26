@@ -395,8 +395,10 @@ export function mergeBlockWithNext(doc: Doc, id: string): Doc | null {
   return nextDoc;
 }
 
-export function duplicateBlockTree(block: Block): Block {  return {
-    id: createId(),
+export function duplicateBlockTree(block: Block): Block {
+  const id = createId();
+  return {
+    id,
     type: block.type,
     text: block.text.map(run => ({
       text: run.text,
@@ -405,7 +407,7 @@ export function duplicateBlockTree(block: Block): Block {  return {
     props: {
       ...block.props,
       ...(block.props.database
-        ? { database: duplicateDatabaseData(block.props.database) }
+        ? { database: duplicateDatabaseData(block.props.database,block.id,id) }
         : {}),
       ...(block.props.table ? { table: duplicateTableData(block.props.table) } : {}),
     },

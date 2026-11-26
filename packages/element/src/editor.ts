@@ -1,5 +1,15 @@
+import { icon } from './icons.js';
+import { styles } from './styles.js';
 import {
   EditorStore,
+  DatabaseEvalContext,
+  documentDatabases,
+  storedDatabase,
+  relationChanges,
+  updateDatabaseRelations,
+  type DatabaseResolver,
+  type DatabaseTarget,
+  type RelationChange,
   applyMarkPatch,
   atomicRangeAt,
   blocksToHtml,
@@ -80,7 +90,6 @@ import {
   selectionRect,
 } from './dom.js';
 import { pointAnchor, type FloatingAnchor } from './floating.js';
-import { icon } from './icons.js';
 import { blockRange, orderedRange, selectionBlocks } from './selection.js';
 import { readRunsFromDom, refreshInlinePageChips } from './inline-dom.js';
 import { Menu, type MenuItem } from './menu.js';
@@ -89,7 +98,6 @@ import {
   buildMultiBlockMenuItems,
   buildSlashMenuItems,
 } from './menu-items.js';
-import { styles } from './styles.js';
 import { LinkPopover, Toolbar, type ToolbarMark } from './toolbar.js';
 
 export type NobitaTheme = 'light' | 'dark' | 'auto';
@@ -141,6 +149,9 @@ export interface NobitaOptions {
   /** Navigate to a page reference. The host owns loading and routing. */
   onOpenPage?: (pageId: string) => void;
   /** Optional cached metadata used to refresh page reference titles/icons. */
+  databaseProvider?: (query: string) => readonly DatabaseTarget[] | Promise<readonly DatabaseTarget[]>;
+  resolveDatabase?: DatabaseResolver;
+  onRelationSync?: ((change: RelationChange) => void) | undefined;
   resolvePage?: (pageId: string) => PageInfo | null;
 }
 
@@ -182,6 +193,13 @@ interface DragState {
 
 type ClipboardPayload = ReturnType<typeof serializeBlocksForClipboard>;
 
+function writeClipboardData(data: DataTransfer | null, payload: ClipboardPayload): void {
+  if (!data) return;
+  data.setData('text/plain', payload.text);
+  data.setData('text/html', payload.html);
+  data.setData('application/x-nobita+json', payload.json);
+}
+
 
 function normalizeLink(value: string): string {
   const trimmed = value.trim();
@@ -216,7 +234,7 @@ export class NobitaEditor implements BlockHost {
   readonly store: EditorStore;
   #placeholderValue: string;
   readonly #hostElement: HTMLElement;
-  #options: NobitaOptions;
+  #options: { [K in keyof NobitaOptions]: NobitaOptions[K] | undefined };
   #readonly: boolean;
   #page!: HTMLElement;
   #title!: HTMLElement;
@@ -294,7 +312,7 @@ export class NobitaEditor implements BlockHost {
 
   constructor(host: HTMLElement, options: NobitaOptions = {}) {
     this.#hostElement = host;
-    this.#options = options;
+    this.#options = { ...options };
     this.#placeholderValue = options.placeholder ?? "Type '/' for commands";
     this.#readonly = options.readonly ?? false;
     const doc =
@@ -407,9 +425,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   setMentionProvider(provider: MentionProvider | undefined): void {
-    this.#options = provider
-      ? { ...this.#options, mentionProvider: provider }
-      : (({ mentionProvider: _mentionProvider, ...rest }) => rest)(this.#options);
+    this.#options.mentionProvider = provider;
   }
 
   get pageProvider(): PageProvider | undefined {
@@ -421,9 +437,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   setPageProvider(provider: PageProvider | undefined): void {
-    this.#options = provider
-      ? { ...this.#options, pageProvider: provider }
-      : (({ pageProvider: _pageProvider, ...rest }) => rest)(this.#options);
+    this.#options.pageProvider = provider;
   }
 
   get uploadImage(): ImageUploadHandler | undefined {
@@ -435,9 +449,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   setUploadImage(handler: ImageUploadHandler | undefined): void {
-    this.#options = handler
-      ? { ...this.#options, uploadImage: handler }
-      : (({ uploadImage: _uploadImage, ...rest }) => rest)(this.#options);
+    this.#options.uploadImage = handler;
   }
 
   getSelection(): EditorSelection | null {
@@ -487,11 +499,16 @@ export class NobitaEditor implements BlockHost {
   }
 
   getMarkdown(): string {
-    return blocksToMarkdown(this.store.doc);
+    return blocksToMarkdown(this.store.doc, {
+      resolveDatabase: this.#resolveDatabase,
+    });
   }
 
   getHTML(): string {
-    return blocksToHtml(this.store.doc.blocks);
+    return blocksToHtml(
+      this.store.doc.blocks,
+      new DatabaseEvalContext(this.#resolveDatabase)
+    );
   }
 
   /** Stable fragment for linking to a block inside the host page. */
@@ -588,9 +605,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   set onOpenPage(handler: ((pageId: string) => void) | undefined) {
-    this.#options = handler
-      ? { ...this.#options, onOpenPage: handler }
-      : (({ onOpenPage: _onOpenPage, ...rest }) => rest)(this.#options);
+    this.#options.onOpenPage = handler;
   }
 
   get resolvePage(): ((pageId: string) => PageInfo | null) | undefined {
@@ -598,9 +613,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   set resolvePage(handler: ((pageId: string) => PageInfo | null) | undefined) {
-    this.#options = handler
-      ? { ...this.#options, resolvePage: handler }
-      : (({ resolvePage: _resolvePage, ...rest }) => rest)(this.#options);
+    this.#options.resolvePage = handler;
     this.refreshPageLinks();
   }
 
@@ -666,8 +679,12 @@ export class NobitaEditor implements BlockHost {
     this.#syncPlaceholders();
   }
 
+  setRelationSync(onRelationSync: NobitaOptions['onRelationSync']): void {
+    this.#options.onRelationSync = onRelationSync;
+  }
+
   setTheme(theme: NobitaTheme): void {
-    this.#options = { ...this.#options, theme };
+    this.#options.theme = theme;
     this.#hostElement.dataset.theme = theme;
     const root = this.root.querySelector<HTMLElement>('.nb-root');
     if (root) root.dataset.theme = theme;
@@ -1046,10 +1063,7 @@ export class NobitaEditor implements BlockHost {
     const blocks = selectionBlocks(this.store.doc.blocks, selection);
     if (blocks.length === 0) return;
     event.preventDefault();
-    const serialized = serializeBlocksForClipboard(blocks);
-    event.clipboardData?.setData('text/plain', serialized.text);
-    event.clipboardData?.setData('text/html', serialized.html);
-    event.clipboardData?.setData('application/x-nobita+json', serialized.json);
+    this.#copyBlocksToEvent(event, blocks);
     if (cut) {
       this.#deleteSelection();
     }
@@ -1060,12 +1074,64 @@ export class NobitaEditor implements BlockHost {
     this.#commit(toggleChecked(this.store.doc, blockId), this.store.selection);
   }
 
-  updateDatabase(blockId: string, data: DatabaseData, options: { mergeKey?: string } = {}): void {
+  #databaseListeners = new Set<() => void>();
+  #databaseBlocks?: readonly Block[];
+  #databaseIndex = new Map<string, DatabaseData>();
+  #localDatabases(blocks = this.doc.blocks) {
+    if (this.#databaseBlocks !== blocks) {
+      this.#databaseBlocks = blocks;
+      this.#databaseIndex = documentDatabases(blocks);
+    }
+    return this.#databaseIndex;
+  }
+  #resolveDatabase = this.resolveDatabase.bind(this);
+  resolveDatabase(id: string, pageId?: string) {
+    return (
+      (!pageId ? this.#localDatabases().get(id) : undefined) ??
+      this.#options.resolveDatabase?.(id, pageId)
+    );
+  }
+  async databaseTargets(query: string): Promise<readonly DatabaseTarget[]> {
+    const local: DatabaseTarget[] = [...this.#localDatabases()].map(
+      ([databaseId, data]) => ({ databaseId, title: data.title || databaseId })
+    );
+    const matches = local.filter(t =>
+      t.title.toLowerCase().includes(query.toLowerCase())
+    );
+    try {
+      return [
+        ...matches,
+        ...((await this.#options.databaseProvider?.(query)) ?? []),
+      ];
+    } catch {
+      return matches;
+    }
+  }
+  observeDatabases(fn: () => void) {
+    this.#databaseListeners.add(fn);
+    return () => {
+      this.#databaseListeners.delete(fn);
+    };
+  }
+  /** Call after the host replaces a resolved external database snapshot. */
+  refreshDatabases(): void {
+    for (const fn of this.#databaseListeners) fn();
+  }
+
+  updateDatabase(
+    blockId: string,
+    data: DatabaseData,
+    options: { mergeKey?: string } = {}
+  ): void {
     if (this.#readonly) return;
-    const next = updateBlock(this.store.doc, blockId, block => {
-      if (block.type !== 'database') return block;
-      return { ...block, props: { ...block.props, database: data } };
-    });
+    const before = this.#localDatabases().get(blockId);
+    if (!before) return;
+    const next = updateDatabaseRelations(
+      this.doc,
+      blockId,
+      before,
+      storedDatabase(data)
+    );
     this.store.update(() => next, {
       ...(options.mergeKey ? { mergeKey: options.mergeKey } : {}),
       source: 'database',
@@ -1196,6 +1262,7 @@ export class NobitaEditor implements BlockHost {
       commit: (next, caret) => this.#commit(next, caret),
       focusBlock: (id, offset) => this.#focusBlock(id, offset),
       copyBlock: offset => this.#copyBlockToClipboard(blockId, offset),
+      copyMarkdown: () => this.#copyMarkdown([block]),
       copyLink: () => this.#copyBlockLink(blockId),
       deleteBlock: () => this.#deleteBlock(blockId),
     });
@@ -1215,16 +1282,8 @@ export class NobitaEditor implements BlockHost {
     if (blocks.length === 0) return;
     const items = buildMultiBlockMenuItems({
       count: blocks.length,
-      copyBlocks: () => {
-        void this.#writeBlocksToClipboard(blocks.map(duplicateBlockTree));
-      },
-      copyMarkdown: () => {
-        const markdown = blocksToMarkdown(
-          { version: 1, id: 'clipboard', title: '', blocks: blocks.map(duplicateBlockTree) },
-          { title: false }
-        );
-        void this.#writePlainTextToClipboard(markdown);
-      },
+      copyBlocks: () => this.#writeBlocksToClipboard(blocks),
+      copyMarkdown: () => this.#copyMarkdown(blocks),
       duplicateBlocks: () => this.#duplicateSelectedBlocks(),
       deleteBlocks: () => this.#deleteSelectedBlocks(),
     });
@@ -1754,13 +1813,28 @@ export class NobitaEditor implements BlockHost {
     });
   }
 
-  #onStoreChange(change: { doc: Doc; source: string }): void {
+  #onStoreChange(change: { doc: Doc; previous: Doc; source: string }): void {
     if (this.#destroyed) return;
     if (change.source === 'replace') {
       this.#docEpoch += 1;
       this.clearBlockSelection();
     }
     this.#syncBody(change.doc.blocks);
+    this.refreshDatabases();
+    const sync = this.#options.onRelationSync;
+    if (sync && change.source !== 'replace') {
+      const before = documentDatabases(change.previous.blocks),
+        after = this.#localDatabases();
+      for (const id of new Set([...before.keys(), ...after.keys()])) {
+        if (before.get(id) === after.get(id)) continue;
+        for (const delta of relationChanges(id, before.get(id), after.get(id)))
+          if (
+            delta.target.pageId ||
+            (!before.has(delta.target.databaseId) && !after.has(delta.target.databaseId))
+          )
+            sync(delta);
+      }
+    }
     if (change.source !== 'replace' && this.#selectedBlockIds.size > 0) {
       for (const id of [...this.#selectedBlockIds]) {
         if (!this.#findView(id) && !findBlock(change.doc.blocks, id)) {
@@ -1986,6 +2060,13 @@ export class NobitaEditor implements BlockHost {
     if (next === this.store.doc) {
       if (caret) this.#restoreSelection(caret);
       return;
+    }
+    const previous = this.#localDatabases();
+    if (previous.size) {
+      const remaining = this.#localDatabases(next.blocks);
+      for (const [id, database] of previous) {
+        if (!remaining.has(id)) next = updateDatabaseRelations(next, id, database);
+      }
     }
     this.store.update(() => next, {
       ...(caret ? { selection: caret } : {}),
@@ -2353,16 +2434,22 @@ export class NobitaEditor implements BlockHost {
   #copyBlockToClipboard(blockId: string, offset: number): void {
     const block = findBlock(this.store.doc.blocks, blockId);
     if (!block) return;
-    const copy = duplicateBlockTree(block);
-    void this.#writeBlocksToClipboard([copy])
+    void this.#writeBlocksToClipboard([block])
       .catch(() => undefined)
       .finally(() => {
         this.#focusBlock(blockId, offset);
       });
   }
 
+  #copyMarkdown(blocks: Block[]) {
+    return this.#writePlainTextToClipboard(blocksToMarkdown(
+      { ...this.doc, blocks },
+      { title: false, resolveDatabase: this.#resolveDatabase }
+    ));
+  }
+
   async #writeBlocksToClipboard(blocks: Block[]): Promise<void> {
-    const payload = serializeBlocksForClipboard(blocks);
+    const payload = serializeBlocksForClipboard(blocks, this.#resolveDatabase, blocks.map(duplicateBlockTree));
     if (await this.#writeModernClipboard(payload, true)) return;
     if (this.#writeLegacyClipboard(payload)) return;
     if (await this.#writeModernClipboard(payload, false)) return;
@@ -2411,9 +2498,7 @@ export class NobitaEditor implements BlockHost {
     const onCopy = (event: ClipboardEvent): void => {
       if (!event.clipboardData) return;
       event.preventDefault();
-      event.clipboardData.setData('text/plain', payload.text);
-      event.clipboardData.setData('text/html', payload.html);
-      event.clipboardData.setData('application/x-nobita+json', payload.json);
+      writeClipboardData(event.clipboardData, payload);
     };
     document.addEventListener('copy', onCopy, true);
     document.body.append(field);
@@ -2710,14 +2795,15 @@ export class NobitaEditor implements BlockHost {
     }
   }
 
+  #copyBlocksToEvent(event: ClipboardEvent, blocks: Block[]): void {
+    writeClipboardData(event.clipboardData, serializeBlocksForClipboard(blocks, this.#resolveDatabase));
+  }
+
   #copySelectedBlocks(event: ClipboardEvent, cut: boolean): void {
     event.preventDefault();
     const blocks = selectedTopLevelBlocks(this.store.doc.blocks, this.#selectedBlockIds);
     if (blocks.length === 0) return;
-    const serialized = serializeBlocksForClipboard(blocks);
-    event.clipboardData?.setData('text/plain', serialized.text);
-    event.clipboardData?.setData('text/html', serialized.html);
-    event.clipboardData?.setData('application/x-nobita+json', serialized.json);
+    this.#copyBlocksToEvent(event, blocks);
     if (cut && !this.#readonly) {
       this.#deleteSelectedBlocks();
     }

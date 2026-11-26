@@ -1,3 +1,5 @@
+import { documentEvaluation, type DatabaseEvalContext } from './database-eval.js';
+import type { DatabaseResolver } from './types.js';
 import { createBlock } from './doc.js';
 import { createTableColumn, createTableData, createTableRow, hasRichMarks } from './table.js';
 import { databaseCellDisplay, databaseCellText, sortedDatabaseRows } from './database.js';
@@ -699,7 +701,7 @@ function indentLines(text: string, prefix: string): string {
     .join('\n');
 }
 
-function serializeBlocks(blocks: readonly Block[], depth: number, lines: string[]): void {
+function serializeBlocks(blocks: readonly Block[], depth: number, lines: string[], context: DatabaseEvalContext): void {
   let number = 0;
   for (const block of blocks) {
     const pad = '  '.repeat(depth);
@@ -738,7 +740,7 @@ function serializeBlocks(blocks: readonly Block[], depth: number, lines: string[
       }
       case 'database': {
         if (block.props.database) {
-          for (const line of databaseTableToLines(block.props.database)) {
+          for (const line of databaseTableToLines(context.project(block.props.database))) {
             lines.push(`${pad}${line}`);
           }
           lines.push('');
@@ -789,17 +791,17 @@ function serializeBlocks(blocks: readonly Block[], depth: number, lines: string[
     if (block.type !== 'bulleted' && block.type !== 'numbered' && block.type !== 'todo' && block.children.length > 0) {
       lines.push('');
     }
-    if (block.children.length > 0) serializeBlocks(block.children, depth + 1, lines);
+    if (block.children.length > 0) serializeBlocks(block.children, depth + 1, lines, context);
     if (block.type === 'code') lines.push('');
   }
 }
 
-export function blocksToMarkdown(doc: Doc, options: { title?: boolean } = {}): string {
+export function blocksToMarkdown(doc: Doc, options: { title?: boolean; resolveDatabase?: DatabaseResolver } = {}): string {
   const lines: string[] = [];
   if (options.title !== false && doc.title.trim()) {
     lines.push(`# ${doc.title.trim()}`, '');
   }
-  serializeBlocks(doc.blocks, 0, lines);
+  serializeBlocks(doc.blocks, 0, lines, documentEvaluation(doc.blocks,options.resolveDatabase));
   return `${lines.join('\n').replace(/\n{3,}/gu, '\n\n').trim()}\n`;
 }
 

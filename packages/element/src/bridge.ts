@@ -1,8 +1,9 @@
-import type { CalloutTone, DatabaseData, PageInfo, TableData } from '@nobita/core';
+import type { CalloutTone, DatabaseData, DatabaseResolver, DatabaseTarget, PageInfo, TableData } from '@nobita/core';
 import type { BlockView } from './block-view.js';
 
 /** Surface the block view needs from the editor. Implemented by NobitaEditor. */
 export interface BlockHost {
+  readonly doc: { id: string };
   readonly readonly: boolean;
   readonly uploadImage?:
     | ((file: File) => string | { src: string } | Promise<string | { src: string }>)
@@ -21,6 +22,9 @@ export interface BlockHost {
   openBlockMenu(blockId: string, anchor: HTMLElement): void;
   addBlockAfter(blockId: string): void;
   beginDrag(blockId: string, event: PointerEvent, handle: HTMLElement): void;
+  resolveDatabase: DatabaseResolver;
+  databaseTargets(query: string): Promise<readonly DatabaseTarget[]>;
+  observeDatabases(fn: () => void): () => void;
   updateDatabase(blockId: string, data: DatabaseData, options?: { mergeKey?: string }): void;
   undoDatabase(): void;
   redoDatabase(): void;

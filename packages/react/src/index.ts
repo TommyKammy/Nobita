@@ -12,6 +12,7 @@ import {
   type ImageUploadHandler,
   type MentionProvider,
   type NobitaChangeDetail,
+  type NobitaOptions,
   type NobitaTheme,
   type PageProvider,
 } from '@nobita/element';
@@ -27,11 +28,12 @@ export interface NobitaReactHandle {
   insertPageLink(page: PageInfo, options?: { afterBlockId?: string }): string | null;
   insertInlinePageLink(page: PageInfo): boolean;
   refreshPageLinks(): void;
+  refreshDatabases(): void;
   undo(): boolean;
   redo(): boolean;
 }
 
-export interface NobitaEditorProps {
+export interface NobitaEditorProps extends Pick<NobitaOptions, 'databaseProvider' | 'resolveDatabase' | 'onRelationSync'> {
   doc?: Doc | string;
   readonly?: boolean;
   theme?: NobitaTheme;
@@ -93,6 +95,15 @@ export const NobitaEditor = forwardRef<NobitaReactHandle, NobitaEditorProps>(
     useLayoutEffect(() => {
       const element = hostRef.current;
       if (!element) return;
+      element.databaseProvider = props.databaseProvider;
+      element.resolveDatabase = props.resolveDatabase;
+      element.onRelationSync = props.onRelationSync;
+      element.editor?.refreshDatabases();
+    }, [props.databaseProvider, props.resolveDatabase, props.onRelationSync]);
+
+    useLayoutEffect(() => {
+      const element = hostRef.current;
+      if (!element) return;
       element.uploadImage = props.uploadImage;
     }, [props.uploadImage]);
 
@@ -144,6 +155,7 @@ export const NobitaEditor = forwardRef<NobitaReactHandle, NobitaEditorProps>(
           hostRef.current?.insertPageLink(page, options) ?? null,
         insertInlinePageLink: (page: PageInfo) =>
           hostRef.current?.insertInlinePageLink(page) ?? false,
+        refreshDatabases: () => hostRef.current?.editor?.refreshDatabases(),
         refreshPageLinks: () => hostRef.current?.refreshPageLinks(),
         undo: () => hostRef.current?.undo() ?? false,
         redo: () => hostRef.current?.redo() ?? false,

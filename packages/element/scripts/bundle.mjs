@@ -6,41 +6,6 @@ import esbuild from 'esbuild';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-/**
- * Minify CSS safely without breaking string literals, descendant `:pseudo`
- * selectors (leading space before `:`), or `calc(...)` spacing around `+`/`-`.
- */
-function minifyCss(css) {
-  const strings = [];
-  const hold = value => {
-    const token = `\uE000${strings.length}\uE001`;
-    strings.push(value);
-    return token;
-  };
-  let out = css.replace(
-    /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\*[\s\S]*?\*\//g,
-    match => (match.startsWith('/*') ? ' ' : hold(match))
-  );
-
-  // Protect calc(...) expressions so spacing around +/- and 0px units stay intact.
-  out = out.replace(/calc\((?:[^()]+|\((?:[^()]+|\([^()]*\))*\))*\)/g, hold);
-
-  out = out
-    .replace(/\s+/g, ' ')
-    .replace(/\s*([{};,])\s*/g, '$1')
-    .replace(/: /g, ':')
-    .replace(/\s*>\s*/g, '>')
-    .replace(/#ffffff\b/gi, '#fff')
-    .replace(/#000000\b/gi, '#000')
-    .replace(/([: ,(])0px(?=[ ;,})])/g, '$10')
-    .replace(/([: ,(])0\.([0-9]+)/g, '$1.$2')
-    .replace(/;}/g, '}')
-    .replace(/\uE000(\d+)\uE001/g, (_, index) => strings[Number(index)])
-    .trim();
-
-  return out;
-}
-
 const minifyStylesPlugin = {
   name: 'minify-styles-ts',
   setup(build) {
@@ -54,7 +19,7 @@ const minifyStylesPlugin = {
       if (!match) {
         throw new Error(`Could not extract CSS template literal from ${args.path}`);
       }
-      const minified = minifyCss(match[1]);
+      const minified = (await esbuild.transform(match[1], { loader: 'css', minify: true })).code.trim();
       return {
         contents: `export const styles: string = ${JSON.stringify(minified)};\n`,
         loader: 'ts',
@@ -63,10 +28,36 @@ const minifyStylesPlugin = {
   },
 };
 
+// Internal view and controller members. Host API and document property names stay public.
+const controllerMethods = [
+  'focusAfterHistory', 'focusFirstCell', 'focusCell', 'caretOffset', 'setSelected', 'onHide',
+  'setQuery', 'setItems', 'isVisible', 'isOpen', 'copyMarkdown', 'copyBlocks', 'copyLink',
+  'rootElement', 'instanceId', 'pointFromCaret', 'keepTrigger', 'restoreFocus', 'filterable',
+  'startColumnId', 'endColumnId', 'startRowId', 'endRowId', 'defaultLabel', 'isReadonly',
+  'onDismiss', 'pointerTarget', 'dismissOnInsideScroll',
+  'getContentSignal', 'getEventsSignal', 'getSyncedData', 'getDetailElement', 'getScrollElement',
+  'getReadonly', 'getUploadImage', 'currentCell', 'commitCell', 'commitTextRuns', 'commitRowPage',
+  'commitColumnFields', 'commitDeletedRows', 'setPendingBoardFocus', 'addColumnOfType',
+  'addFilterForColumn', 'setGroupProperty', 'setFilterTree', 'defaultGroupColumn', 'patchViewColumn',
+  'applyFirst', 'formatSelect', 'decimalPatch', 'insertColumn', 'deleteColumn', 'focusAfter',
+  'activeView', 'titleColumn', 'syncValues', 'showPopover', 'closePopover',
+  'updateActiveView', 'groupsFor', 'columnStates', 'viewColumns', 'navigationRows', 'visibleColumns',
+  'openAddPropertyMenu', 'openDetailPanel', 'openComputed', 'openColumnPopover', 'openRowPopover',
+  'openPeoplePopover', 'openMultiSelectPopover', 'openSelectPopover', 'openFilesPopover', 'openImagePopover',
+  'openViewMenu', 'openGroupMenu', 'openAddViewMenu', 'attachRichTextHandlers', 'attachCompositionHandlers',
+  'openRenameView', 'openViewProperties', 'openFilterPopover', 'openGroupPopover', 'openSortPopover',
+  'openStatPopover', 'duplicateColumn', 'duplicateRow', 'moveColumn', 'moveView', 'moveGroup',
+  'addView', 'addCard', 'moveCard', 'clearSelectedRow', 'pasteIntoRichText', 'toggleInlineTag',
+  'focusImageCaption', 'focusImageInput', 'focusDatabase', 'focusPageLink', 'focusTable',
+  'refreshPageLink', 'pastePlainText', 'composingTargets', 'textElement', 'resetToolbar', 'richTextSelector', 'getSignal', 'isComposingKey',
+  'isEditingGroupTitle', 'clearDropIndicators', 'clearPendingMarks', 'setPendingMarks', 'syncToolbar',
+];
+
 const shared = {
   absWorkingDir: root,
   bundle: true,
   minify: true,
+  mangleProps: new RegExp('^(' + controllerMethods.join('|') + ')$'),
   target: 'es2022',
   conditions: ['nobita-source'],
   sourcemap: true,
@@ -83,7 +74,7 @@ async function bundle(options) {
   const result = await minify({ [filename]: js.text }, {
     module: options.format === 'esm',
     ecma: 2022,
-    compress: { passes: 3 },
+    compress: { passes: 3, if_return: false, sequences: false, join_vars: false, inline: false, reduce_funcs: false, reduce_vars: false },
     sourceMap: { content: map.text, filename, url: filename + '.map' },
   });
   await mkdir(path.dirname(js.path), { recursive: true });

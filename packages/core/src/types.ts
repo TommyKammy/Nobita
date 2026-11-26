@@ -31,7 +31,9 @@ export type DatabaseColumnType =
   | 'image'
   | 'multi-select'
   | 'files'
-  | 'people';
+  | 'people'
+  | 'relation'
+  | 'formula';
 
 /** Legacy schema variant. New simple tables use the separate `table` block. */
 export type DatabaseVariant = 'table' | 'database';
@@ -61,7 +63,39 @@ export interface TableData {
   rows: TableRow[];
 }
 
+export interface DatabaseRelationConfig {
+  databaseId: string;
+  pageId?: string;
+  limit?: 1;
+  syncedColumnId?: string;
+}
+
+export interface DatabaseFormulaConfig {
+  expression: string;
+  format?: {
+    numberFormat?: 'number' | 'percent' | 'currency';
+    decimals?: number;
+    currency?: string;
+  };
+}
+
+export interface DatabaseRelationRef {
+  rowId: string;
+  label?: string;
+}
+export interface DatabaseTarget {
+  databaseId: string;
+  title: string;
+  pageId?: string;
+}
+export type DatabaseResolver = (
+  id: string,
+  pageId?: string
+) => DatabaseData | null | undefined;
+
 export interface DatabaseColumn {
+  relation?: DatabaseRelationConfig;
+  formula?: DatabaseFormulaConfig;
   id: string;
   name: string;
   type: DatabaseColumnType;
@@ -88,6 +122,7 @@ export interface DatabasePerson {
 }
 
 export interface DatabaseCell {
+  relations?: DatabaseRelationRef[];
   text?: string;
   /** Rich-text runs for text columns; `text` remains the plain projection. */
   runs?: InlineRun[];
