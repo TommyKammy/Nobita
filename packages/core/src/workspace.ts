@@ -35,6 +35,8 @@ export interface PageTreeInput {
   favorite?: boolean;
   order?: number;
   updatedAt?: number;
+  /** Epoch ms timestamp when moved to Trash; omitted or null means active. */
+  deletedAt?: number | null;
 }
 
 export interface PageTreeNode {
@@ -238,13 +240,22 @@ function compareTreeInputs(a: PageTreeInput, b: PageTreeInput): number {
   return a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
 }
 
-function normalizedParentMap(pages: readonly PageTreeInput[]): {
+/** Return `true` when a page record has been soft-deleted into Trash. */
+export function isTrashedPage(page: Pick<PageTreeInput, 'deletedAt'>): boolean {
+  return typeof page.deletedAt === 'number' && Number.isFinite(page.deletedAt);
+}
+
+function normalizedParentMap(
+  pages: readonly PageTreeInput[],
+  includeTrashed = false
+): {
   byId: Map<string, PageTreeInput>;
   parentOf: Map<string, string | null>;
 } {
   const byId = new Map<string, PageTreeInput>();
   for (const page of pages) {
     if (!page.id || byId.has(page.id)) continue;
+    if (!includeTrashed && isTrashedPage(page)) continue;
     byId.set(page.id, page);
   }
   const parentOf = new Map<string, string | null>();
@@ -380,6 +391,101 @@ export function canReparentPage(
   if (newParentId === pageId) return false;
   if (!byId.has(newParentId)) return false;
   return !getPageDescendantIds(pages, pageId).has(newParentId);
+}
+
+/**
+ * Partition page records into active and trashed lists.
+ * Trashed pages are sorted most recently deleted first.
+ */
+export function partitionTrashedPages<T extends PageTreeInput>(
+  pages: readonly T[]
+): { active: T[]; trashed: T[] } {
+  const active: T[] = [];
+  const trashed: T[] = [];
+  for (const page of pages) {
+    if (isTrashedPage(page)) trashed.push(page);
+    else active.push(page);
+  }
+  trashed.sort((a, b) => (b.deletedAt ?? 0) - (a.deletedAt ?? 0) || a.title.localeCompare(b.title));
+  return { active, trashed };
+}
+
+/**
+ * Collect `pageId` and all of its active descendant IDs to soft-delete together.
+ * Already-trashed descendants are left untouched so their original deletion
+ * timestamp is preserved.
+ */
+export function collectTrashTargetIds(
+  pages: readonly PageTreeInput[],
+  pageId: string
+): Set<string> {
+  const { byId } = normalizedParentMap(pages, false);
+  const targets = new Set<string>();
+  if (!byId.has(pageId)) return targets;
+  targets.add(pageId);
+  for (const descendantId of getPageDescendantIds(pages, pageId)) {
+    targets.add(descendantId);
+  }
+  return targets;
+}
+
+/**
+ * Resolve a safe `parentId` when restoring `pageId` from Trash.
+ * Keeps the original parent if it exists and is currently active; otherwise
+ * promotes the restored page to workspace root (`null`).
+ */
+export function resolveRestoreParentId(
+  pages: readonly PageTreeInput[],
+  pageId: string
+): string | null {
+  const { byId, parentOf } = normalizedParentMap(pages, true);
+  const page = byId.get(pageId);
+  if (!page) return null;
+  const candidate = parentOf.get(pageId) ?? null;
+  if (!candidate) return null;
+  const parent = byId.get(candidate);
+  if (!parent || isTrashedPage(parent)) return null;
+  return candidate;
+}
+
+/**
+ * Collect `pageId` and its trashed descendants that should be restored together.
+ * By default, only descendants deleted at or after `pageId.deletedAt` are
+ * included so children previously trashed on their own stay in Trash.
+ */
+export function collectRestoreTargetIds(
+  pages: readonly PageTreeInput[],
+  pageId: string,
+  options: { includeAllDescendants?: boolean } = {}
+): Set<string> {
+  const { byId, parentOf } = normalizedParentMap(pages, true);
+  const root = byId.get(pageId);
+  const targets = new Set<string>();
+  if (!root || !isTrashedPage(root)) return targets;
+  targets.add(pageId);
+  const rootDeletedAt = root.deletedAt ?? 0;
+
+  const childrenByParent = new Map<string, string[]>();
+  for (const [id, parentId] of parentOf) {
+    if (!parentId) continue;
+    const list = childrenByParent.get(parentId);
+    if (list) list.push(id);
+    else childrenByParent.set(parentId, [id]);
+  }
+
+  const queue = [...(childrenByParent.get(pageId) ?? [])];
+  while (queue.length > 0) {
+    const currentId = queue.pop()!;
+    if (targets.has(currentId)) continue;
+    const node = byId.get(currentId);
+    if (!node || !isTrashedPage(node)) continue;
+    if (options.includeAllDescendants || (node.deletedAt ?? 0) >= rootDeletedAt) {
+      targets.add(currentId);
+      const next = childrenByParent.get(currentId);
+      if (next) queue.push(...next);
+    }
+  }
+  return targets;
 }
 
 function normalizeQuery(text: string): string {

@@ -38,7 +38,7 @@ import type {
   PageInfo,
 } from '@nobita/core';
 import { handleHistoryKey, nativeSelection, placeCaret } from './dom.js';
-import { beginWindowDrag } from './floating.js';
+import { beginWindowDrag, pointAnchor } from './floating.js';
 import { icon } from './icons.js';
 import { parseTsv, tsvCell } from './tsv.js';
 import {
@@ -285,6 +285,7 @@ export class DatabaseView {
       insertRow: (anchorId, after) => this.#insertRow(anchorId, after),
       duplicateRow: rowId => this.#duplicateRow(rowId),
       deleteRow: rowId => this.#deleteRow(rowId),
+      openDetailPanel: rowId => this.#detail.open(rowId),
     });
 
     this.element.addEventListener('copy', this.#onCopy, true);
@@ -1313,13 +1314,17 @@ export class DatabaseView {
       }
     }, { signal });
     thead.addEventListener('contextmenu', event => {
-      if (this.#readonly) return;
+      if (this.#readonly || event.shiftKey) return;
       const th = (event.target as Element | null)?.closest<HTMLElement>(
         'th.nb-db-th[data-column-id]'
       );
       if (!th?.dataset.columnId) return;
       event.preventDefault();
-      this.#popovers.openColumnPopover(th.dataset.columnId, th);
+      event.stopPropagation();
+      this.#popovers.openColumnPopover(
+        th.dataset.columnId,
+        pointAnchor(event.clientX, event.clientY)
+      );
     }, { signal });
     thead.addEventListener('pointerdown', event => {
       const target = event.target as Element | null;
@@ -1405,6 +1410,15 @@ export class DatabaseView {
         const rowId = grip.closest<HTMLElement>('tr[data-row-id]')?.dataset.rowId;
         if (rowId) this.#toggleRowSelection(rowId);
       }
+    }, { signal });
+    tbody.addEventListener('contextmenu', event => {
+      if (this.#readonly || event.shiftKey) return;
+      const tr = (event.target as Element | null)?.closest<HTMLElement>('tr[data-row-id]');
+      if (!tr?.dataset.rowId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.#richText.hideToolbar();
+      this.#popovers.openRowPopover(tr.dataset.rowId, pointAnchor(event.clientX, event.clientY));
     }, { signal });
 
     return tbody;

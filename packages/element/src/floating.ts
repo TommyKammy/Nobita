@@ -5,6 +5,11 @@ export interface FloatingAnchor {
   bottom: number;
 }
 
+/** Build a zero-size FloatingAnchor at viewport cursor coordinates. */
+export function pointAnchor(x: number, y: number): FloatingAnchor {
+  return { left: x, right: x, top: y, bottom: y };
+}
+
 export interface PlaceFloatingOptions {
   align?: 'start' | 'center';
   side?: 'above' | 'below';
@@ -163,7 +168,7 @@ export function beginWindowDrag(
 /** Mount, position, and register outside-dismiss listeners for an anchored popover. */
 export function openAnchoredPopover(options: {
   host: ParentNode;
-  anchor: HTMLElement;
+  anchor: HTMLElement | FloatingAnchor;
   content: HTMLElement;
   className: string;
   onDismiss: () => void;
@@ -174,7 +179,11 @@ export function openAnchoredPopover(options: {
   element.className = options.className;
   element.append(options.content);
   options.host.append(element);
-  placeFloating(element, options.anchor.getBoundingClientRect(), options.place);
+  const rect =
+    options.anchor instanceof Element
+      ? options.anchor.getBoundingClientRect()
+      : options.anchor;
+  placeFloating(element, rect, options.place);
   const cleanup = dismissFloating({
     element,
     onDismiss: options.onDismiss,

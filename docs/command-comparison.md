@@ -149,7 +149,7 @@ in Nobita's toolbar or block menu.
 | Cell navigation in database | Tab/Shift-Tab, Enter, arrows | ✅ | DatabaseView |
 | Row/area selection in database | Shift+Arrows, `Mod-A`, `Delete`/`Backspace` | 🟡 | Drag/Shift-click range and row checkbox selection with `Delete`/`Backspace`; no `Shift+Arrows` or `Mod-A` |
 | `/` row menu in database | `/` | ❌ | Column header and row handle menus exist |
-| Table cell context menu | right-click / menu | 🟡 | Simple table and database both have row/column menus; no right-click context menu |
+| Table cell context menu | right-click / menu | ✅ | Notion-style right-click context menus across blocks (single & multi-block), simple table cells/handles, and database rows/columns/board cards (`Shift+Right-click` preserves native browser menu) |
 
 ## 4. Block toolbar and block menu
 
@@ -274,7 +274,8 @@ implements a small subset deliberately.
 | Theme | ✅ |
 | Embed/integration demo | ✅ (Nobita-specific) |
 | Backlinks | ✅ live collapsible backlinks panel with source snippet and jump-to-block |
-| Trash | ❌ |
+| Trash | ✅ soft delete (`deletedAt`), Trash view with search, read-only preview banner, Undo toast, restore (with parent fallback) and permanent delete / Empty trash |
+| Right-click page menu | ✅ right-click context menu on sidebar pages (active & trashed) |
 | Templates | ❌ |
 | Journals | ❌ |
 | Tags / collections | ❌ |

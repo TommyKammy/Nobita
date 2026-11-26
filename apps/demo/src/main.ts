@@ -10,6 +10,8 @@ import {
   buildPageTree,
   canReparentPage,
   cloneDoc,
+  collectRestoreTargetIds,
+  collectTrashTargetIds,
   countWords,
   createBlock,
   createDoc,
@@ -17,7 +19,9 @@ import {
   flattenPageTree,
   getBacklinks,
   getPageBreadcrumbs,
-  getPageDescendantIds,
+  isTrashedPage,
+  partitionTrashedPages,
+  resolveRestoreParentId,
   searchWorkspacePages,
   type Doc,
   type PageInfo,
@@ -59,11 +63,18 @@ app.innerHTML = `
         <button class="nav-item" data-view="favorites">
           ${demoIcon.star}<span>Favorites</span>
         </button>
+        <button class="nav-item" data-view="trash">
+          ${icon.trash}<span>Trash</span><span class="count" id="trash-count">0</span>
+        </button>
       </nav>
       <div class="sidebar-scroll">
         <div class="section-head">
           <span id="section-label">Pages</span>
           <button id="new-page" title="New page (⌘N)" aria-label="New page">${icon.plus}</button>
+          <button id="empty-trash" class="trash-empty-btn" title="Empty trash" hidden>Empty</button>
+        </div>
+        <div class="trash-filter" id="trash-filter" hidden>
+          <input type="search" id="trash-search" placeholder="Filter trash…" aria-label="Filter trash" />
         </div>
         <div id="page-tree"></div>
       </div>
@@ -85,6 +96,13 @@ app.innerHTML = `
         <button class="share-btn" id="embed-btn" title="Embed this editor">${demoIcon.external}<span>Embed</span></button>
       </header>
       <div class="editor-scroll" id="editor-scroll">
+        <div class="trash-banner" id="trash-banner" hidden>
+          <span class="trash-banner-text">${icon.trash}<span>This page is in Trash.</span></span>
+          <div class="trash-banner-actions">
+            <button type="button" class="trash-btn" id="banner-restore">${demoIcon.restore}<span>Restore</span></button>
+            <button type="button" class="trash-btn danger" id="banner-delete">${icon.trash}<span>Delete permanently</span></button>
+          </div>
+        </div>
         <div id="editor-host"></div>
         <section class="backlinks" id="backlinks" aria-label="Backlinks" hidden></section>
         <div class="empty-state" id="empty-state" hidden>
@@ -109,7 +127,13 @@ const $ = <T extends Element>(selector: string): T => {
 const shell = $('#shell');
 const pageTree = $('#page-tree') as HTMLDivElement;
 const docCount = $('#doc-count') as HTMLElement;
+const trashCount = $('#trash-count') as HTMLElement;
 const sectionLabel = $('#section-label') as HTMLElement;
+const newPageButton = $('#new-page') as HTMLButtonElement;
+const emptyTrashButton = $('#empty-trash') as HTMLButtonElement;
+const trashFilter = $('#trash-filter') as HTMLDivElement;
+const trashSearch = $('#trash-search') as HTMLInputElement;
+const trashBanner = $('#trash-banner') as HTMLDivElement;
 const crumbs = $('#crumbs') as HTMLDivElement;
 const favoriteButton = $('#favorite') as HTMLButtonElement;
 const pageMenuButton = $('#page-menu') as HTMLButtonElement;
@@ -122,7 +146,8 @@ const emptyState = $('#empty-state') as HTMLDivElement;
 const modalRoot = $('#modal-root') as HTMLDivElement;
 const toastElement = $('#toast') as HTMLDivElement;
 
-let currentView: 'all' | 'favorites' = 'all';
+let currentView: 'all' | 'favorites' | 'trash' = 'all';
+let trashQuery = '';
 let editor: NobitaEditor | null = null;
 let saving = false;
 let saveTimer = 0;
@@ -136,9 +161,21 @@ let closeModal: (() => void) | null = null;
 const activeRecord = (): PageRecord | null =>
   state.activeId ? state.pages[state.activeId] ?? null : null;
 
+const isTrashed = (record: PageRecord): boolean => isTrashedPage(record);
+
 const titleOf = (record: PageRecord): string => record.doc.title.trim() || 'Untitled';
 
-const allDocs = (): Doc[] => Object.values(state.pages).map(record => record.doc);
+const activeDocs = (): Doc[] =>
+  Object.values(state.pages)
+    .filter(record => !isTrashed(record))
+    .map(record => record.doc);
+
+function firstActivePageId(): string | null {
+  for (const [id, record] of Object.entries(state.pages)) {
+    if (!isTrashed(record)) return id;
+  }
+  return null;
+}
 
 function treeInputs(): PageTreeInput[] {
   return Object.entries(state.pages).map(([id, record]) => ({
@@ -149,6 +186,7 @@ function treeInputs(): PageTreeInput[] {
     favorite: record.favorite,
     ...(record.order === undefined ? {} : { order: record.order }),
     updatedAt: record.updatedAt,
+    ...(record.deletedAt == null ? {} : { deletedAt: record.deletedAt }),
   }));
 }
 
@@ -157,13 +195,9 @@ function pagePath(id: string): string[] {
   return crumbsPath.slice(0, -1).map(item => item.title);
 }
 
-function descendants(id: string): string[] {
-  return [id, ...getPageDescendantIds(treeInputs(), id)];
-}
-
 function resolvePageInfo(pageId: string): PageInfo | null {
   const record = state.pages[pageId];
-  if (!record) return null;
+  if (!record || isTrashed(record)) return null;
   return {
     id: pageId,
     title: titleOf(record),
@@ -173,7 +207,9 @@ function resolvePageInfo(pageId: string): PageInfo | null {
 
 function createWorkspacePage(title: string, parentId: string | null): PageInfo {
   const doc = createDoc({ title, blocks: [createBlock('paragraph')] });
-  const siblings = Object.values(state.pages).filter(record => record.parentId === parentId);
+  const siblings = Object.values(state.pages).filter(
+    record => !isTrashed(record) && record.parentId === parentId
+  );
   state.pages[doc.id] = {
     doc,
     parentId,
@@ -191,7 +227,7 @@ const pageProvider: PageProvider = {
   search(query: string): PageInfo[] {
     const needle = query.trim().toLowerCase();
     return Object.entries(state.pages)
-      .filter(([, record]) => !needle || titleOf(record).toLowerCase().includes(needle))
+      .filter(([, record]) => !isTrashed(record) && (!needle || titleOf(record).toLowerCase().includes(needle)))
       .sort((a, b) => {
         if (a[0] === state.activeId && b[0] !== state.activeId) return 1;
         if (b[0] === state.activeId && a[0] !== state.activeId) return -1;
@@ -204,7 +240,9 @@ const pageProvider: PageProvider = {
       }));
   },
   create(title: string): PageInfo {
-    return createWorkspacePage(title, state.activeId);
+    const active = activeRecord();
+    const parentId = active && !isTrashed(active) ? state.activeId : null;
+    return createWorkspacePage(title, parentId);
   },
 };
 
@@ -219,16 +257,27 @@ function iconFor(record: PageRecord): string {
 
 /* ---------------- editor ---------------- */
 
+function syncEditorReadonly(): void {
+  const record = activeRecord();
+  const trashed = Boolean(record && isTrashed(record));
+  trashBanner.hidden = !trashed;
+  favoriteButton.hidden = trashed;
+  editor?.setReadonly(trashed);
+}
+
 function mountEditor(): void {
   const record = activeRecord();
   if (!record) {
     editorHost.hidden = true;
     backlinksPanel.hidden = true;
+    trashBanner.hidden = true;
     emptyState.hidden = false;
     crumbs.replaceChildren();
+    favoriteButton.hidden = false;
     favoriteButton.dataset.active = 'false';
     return;
   }
+  const trashed = isTrashed(record);
   editorHost.hidden = false;
   emptyState.hidden = true;
 
@@ -236,6 +285,7 @@ function mountEditor(): void {
     editor = createEditor(editorHost, {
       doc: record.doc,
       theme: state.theme,
+      readonly: trashed,
       placeholder: "Type '/' for commands, '[[' to link a page",
       autofocus: false,
       pageProvider,
@@ -249,6 +299,7 @@ function mountEditor(): void {
   } else {
     editor.setDoc(record.doc);
   }
+  syncEditorReadonly();
   editorScroll.scrollTop = 0;
   renderBacklinks();
 }
@@ -258,7 +309,7 @@ function handleDocChange(doc: Doc, source: string): void {
   const id = state.activeId;
   if (!id) return;
   const record = state.pages[id];
-  if (!record) return;
+  if (!record || isTrashed(record)) return;
   const titleChanged = record.doc.title !== doc.title;
   record.doc = doc;
   if (source !== 'replace') record.updatedAt = Date.now();
@@ -282,12 +333,13 @@ function handleDocChange(doc: Doc, source: string): void {
 
 function renderBacklinks(): void {
   const activeId = state.activeId;
-  if (!activeId || !state.pages[activeId]) {
+  const record = activeId ? state.pages[activeId] : null;
+  if (!activeId || !record || isTrashed(record)) {
     backlinksPanel.hidden = true;
     backlinksPanel.replaceChildren();
     return;
   }
-  const links = getBacklinks(allDocs(), activeId);
+  const links = getBacklinks(activeDocs(), activeId);
   if (links.length === 0) {
     backlinksPanel.hidden = true;
     backlinksPanel.replaceChildren();
@@ -360,7 +412,8 @@ function updateStats(): void {
 }
 
 function openPage(id: string, focusBlockId?: string): void {
-  if (!state.pages[id]) return;
+  const record = state.pages[id];
+  if (!record) return;
   if (saveTimer) {
     window.clearTimeout(saveTimer);
     saveTimer = 0;
@@ -368,12 +421,15 @@ function openPage(id: string, focusBlockId?: string): void {
     saving = false;
   }
   state.activeId = id;
-  for (const crumb of getPageBreadcrumbs(treeInputs(), id)) {
-    collapsed.delete(crumb.id);
+  if (!isTrashed(record)) {
+    for (const crumb of getPageBreadcrumbs(treeInputs(), id)) {
+      collapsed.delete(crumb.id);
+    }
   }
   saveState(state);
-  if (editor) editor.setDoc(state.pages[id]!.doc);
+  if (editor) editor.setDoc(record.doc);
   else mountEditor();
+  syncEditorReadonly();
   editorHost.hidden = false;
   emptyState.hidden = true;
   renderTree();
@@ -381,7 +437,7 @@ function openPage(id: string, focusBlockId?: string): void {
   renderFavorite();
   renderBacklinks();
   updateStats();
-  if (focusBlockId) {
+  if (focusBlockId && !isTrashed(record)) {
     editor?.focus(focusBlockId, 0);
   } else {
     editorScroll.scrollTop = 0;
@@ -390,6 +446,7 @@ function openPage(id: string, focusBlockId?: string): void {
 }
 
 function newPage(parentId: string | null = null): void {
+  if (currentView === 'trash') currentView = 'all';
   const created = createWorkspacePage('', parentId);
   state.activeId = created.id;
   saveState(state);
@@ -454,15 +511,44 @@ function movePageInTree(
 
 function renderTree(): void {
   pageTree.replaceChildren();
-  sectionLabel.textContent = currentView === 'favorites' ? 'Favorites' : 'Pages';
-  docCount.textContent = String(Object.keys(state.pages).length);
+  const inputs = treeInputs();
+  const { active, trashed } = partitionTrashedPages(inputs);
+  sectionLabel.textContent =
+    currentView === 'favorites' ? 'Favorites' : currentView === 'trash' ? 'Trash' : 'Pages';
+  docCount.textContent = String(active.length);
+  trashCount.textContent = String(trashed.length);
+  newPageButton.hidden = currentView === 'trash';
+  emptyTrashButton.hidden = currentView !== 'trash' || trashed.length === 0;
+  trashFilter.hidden = currentView !== 'trash';
   for (const button of document.querySelectorAll<HTMLElement>('.nav-item')) {
     button.dataset.active = String(button.dataset.view === currentView);
   }
 
+  if (currentView === 'trash') {
+    const needle = trashQuery.trim().toLowerCase();
+    const items = trashed
+      .map(item => [item.id, state.pages[item.id]] as const)
+      .filter(
+        (entry): entry is readonly [string, PageRecord] =>
+          Boolean(entry[1]) && (!needle || titleOf(entry[1]!).toLowerCase().includes(needle))
+      );
+    if (items.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'sidebar-empty';
+      empty.textContent =
+        trashed.length === 0
+          ? 'Trash is empty. Deleted pages appear here until you restore or remove them.'
+          : 'No matching pages in Trash.';
+      pageTree.append(empty);
+      return;
+    }
+    for (const [id, record] of items) pageTree.append(trashedPageRow(id, record));
+    return;
+  }
+
   if (currentView === 'favorites') {
     const favorites = Object.entries(state.pages)
-      .filter(([, record]) => record.favorite)
+      .filter(([, record]) => !isTrashed(record) && record.favorite)
       .sort((a, b) => b[1].updatedAt - a[1].updatedAt);
     if (favorites.length === 0) {
       const empty = document.createElement('div');
@@ -475,7 +561,7 @@ function renderTree(): void {
     return;
   }
 
-  const tree = buildPageTree(treeInputs());
+  const tree = buildPageTree(inputs);
   const renderNodes = (nodes: readonly PageTreeNode[]): void => {
     for (const node of nodes) {
       const record = state.pages[node.id];
@@ -492,6 +578,62 @@ function renderTree(): void {
     empty.textContent = 'No pages yet. Press ⌘N or + to create one.';
     pageTree.append(empty);
   }
+}
+
+function trashedPageRow(id: string, record: PageRecord): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'page-row is-trashed';
+  row.dataset.active = String(state.activeId === id);
+  row.dataset.pageId = id;
+  row.style.paddingLeft = '8px';
+  row.tabIndex = 0;
+  row.setAttribute('role', 'treeitem');
+  row.setAttribute('aria-selected', String(state.activeId === id));
+
+  const iconElement = document.createElement('span');
+  iconElement.className = 'page-icon';
+  iconElement.innerHTML = iconFor(record);
+
+  const title = document.createElement('span');
+  title.className = `page-title${record.doc.title.trim() ? '' : ' is-empty'}`;
+  title.textContent = titleOf(record);
+
+  const actions = document.createElement('span');
+  actions.className = 'page-actions';
+
+  const restore = document.createElement('button');
+  restore.type = 'button';
+  restore.className = 'page-action';
+  restore.title = 'Restore page';
+  restore.setAttribute('aria-label', 'Restore page');
+  restore.innerHTML = demoIcon.restore;
+  restore.addEventListener('click', event => {
+    event.stopPropagation();
+    restoreFromTrash(id);
+  });
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'page-action danger';
+  remove.title = 'Delete permanently';
+  remove.setAttribute('aria-label', 'Delete permanently');
+  remove.innerHTML = icon.trash;
+  remove.addEventListener('click', event => {
+    event.stopPropagation();
+    deletePermanently(id);
+  });
+
+  actions.append(restore, remove);
+  row.append(iconElement, title, actions);
+  row.addEventListener('click', () => openPage(id));
+  row.addEventListener('keydown', event => {
+    if (event.target !== row) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openPage(id);
+    }
+  });
+  return row;
 }
 
 function clearRowDropClasses(row: HTMLElement): void {
@@ -576,6 +718,7 @@ function pageRow(
     renamePage(id, next);
   });
   row.addEventListener('keydown', event => {
+    if (event.target !== row) return;
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       openPage(id);
@@ -639,14 +782,25 @@ function renderCrumbs(): void {
   crumbs.replaceChildren();
   const record = activeRecord();
   if (!record || !state.activeId) return;
-  const chain = getPageBreadcrumbs(treeInputs(), state.activeId);
-  chain.slice(0, -1).forEach(ancestor => {
-    const button = document.createElement('button');
-    button.className = 'crumb';
-    button.textContent = ancestor.title;
-    button.addEventListener('click', () => openPage(ancestor.id));
-    crumbs.append(button, separator());
-  });
+  if (isTrashed(record)) {
+    const trashCrumb = document.createElement('button');
+    trashCrumb.className = 'crumb';
+    trashCrumb.textContent = 'Trash';
+    trashCrumb.addEventListener('click', () => {
+      currentView = 'trash';
+      renderTree();
+    });
+    crumbs.append(trashCrumb, separator());
+  } else {
+    const chain = getPageBreadcrumbs(treeInputs(), state.activeId);
+    chain.slice(0, -1).forEach(ancestor => {
+      const button = document.createElement('button');
+      button.className = 'crumb';
+      button.textContent = ancestor.title;
+      button.addEventListener('click', () => openPage(ancestor.id));
+      crumbs.append(button, separator());
+    });
+  }
   const current = document.createElement('span');
   current.className = 'crumb current';
   current.textContent = titleOf(record);
@@ -683,6 +837,19 @@ function renamePage(id: string, title: string): void {
 
 /* ---------------- popups ---------------- */
 
+interface PopupRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+type PopupAnchor = HTMLElement | PopupRect;
+
+function pointAnchor(x: number, y: number): PopupRect {
+  return { left: x, top: y, right: x, bottom: y };
+}
+
 interface PopupItem {
   label?: string;
   icon?: string;
@@ -691,7 +858,7 @@ interface PopupItem {
   separator?: boolean;
 }
 
-function showPopup(anchor: HTMLElement, items: PopupItem[]): void {
+function showPopup(anchor: PopupAnchor, items: PopupItem[]): void {
   closePopup?.();
   const element = document.createElement('div');
   element.className = 'popup';
@@ -724,13 +891,14 @@ function showPopup(anchor: HTMLElement, items: PopupItem[]): void {
   }
 
   document.body.append(element);
-  const rect = anchor.getBoundingClientRect();
+  const rect = anchor instanceof Element ? anchor.getBoundingClientRect() : anchor;
+  const gap = anchor instanceof Element ? 6 : 2;
   const width = element.offsetWidth;
   const height = element.offsetHeight;
   let left = Math.min(rect.left, window.innerWidth - width - 10);
   left = Math.max(10, left);
-  let top = rect.bottom + 6;
-  if (top + height > window.innerHeight - 10) top = Math.max(10, rect.top - height - 6);
+  let top = rect.bottom + gap;
+  if (top + height > window.innerHeight - 10) top = Math.max(10, rect.top - height - gap);
   element.style.left = `${Math.round(left)}px`;
   element.style.top = `${Math.round(top)}px`;
 
@@ -757,7 +925,7 @@ function showPopup(anchor: HTMLElement, items: PopupItem[]): void {
   closePopup = close;
 }
 
-function openMoveMenu(id: string, anchor: HTMLElement): void {
+function openMoveMenu(id: string, anchor: PopupAnchor): void {
   const inputs = treeInputs();
   const flat = flattenPageTree(buildPageTree(inputs));
   const items: PopupItem[] = [
@@ -777,43 +945,80 @@ function openMoveMenu(id: string, anchor: HTMLElement): void {
   showPopup(anchor, items);
 }
 
-function openPageMenu(id: string, anchor: HTMLElement): void {
+function openTrashedPageMenu(id: string, anchor: PopupAnchor): void {
+  const record = state.pages[id];
+  if (!record || !isTrashed(record)) return;
+  showPopup(anchor, [
+    { label: 'Restore', icon: demoIcon.restore, action: () => restoreFromTrash(id) },
+    { separator: true },
+    {
+      label: 'Delete permanently',
+      icon: icon.trash,
+      danger: true,
+      action: () => deletePermanently(id),
+    },
+  ]);
+}
+
+function openPageMenu(id: string, anchor: PopupAnchor): void {
   const record = state.pages[id];
   if (!record) return;
+  if (isTrashed(record)) {
+    openTrashedPageMenu(id, anchor);
+    return;
+  }
   showPopup(anchor, [
+    {
+      label: 'Rename',
+      icon: icon.text,
+      action: () => {
+        const next = window.prompt('Page title', record.doc.title);
+        if (next !== null) renamePage(id, next);
+      },
+    },
+    {
+      label: 'Add nested page',
+      icon: icon.plus,
+      action: () => {
+        collapsed.delete(id);
+        newPage(id);
+      },
+    },
+    {
+      label: record.favorite ? 'Remove favorite' : 'Add to favorites',
+      icon: demoIcon.star,
+      action: () => toggleFavorite(id),
+    },
     { label: 'Move to…', icon: icon.indent, action: () => openMoveMenu(id, anchor) },
     { label: 'Duplicate', icon: icon.duplicate, action: () => duplicatePage(id) },
     { label: 'Export Markdown', icon: icon.copy, action: () => exportMarkdown(id) },
     { label: 'Export JSON', icon: demoIcon.file, action: () => exportJSON(id) },
     { separator: true },
-    { label: 'Delete', icon: icon.trash, danger: true, action: () => deletePage(id) },
+    { label: 'Move to Trash', icon: icon.trash, danger: true, action: () => moveToTrash(id) },
   ]);
 }
 
 function topbarMenu(): void {
   const id = state.activeId;
   if (!id) return;
-  const record = state.pages[id];
-  if (!record) return;
-  showPopup(pageMenuButton, [
-    { label: 'Rename', icon: icon.text, action: () => {
-      const next = window.prompt('Page title', record.doc.title);
-      if (next !== null) renamePage(id, next);
-    } },
-    { label: 'Move to…', icon: icon.indent, action: () => openMoveMenu(id, pageMenuButton) },
-    { label: 'Duplicate', icon: icon.duplicate, action: () => duplicatePage(id) },
-    { label: 'Export Markdown', icon: icon.copy, action: () => exportMarkdown(id) },
-    { label: 'Export JSON', icon: demoIcon.file, action: () => exportJSON(id) },
-    { separator: true },
-    { label: 'Delete page', icon: icon.trash, danger: true, action: () => deletePage(id) },
-  ]);
+  openPageMenu(id, pageMenuButton);
 }
 
 /* ---------------- page operations ---------------- */
 
+function toggleFavorite(id: string): void {
+  const record = state.pages[id];
+  if (!record || isTrashed(record)) return;
+  record.favorite = !record.favorite;
+  record.updatedAt = Date.now();
+  saveState(state);
+  renderFavorite();
+  renderTree();
+}
+
 function duplicatePage(id: string): void {
   const record = state.pages[id];
-  if (!record) return;
+  if (!record || isTrashed(record)) return;
   const copy = duplicatePageRecord(record);
   state.pages[copy.doc.id] = copy;
   saveState(state);
@@ -822,30 +1027,137 @@ function duplicatePage(id: string): void {
   showToast('Page duplicated');
 }
 
-function deletePage(id: string): void {
+function showEmptyWorkspace(): void {
+  editor?.setDoc(createDoc());
+  editorHost.hidden = true;
+  backlinksPanel.hidden = true;
+  trashBanner.hidden = true;
+  emptyState.hidden = false;
+  crumbs.replaceChildren();
+  favoriteButton.hidden = false;
+  favoriteButton.dataset.active = 'false';
+  document.title = 'Nobita';
+  updateStats();
+}
+
+function moveToTrash(id: string): void {
   const record = state.pages[id];
-  if (!record) return;
+  if (!record || isTrashed(record)) return;
   const label = titleOf(record);
-  if (!window.confirm(`Delete “${label}” and its nested pages?`)) return;
-  const ids = descendants(id);
-  for (const childId of ids) delete state.pages[childId];
-  if (state.activeId && ids.includes(state.activeId)) {
-    state.activeId = Object.keys(state.pages)[0] ?? null;
+  const ids = collectTrashTargetIds(treeInputs(), id);
+  if (ids.size === 0) return;
+  const now = Date.now();
+  for (const targetId of ids) {
+    const target = state.pages[targetId];
+    if (target) target.deletedAt = now;
+  }
+  if (state.activeId && ids.has(state.activeId)) {
+    state.activeId = firstActivePageId();
   }
   saveState(state);
   renderTree();
   if (!state.activeId) {
-    editor?.setDoc(createDoc());
-    editorHost.hidden = true;
-    backlinksPanel.hidden = true;
-    emptyState.hidden = false;
-    updateStats();
+    showEmptyWorkspace();
   } else {
     openPage(state.activeId);
   }
   editor?.refreshPageLinks();
   renderFavorite();
-  showToast('Page deleted');
+  const message =
+    ids.size > 1
+      ? `Moved “${label}” and ${ids.size - 1} nested to Trash`
+      : `Moved “${label}” to Trash`;
+  showToast(message, { label: 'Undo', action: () => restoreFromTrash(id) });
+}
+
+function restoreFromTrash(id: string): void {
+  const record = state.pages[id];
+  if (!record || !isTrashed(record)) return;
+  const inputs = treeInputs();
+  const targetParentId = resolveRestoreParentId(inputs, id);
+  const ids = collectRestoreTargetIds(inputs, id);
+  if (ids.size === 0) return;
+  const now = Date.now();
+  for (const targetId of ids) {
+    const target = state.pages[targetId];
+    if (!target) continue;
+    delete target.deletedAt;
+    target.updatedAt = now;
+  }
+  record.parentId = targetParentId;
+  if (targetParentId) collapsed.delete(targetParentId);
+  if (currentView === 'trash') currentView = 'all';
+  saveState(state);
+  openPage(id);
+  editor?.refreshPageLinks();
+  const label = titleOf(record);
+  showToast(
+    ids.size > 1
+      ? `Restored “${label}” and ${ids.size - 1} nested`
+      : `Restored “${label}”`
+  );
+}
+
+function deletePermanently(id: string): void {
+  const record = state.pages[id];
+  if (!record) return;
+  const label = titleOf(record);
+  const ids = isTrashed(record)
+    ? collectRestoreTargetIds(treeInputs(), id, { includeAllDescendants: true })
+    : collectTrashTargetIds(treeInputs(), id);
+  const removeIds = ids.size > 0 ? ids : new Set([id]);
+  const nestedCount = removeIds.size - 1;
+  const confirmMessage =
+    nestedCount > 0
+      ? `Delete “${label}” and ${nestedCount} nested ${nestedCount === 1 ? 'page' : 'pages'} permanently? This cannot be undone.`
+      : `Delete “${label}” permanently? This cannot be undone.`;
+  if (!window.confirm(confirmMessage)) return;
+  for (const targetId of removeIds) delete state.pages[targetId];
+  if (state.activeId && removeIds.has(state.activeId)) {
+    if (currentView === 'trash') {
+      const nextTrashed = partitionTrashedPages(treeInputs()).trashed[0]?.id ?? null;
+      state.activeId = nextTrashed ?? firstActivePageId();
+    } else {
+      state.activeId = firstActivePageId();
+    }
+  }
+  saveState(state);
+  renderTree();
+  if (!state.activeId) {
+    showEmptyWorkspace();
+  } else {
+    openPage(state.activeId);
+  }
+  editor?.refreshPageLinks();
+  renderFavorite();
+  showToast('Deleted permanently');
+}
+
+function emptyTrash(): void {
+  const { trashed } = partitionTrashedPages(treeInputs());
+  if (trashed.length === 0) return;
+  const count = trashed.length;
+  if (
+    !window.confirm(
+      `Permanently delete ${count} ${count === 1 ? 'page' : 'pages'} in Trash? This cannot be undone.`
+    )
+  ) {
+    return;
+  }
+  for (const item of trashed) delete state.pages[item.id];
+  if (state.activeId && !state.pages[state.activeId]) {
+    state.activeId = firstActivePageId();
+  }
+  saveState(state);
+  renderTree();
+  if (!state.activeId) {
+    showEmptyWorkspace();
+  } else {
+    openPage(state.activeId);
+  }
+  editor?.refreshPageLinks();
+  renderFavorite();
+  showToast('Trash emptied');
 }
 
 function download(filename: string, content: string, type: string): void {
@@ -953,6 +1265,7 @@ function openSearch(): void {
     const trimmed = query.trim();
     if (!trimmed) {
       results = Object.entries(state.pages)
+        .filter(([, record]) => !isTrashed(record))
         .sort((a, b) => b[1].updatedAt - a[1].updatedAt)
         .map(([docId, record]) => ({
           docId,
@@ -962,7 +1275,7 @@ function openSearch(): void {
           score: 1,
         }));
     } else {
-      results = searchWorkspacePages(allDocs(), trimmed);
+      results = searchWorkspacePages(activeDocs(), trimmed);
     }
     active = 0;
     render();
@@ -1110,11 +1423,30 @@ function openEmbed(): void {
 
 /* ---------------- chrome ---------------- */
 
-function showToast(message: string): void {
-  toastElement.textContent = message;
+function showToast(message: string, action?: { label: string; action: () => void }): void {
+  toastElement.replaceChildren();
+  const text = document.createElement('span');
+  text.textContent = message;
+  toastElement.append(text);
+  toastElement.classList.toggle('has-action', Boolean(action));
+  if (action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'toast-action';
+    button.textContent = action.label;
+    button.addEventListener('click', () => {
+      window.clearTimeout(toastTimer);
+      toastElement.classList.remove('show', 'has-action');
+      action.action();
+    });
+    toastElement.append(button);
+  }
   toastElement.classList.add('show');
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => toastElement.classList.remove('show'), 1800);
+  toastTimer = window.setTimeout(
+    () => toastElement.classList.remove('show', 'has-action'),
+    action ? 5000 : 1800
+  );
 }
 
 function applyTheme(): void {
@@ -1132,25 +1464,44 @@ function applyTheme(): void {
 function initEvents(): void {
   for (const button of document.querySelectorAll<HTMLElement>('.nav-item')) {
     button.addEventListener('click', () => {
-      currentView = button.dataset.view === 'favorites' ? 'favorites' : 'all';
+      const view = button.dataset.view;
+      currentView = view === 'favorites' ? 'favorites' : view === 'trash' ? 'trash' : 'all';
       renderTree();
       renderCrumbs();
     });
   }
 
   $('#search-trigger').addEventListener('click', openSearch);
-  $('#new-page').addEventListener('click', () => newPage(null));
+  newPageButton.addEventListener('click', () => newPage(null));
+  emptyTrashButton.addEventListener('click', emptyTrash);
+  trashSearch.addEventListener('input', () => {
+    trashQuery = trashSearch.value;
+    renderTree();
+  });
+  $('#banner-restore').addEventListener('click', () => {
+    if (state.activeId) restoreFromTrash(state.activeId);
+  });
+  $('#banner-delete').addEventListener('click', () => {
+    if (state.activeId) deletePermanently(state.activeId);
+  });
   $('#empty-new').addEventListener('click', () => newPage(null));
   $('#embed-btn').addEventListener('click', openEmbed);
   pageMenuButton.addEventListener('click', topbarMenu);
   favoriteButton.addEventListener('click', () => {
-    const record = activeRecord();
-    if (!record || !state.activeId) return;
-    record.favorite = !record.favorite;
-    record.updatedAt = Date.now();
-    saveState(state);
-    renderFavorite();
-    renderTree();
+    if (state.activeId) toggleFavorite(state.activeId);
+  });
+
+  pageTree.addEventListener('contextmenu', event => {
+    if (event.shiftKey) return;
+    const row = (event.target as Element | null)?.closest<HTMLElement>('.page-row');
+    const pageId = row?.dataset.pageId;
+    if (!pageId) return;
+    const record = state.pages[pageId];
+    if (!record) return;
+    event.preventDefault();
+    const anchor = pointAnchor(event.clientX, event.clientY);
+    if (isTrashed(record)) openTrashedPageMenu(pageId, anchor);
+    else openPageMenu(pageId, anchor);
   });
 
   $('#theme-toggle').addEventListener('click', () => {
@@ -1212,8 +1563,8 @@ function initEvents(): void {
 
 /* ---------------- boot ---------------- */
 
-if (!state.activeId && Object.keys(state.pages).length > 0) {
-  state.activeId = Object.keys(state.pages)[0] ?? null;
+if (!state.activeId) {
+  state.activeId = firstActivePageId();
 }
 applyTheme();
 initEvents();

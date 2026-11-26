@@ -79,11 +79,16 @@ import {
   offsetToDomPoint,
   selectionRect,
 } from './dom.js';
+import { pointAnchor, type FloatingAnchor } from './floating.js';
 import { icon } from './icons.js';
 import { blockRange, orderedRange, selectionBlocks } from './selection.js';
 import { readRunsFromDom, refreshInlinePageChips } from './inline-dom.js';
 import { Menu, type MenuItem } from './menu.js';
-import { buildBlockMenuItems, buildSlashMenuItems } from './menu-items.js';
+import {
+  buildBlockMenuItems,
+  buildMultiBlockMenuItems,
+  buildSlashMenuItems,
+} from './menu-items.js';
 import { styles } from './styles.js';
 import { LinkPopover, Toolbar, type ToolbarMark } from './toolbar.js';
 
@@ -1181,7 +1186,7 @@ export class NobitaEditor implements BlockHost {
     this.#commit(setCalloutTone(this.store.doc, blockId, tone), this.store.selection);
   }
 
-  openBlockMenu(blockId: string, anchor: HTMLElement): void {
+  openBlockMenu(blockId: string, anchor: HTMLElement | FloatingAnchor): void {
     const block = findBlock(this.store.doc.blocks, blockId);
     if (!block) return;
     const items = buildBlockMenuItems({
@@ -1194,10 +1199,39 @@ export class NobitaEditor implements BlockHost {
       copyLink: () => this.#copyBlockLink(blockId),
       deleteBlock: () => this.#deleteBlock(blockId),
     });
+    const rect =
+      anchor instanceof Element
+        ? rectAnchor(anchor.getBoundingClientRect())
+        : { x: anchor.left, y: anchor.top, ...anchor };
     this.#menu.open({
       items,
-      anchor: rectAnchor(anchor.getBoundingClientRect()),
+      anchor: rect,
       width: 300,
+    });
+  }
+
+  #openMultiBlockMenu(anchor: FloatingAnchor): void {
+    const blocks = selectedTopLevelBlocks(this.store.doc.blocks, this.#selectedBlockIds);
+    if (blocks.length === 0) return;
+    const items = buildMultiBlockMenuItems({
+      count: blocks.length,
+      copyBlocks: () => {
+        void this.#writeBlocksToClipboard(blocks.map(duplicateBlockTree));
+      },
+      copyMarkdown: () => {
+        const markdown = blocksToMarkdown(
+          { version: 1, id: 'clipboard', title: '', blocks: blocks.map(duplicateBlockTree) },
+          { title: false }
+        );
+        void this.#writePlainTextToClipboard(markdown);
+      },
+      duplicateBlocks: () => this.#duplicateSelectedBlocks(),
+      deleteBlocks: () => this.#deleteSelectedBlocks(),
+    });
+    this.#menu.open({
+      items,
+      anchor: { x: anchor.left, y: anchor.top, ...anchor },
+      width: 260,
     });
   }
 
@@ -1476,6 +1510,7 @@ export class NobitaEditor implements BlockHost {
     body.addEventListener(
       'pointerdown',
       event => {
+        if (event.button === 2) return;
         const target = event.target instanceof Element ? event.target : null;
         const drag = target?.closest<HTMLElement>('.nb-drag');
         if (drag) {
@@ -1509,6 +1544,31 @@ export class NobitaEditor implements BlockHost {
           event.preventDefault();
           this.#focusBlock(nearest, 0);
         }
+      },
+      { signal }
+    );
+
+    body.addEventListener(
+      'contextmenu',
+      event => {
+        if (this.#readonly || event.shiftKey) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target) return;
+        if (target.closest('.nb-table, .nb-db, .nb-caption, .nb-image-placeholder, input, textarea, select')) {
+          return;
+        }
+        const blockId = target.closest<HTMLElement>('.nb-block')?.dataset.blockId;
+        if (!blockId) return;
+        event.preventDefault();
+        this.#toolbar.hide();
+        this.#linkPopover.hide();
+        const anchor = pointAnchor(event.clientX, event.clientY);
+        if (this.#selectedBlockIds.size > 1 && this.#selectedBlockIds.has(blockId)) {
+          this.#openMultiBlockMenu(anchor);
+          return;
+        }
+        this.#setBlockSelection([blockId], blockId, blockId, false);
+        this.openBlockMenu(blockId, anchor);
       },
       { signal }
     );
@@ -2607,21 +2667,25 @@ export class NobitaEditor implements BlockHost {
 
     if (mod && key === 'd') {
       event.preventDefault();
-      if (this.#readonly) return;
-      const { doc, duplicatedIds } = duplicateBlocks(this.store.doc, this.#selectedBlockIds);
-      if (duplicatedIds.length === 0) return;
-      const firstDup = duplicatedIds[0]!;
-      const lastDup = duplicatedIds[duplicatedIds.length - 1]!;
-      this.#commit(
-        doc,
-        {
-          anchor: { blockId: firstDup, offset: 0 },
-          focus: { blockId: lastDup, offset: 0 },
-        },
-        { restore: false }
-      );
-      this.#setBlockSelection(duplicatedIds, firstDup, lastDup);
+      this.#duplicateSelectedBlocks();
     }
+  }
+
+  #duplicateSelectedBlocks(): void {
+    if (this.#readonly || this.#selectedBlockIds.size === 0) return;
+    const { doc, duplicatedIds } = duplicateBlocks(this.store.doc, this.#selectedBlockIds);
+    if (duplicatedIds.length === 0) return;
+    const firstDup = duplicatedIds[0]!;
+    const lastDup = duplicatedIds[duplicatedIds.length - 1]!;
+    this.#commit(
+      doc,
+      {
+        anchor: { blockId: firstDup, offset: 0 },
+        focus: { blockId: lastDup, offset: 0 },
+      },
+      { restore: false }
+    );
+    this.#setBlockSelection(duplicatedIds, firstDup, lastDup);
   }
 
   #deleteSelectedBlocks(): void {

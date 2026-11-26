@@ -34,7 +34,12 @@ import {
 } from './database-dom.js';
 import { DatabaseRichTextController } from './database-rich-text.js';
 import { handleHistoryKey, nativeSelection, placeCaret } from './dom.js';
-import { beginWindowDrag, openAnchoredPopover } from './floating.js';
+import {
+  beginWindowDrag,
+  openAnchoredPopover,
+  pointAnchor,
+  type FloatingAnchor,
+} from './floating.js';
 import { icon } from './icons.js';
 import { renderInlineRuns } from './inline-dom.js';
 import { parseTsv, tsvCell } from './tsv.js';
@@ -171,6 +176,9 @@ export class SimpleTableView {
     this.element.addEventListener('cut', this.#onCut, true);
     this.element.addEventListener('paste', this.#onPaste, true);
     this.element.addEventListener('click', this.#onClickCapture, true);
+    this.element.addEventListener('contextmenu', this.#onContextMenu, {
+      signal: this.#globalEvents.signal,
+    });
     this.render();
   }
 
@@ -1380,7 +1388,155 @@ export class SimpleTableView {
     content.append(button);
   }
 
-  #openAxisMenu(axis: 'row' | 'column', id: string, anchor: HTMLElement): void {
+  #onContextMenu = (event: MouseEvent): void => {
+    if (this.#readonly || event.shiftKey) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    this.#richText.hideToolbar();
+    const anchor = pointAnchor(event.clientX, event.clientY);
+    const rowHandle = target.closest<HTMLElement>('.nb-table-row-handle[data-row-id]');
+    if (rowHandle?.dataset.rowId) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.#openAxisMenu('row', rowHandle.dataset.rowId, anchor);
+      return;
+    }
+    const colHandle = target.closest<HTMLElement>('.nb-table-col-handle[data-column-id]');
+    if (colHandle?.dataset.columnId) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.#openAxisMenu('column', colHandle.dataset.columnId, anchor);
+      return;
+    }
+    const td = target.closest<HTMLElement>('td.nb-table-cell-wrap[data-row-id][data-column-id]');
+    if (td?.dataset.rowId && td.dataset.columnId) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.#openCellContextMenu(td.dataset.rowId, td.dataset.columnId, anchor);
+    }
+  };
+
+  #openCellContextMenu(rowId: string, columnId: string, anchor: FloatingAnchor): void {
+    if (this.#readonly) return;
+    const row = this.#data.rows.find(item => item.id === rowId);
+    const column = this.#data.columns.find(item => item.id === columnId);
+    if (!row || !column) return;
+    const content = this.#menuContent();
+    this.#addColors(content, row.backgroundColor, color => {
+      this.#host.commit(setTableRowColor(this.#data, rowId, color));
+    });
+    const actions = el('div', 'nb-table-menu-actions');
+    if (this.#area) {
+      this.#addMenuItem(
+        actions,
+        'Clear selected cells',
+        () => this.#clearSelectedCells(),
+        false,
+        false,
+        icon.x
+      );
+    }
+    this.#addMenuItem(
+      actions,
+      'Insert row above',
+      () => {
+        const result = insertTableRow(this.#data, rowId, 'before');
+        this.#host.commit(result.data);
+      },
+      false,
+      false,
+      icon.arrowUp
+    );
+    this.#addMenuItem(
+      actions,
+      'Insert row below',
+      () => {
+        const result = insertTableRow(this.#data, rowId, 'after');
+        this.#host.commit(result.data);
+      },
+      false,
+      false,
+      icon.arrowDown
+    );
+    this.#addMenuItem(
+      actions,
+      'Duplicate row',
+      () => {
+        const result = duplicateTableRow(this.#data, rowId);
+        if (result.rowId) this.#host.commit(result.data);
+      },
+      false,
+      false,
+      icon.duplicate
+    );
+    this.#addMenuItem(
+      actions,
+      'Clear row contents',
+      () => this.#host.commit(clearTableRow(this.#data, rowId)),
+      false,
+      false,
+      icon.x
+    );
+    this.#addMenuItem(
+      actions,
+      'Delete row',
+      () => {
+        const next = deleteTableRow(this.#data, rowId);
+        if (next !== this.#data) this.#host.commit(next);
+      },
+      this.#data.rows.length <= 1,
+      true,
+      icon.trash
+    );
+    this.#addMenuItem(
+      actions,
+      'Insert column left',
+      () => {
+        const result = insertTableColumn(this.#data, columnId, 'before');
+        this.#host.commit(result.data);
+      },
+      false,
+      false,
+      icon.arrowLeft
+    );
+    this.#addMenuItem(
+      actions,
+      'Insert column right',
+      () => {
+        const result = insertTableColumn(this.#data, columnId, 'after');
+        this.#host.commit(result.data);
+      },
+      false,
+      false,
+      icon.arrowRight
+    );
+    this.#addMenuItem(
+      actions,
+      'Duplicate column',
+      () => {
+        const result = duplicateTableColumn(this.#data, columnId);
+        if (result.columnId) this.#host.commit(result.data);
+      },
+      false,
+      false,
+      icon.duplicate
+    );
+    this.#addMenuItem(
+      actions,
+      'Delete column',
+      () => {
+        const next = deleteTableColumn(this.#data, columnId);
+        if (next !== this.#data) this.#host.commit(next);
+      },
+      this.#data.columns.length <= 1,
+      true,
+      icon.trash
+    );
+    content.append(actions);
+    this.#showMenu(anchor, content);
+  }
+
+  #openAxisMenu(axis: 'row' | 'column', id: string, anchor: HTMLElement | FloatingAnchor): void {
     if (this.#readonly) return;
     const isRow = axis === 'row';
     const items = isRow ? this.#data.rows : this.#data.columns;
@@ -1497,7 +1653,7 @@ export class SimpleTableView {
     this.#showMenu(anchor, content);
   }
 
-  #showMenu(anchor: HTMLElement, content: HTMLElement): void {
+  #showMenu(anchor: HTMLElement | FloatingAnchor, content: HTMLElement): void {
     this.#closePopover();
     const root = this.element.getRootNode() as ShadowRoot;
     const overlay = root.querySelector<HTMLElement>('.nb-overlay');
