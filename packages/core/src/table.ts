@@ -1,3 +1,4 @@
+import { MAX_CELL_TEXT_LENGTH, buildTableOccupancyGrid, clearTableRange, withSpan, reconcileTableAxis, tableSpanAt } from './table-spans.js';
 import { createId } from './id.js';
 import {
   cloneRuns,
@@ -13,7 +14,6 @@ import type { InlineRun, TableCell, TableColumn, TableData, TableRow } from './t
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const MAX_CELL_TEXT_LENGTH = 10000;
 const MAX_TABLE_COLUMNS = 100;
 const MAX_TABLE_ROWS = 1000;
 
@@ -87,8 +87,7 @@ export function createTableData(options: { rows?: number; columns?: number } = {
   };
 }
 
-function parseCell(value: unknown): TableCell | undefined {
-  if (!isRecord(value)) return undefined;
+function parseCell(value: Record<string, unknown>): TableCell {
   if (value.runs !== undefined) {
     const parsed = parseInlineRuns(value.runs);
     const runs =
@@ -100,8 +99,7 @@ function parseCell(value: unknown): TableCell | undefined {
       return hasRichMarks(runs) ? { text, runs } : { text };
     }
   }
-  const text = asString(value.text);
-  return text ? { text } : undefined;
+  return { text: asString(value.text) };
 }
 
 /** Validate untrusted table props, filling ids and defaults. */
@@ -136,18 +134,31 @@ export function normalizeTableData(value: unknown): TableData {
 
   const rowIds = new Set<string>();
   const rows: TableRow[] = [];
+  const occupiedUntil = new Array<number>(columns.length).fill(0);
+  const spanSize = (size: unknown, remaining: number) =>
+    typeof size === 'number' && Number.isInteger(size) && size > 1 ? Math.min(size, remaining) : 1;
   if (Array.isArray(value.rows)) {
-    for (const item of value.rows.slice(0, MAX_TABLE_ROWS)) {
-      if (!isRecord(item)) continue;
+    const rawRows = value.rows.slice(0, MAX_TABLE_ROWS).filter(isRecord);
+    for (const item of rawRows) {
       const rawId = typeof item.id === 'string' && item.id.length > 0 ? item.id : '';
       const id = rawId && !rowIds.has(rawId) ? rawId : createId('tr');
       rowIds.add(id);
       const cells: Record<string, TableCell> = {};
       if (isRecord(item.cells)) {
-        for (const [columnId, cell] of Object.entries(item.cells)) {
-          if (!columnIds.has(columnId)) continue;
+        for (const [c, column] of columns.entries()) {
+          if (occupiedUntil[c]! > rows.length) continue;
+          const cell = item.cells[column.id];
+          if (!isRecord(cell)) continue;
           const parsed = parseCell(cell);
-          if (parsed) cells[columnId] = parsed;
+          const height = spanSize(cell.rowspan, rawRows.length - rows.length);
+          let width = spanSize(cell.colspan, columns.length - c);
+          for (let i = 1; i < width; i++) {
+            if (occupiedUntil[c + i]! > rows.length) { width = i; break; }
+          }
+          if (height > 1 || width > 1) {
+            cells[column.id] = withSpan(parsed, height, width);
+            occupiedUntil.fill(rows.length + height, c, c + width);
+          } else if (parsed.text) cells[column.id] = parsed;
         }
       }
       const backgroundColor =
@@ -176,15 +187,15 @@ export function tableCellText(row: TableRow | undefined, columnId: string): stri
 function cloneTableCell(cell: TableCell): TableCell {
   const text = cell.text ?? (cell.runs ? plainText(cell.runs) : '');
   return cell.runs && cell.runs.length > 0
-    ? { text, runs: cloneRuns(cell.runs) }
-    : { text };
+    ? { ...cell, text, runs: cloneRuns(cell.runs) }
+    : { ...cell, text };
 }
 
 function cloneCells(cells: Record<string, TableCell>, columns: readonly TableColumn[]): Record<string, TableCell> {
   const out: Record<string, TableCell> = {};
   for (const column of columns) {
     const cell = cells[column.id];
-    if (cell && (cell.text || (cell.runs && cell.runs.length > 0))) {
+    if (cell && (cell.text || cell.colspan || cell.rowspan || cell.runs?.length)) {
       out[column.id] = cloneTableCell(cell);
     }
   }
@@ -218,7 +229,7 @@ export function duplicateTableData(data: TableData): TableData {
     const cells: Record<string, TableCell> = {};
     for (const [oldId, cell] of Object.entries(row.cells)) {
       const nextId = columnMap.get(oldId);
-      if (nextId && (cell.text || (cell.runs && cell.runs.length > 0))) {
+      if (nextId && (cell.text || cell.colspan || cell.rowspan || cell.runs?.length)) {
         cells[nextId] = cloneTableCell(cell);
       }
     }
@@ -237,6 +248,7 @@ export function setTableCellText(
   columnId: string,
   text: string
 ): TableData {
+  [rowId, columnId] = anchorIds(data, rowId, columnId);
   const rowIndex = data.rows.findIndex(row => row.id === rowId);
   if (rowIndex < 0) return data;
   const row = data.rows[rowIndex]!;
@@ -245,6 +257,14 @@ export function setTableCellText(
   const rows = data.rows.slice();
   rows[rowIndex] = { ...row, cells };
   return { ...data, rows };
+}
+
+function anchorIds(data: TableData, rowId: string, columnId: string): [string, string] {
+  if (!buildTableOccupancyGrid(data).spans.length) return [rowId, columnId];
+  const r = data.rows.findIndex(row => row.id === rowId);
+  const c = data.columns.findIndex(col => col.id === columnId);
+  const span = r >= 0 && c >= 0 ? tableSpanAt(data, r, c) : undefined;
+  return span ? [data.rows[span.rowStart]!.id, data.columns[span.columnStart]!.id] : [rowId, columnId];
 }
 
 function updatePlainCell(
@@ -257,7 +277,7 @@ function updatePlainCell(
   const current = cells[columnId];
   if ((current?.text ?? '') === value && !current?.runs) return cells;
   if (cells === original) cells = { ...cells };
-  if (value) cells[columnId] = { text: value };
+  if (value || current?.rowspan || current?.colspan) cells[columnId] = withSpan({ text: value }, current?.rowspan ?? 1, current?.colspan ?? 1);
   else delete cells[columnId];
   return cells;
 }
@@ -277,7 +297,9 @@ export function setTableRangeText(
     let cells = row.cells;
     for (const [columnOffset, value] of values.entries()) {
       const column = data.columns[columnStart + columnOffset];
-      if (column) cells = updatePlainCell(row.cells, cells, column.id, value);
+      const c = columnStart + columnOffset;
+      const span = column && tableSpanAt(data, index, c);
+      if (column && (!span || (span.rowStart === index && span.columnStart === c))) cells = updatePlainCell(row.cells, cells, column.id, value);
     }
     if (cells === row.cells) continue;
     if (rows === data.rows) rows = rows.slice();
@@ -293,12 +315,13 @@ export function setTableCellRuns(
   columnId: string,
   runs: readonly InlineRun[]
 ): TableData {
+  [rowId, columnId] = anchorIds(data, rowId, columnId);
   const row = data.rows.find(item => item.id === rowId);
   if (!row) return data;
   const normalized = clampRuns(runs);
   const text = plainText(normalized);
   const current = row.cells[columnId];
-  if (!text) {
+  if (!text && !current?.colspan && !current?.rowspan) {
     if (!current) return data;
     return {
       ...data,
@@ -325,7 +348,7 @@ export function setTableCellRuns(
       if (item.id !== rowId) return item;
       return {
         ...item,
-        cells: { ...item.cells, [columnId]: nextCell },
+        cells: { ...item.cells, [columnId]: withSpan(nextCell, current?.rowspan ?? 1, current?.colspan ?? 1) },
       };
     }),
   };
@@ -342,12 +365,12 @@ export function insertTableRow(
   const at = index < 0 ? data.rows.length : position === 'before' ? index : index + 1;
   const rows = data.rows.slice();
   rows.splice(at, 0, row);
-  return { data: { ...data, rows }, rowId: row.id };
+  return { data: reconcileTableAxis(data, { ...data, rows }, 'rows'), rowId: row.id };
 }
 
 export function deleteTableRow(data: TableData, rowId: string): TableData {
   if (data.rows.length <= 1) return data;
-  return { ...data, rows: data.rows.filter(row => row.id !== rowId) };
+  return reconcileTableAxis(data, { ...data, rows: data.rows.filter(row => row.id !== rowId) }, 'rows');
 }
 
 export function insertTableColumn(
@@ -363,19 +386,19 @@ export function insertTableColumn(
   const at = index < 0 ? data.columns.length : position === 'before' ? index : index + 1;
   const columns = data.columns.slice();
   columns.splice(at, 0, column);
-  return { data: { ...data, columns }, columnId: column.id };
+  return { data: reconcileTableAxis(data, { ...data, columns }, 'columns'), columnId: column.id };
 }
 
 export function deleteTableColumn(data: TableData, columnId: string): TableData {
   if (data.columns.length <= 1) return data;
-  return {
+  return reconcileTableAxis(data, {
     columns: data.columns.filter(column => column.id !== columnId),
     rows: data.rows.map(row => {
       const cells = { ...row.cells };
       delete cells[columnId];
       return { ...row, cells };
     }),
-  };
+  }, 'columns');
 }
 
 export function setTableColumnWidth(data: TableData, columnId: string, width: number): TableData {
@@ -420,7 +443,7 @@ export function duplicateTableRow(
   };
   const rows = data.rows.slice();
   rows.splice(index + 1, 0, row);
-  return { data: { ...data, rows }, rowId: row.id };
+  return { data: reconcileTableAxis(data, { ...data, rows }, 'rows'), rowId: row.id };
 }
 
 export function duplicateTableColumn(
@@ -439,7 +462,7 @@ export function duplicateTableColumn(
   const columns = data.columns.slice();
   columns.splice(index + 1, 0, column);
   return {
-    data: {
+    data: reconcileTableAxis(data, {
       columns,
       rows: data.rows.map(row => {
         const cell = row.cells[source.id];
@@ -449,7 +472,7 @@ export function duplicateTableColumn(
           cells: { ...row.cells, [column.id]: cloneTableCell(cell) },
         };
       }),
-    },
+    }, 'columns'),
     columnId: column.id,
   };
 }
@@ -466,7 +489,7 @@ export function moveTableRow(
   const [row] = rows.splice(index, 1);
   if (!row) return data;
   rows.splice(target, 0, row);
-  return { ...data, rows };
+  return reconcileTableAxis(data, { ...data, rows }, 'rows');
 }
 
 export function moveTableColumn(
@@ -481,7 +504,7 @@ export function moveTableColumn(
   const [column] = columns.splice(index, 1);
   if (!column) return data;
   columns.splice(target, 0, column);
-  return { ...data, columns };
+  return reconcileTableAxis(data, { ...data, columns }, 'columns');
 }
 
 function moveItemTo<T extends { id: string }>(
@@ -512,7 +535,7 @@ export function moveTableRowTo(
   position: 'before' | 'after' = 'before'
 ): TableData {
   const rows = moveItemTo(data.rows, rowId, targetRowId, position);
-  return rows ? { ...data, rows } : data;
+  return rows ? reconcileTableAxis(data, { ...data, rows }, 'rows') : data;
 }
 
 /** Move a column immediately before or after `targetColumnId` for drag reordering. */
@@ -523,28 +546,17 @@ export function moveTableColumnTo(
   position: 'before' | 'after' = 'before'
 ): TableData {
   const columns = moveItemTo(data.columns, columnId, targetColumnId, position);
-  return columns ? { ...data, columns } : data;
+  return columns ? reconcileTableAxis(data, { ...data, columns }, 'columns') : data;
 }
 
 export function clearTableRow(data: TableData, rowId: string): TableData {
-  const row = data.rows.find(item => item.id === rowId);
-  if (!row || Object.keys(row.cells).length === 0) return data;
-  return {
-    ...data,
-    rows: data.rows.map(item => (item.id === rowId ? { ...item, cells: {} } : item)),
-  };
+  const index = data.rows.findIndex(row => row.id === rowId);
+  return clearTableRange(data, { rowStart: index, rowEnd: index, columnStart: 0, columnEnd: data.columns.length - 1 });
 }
 
 export function clearTableColumn(data: TableData, columnId: string): TableData {
-  let changed = false;
-  const rows = data.rows.map(row => {
-    if (!row.cells[columnId]) return row;
-    changed = true;
-    const cells = { ...row.cells };
-    delete cells[columnId];
-    return { ...row, cells };
-  });
-  return changed ? { ...data, rows } : data;
+  const index = data.columns.findIndex(col => col.id === columnId);
+  return clearTableRange(data, { rowStart: 0, rowEnd: data.rows.length - 1, columnStart: index, columnEnd: index });
 }
 
 export function setTableRowColor(

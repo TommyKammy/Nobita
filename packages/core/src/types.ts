@@ -37,6 +37,8 @@ export type DatabaseColumnType =
 export type DatabaseVariant = 'table' | 'database';
 
 export interface TableCell {
+  colspan?: number;
+  rowspan?: number;
   text: string;
   /** Rich-text runs; `text` remains the plain projection. */
   runs?: InlineRun[];

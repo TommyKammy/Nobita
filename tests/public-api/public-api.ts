@@ -24,6 +24,10 @@ import {
   createBlock,
   createDoc,
   createTableData,
+  mergeTableCells,
+  unmergeTableCell,
+  unmergeTableRange,
+  type TableRect,
   extractPageLinks,
   getBacklinks,
   getPageBreadcrumbs,
@@ -88,7 +92,10 @@ export function publicApiFixture(host: HTMLElement): void {
   void collectRestoreTargetIds([{ id: 'p1', title: 'Page', parentId: null, deletedAt: 1 }], 'p1');
   void searchWorkspacePages([doc], 'Hello');
   const table: TableData = createTableData({ rows: 2, columns: 2 });
-  void table;
+  const rect: TableRect = { rowStart: 0, rowEnd: 1, columnStart: 0, columnEnd: 1 };
+  const merged = mergeTableCells(table, rect);
+  void unmergeTableRange(merged, rect);
+  void unmergeTableCell(merged, merged.rows[0]!.id, merged.columns[0]!.id);
   const element = new NobitaEditorElement();
   defineNobitaEditor('public-api-editor');
   void element;

@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **106.5 KB gzipped** (`390.5 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core, rich-text tables, data views, block selection, and context menus.
+- **105.9 KB gzipped** (`398.8 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core, rich-text tables, data views, block selection, and context menus.
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -117,7 +117,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 106.5 KB gzipped bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 105.9 KB gzipped bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -249,6 +249,8 @@ A document is deliberately simple, stable JSON:
 
 Column types are `text`, `number`, `progress`, `select`, `multi-select`, `date`, `checkbox`, `url`, `image`, `files`, and `people`. Text cells store optional rich-text `runs` alongside the plain `text` projection (used for search, filtering, sorting, statistics and TSV/Markdown export), `progress` renders an interactive 0–100% bar, `image` supports validated URLs or the host `uploadImage` adapter with Board card covers (`view.coverColumnId`), and empty cells are omitted so documents stay compact. Rows can also carry an optional rich-text `page.content` body edited inside the record page panel, and rows, column headers, and board cards support right-click context menus. Each view stores its own column layout (order, width, visibility and footer stat), nested `filter` tree, `sorts`, `groupBy` and `groupProperties` (group order, hidden/collapsed state and `manuallyCardSort`). Markdown/HTML tables import as simple tables; TSV paste fills database cells. Legacy documents with a single `view`, `sort`, flat `filters` or `hiddenColumns` still load and migrate on the next edit.
 
+Simple tables support merged cells. Select a rectangular range by dragging or Shift-clicking, then choose **Merge cells** from the context menu. Use **Split cell** to restore the cells. From the keyboard, extend the range with Shift+Arrow at a cell boundary and open the menu with Shift+F10. HTML preserves spans. Markdown and TSV keep the anchor text and leave covered positions empty. The combined text, including the newline between nonempty cells, must fit within 10,000 UTF-16 code units.
+
 ## API
 
 See [docs/public-api.md](docs/public-api.md) for the stable import surface, editor options, events and internal-module boundary.
@@ -369,7 +371,7 @@ Dark mode is built in (`theme="dark"` or `auto`). The shadow root uses `color-sc
 
 ## Testing
 
-Unit tests (`@nobita/core` + `@nobita/storage`, 146 tests), TypeScript + public API checks, and Playwright browser regression tests (221 tests), plus size and performance baselines, are documented in [docs/testing.md](docs/testing.md).
+Unit tests (`@nobita/core` + `@nobita/storage`, 152 tests), TypeScript + public API checks, and Playwright browser regression tests (229 tests), plus size and performance baselines, are documented in [docs/testing.md](docs/testing.md).
 
 ```bash
 pnpm typecheck
@@ -395,9 +397,9 @@ Bundle sizes (`pnpm size`):
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 390.5 KB | **106.5 KB** |
-| Editor IIFE (`nobita.global.js`) | 390.4 KB | **106.5 KB** |
-| Demo app (editor + UI + seed data) | 453.5 KB | 123.3 KB |
+| Editor ESM (`nobita.js`) | 398.8 KB | **105.9 KB** |
+| Editor IIFE (`nobita.global.js`) | 398.7 KB | **105.9 KB** |
+| Demo app (editor + UI + seed data) | 462.0 KB | 126.1 KB |
 
 The optional `@nobita/storage` package and `@nobita/core` workspace/Trash helpers are tree-shaken out of the editor bundle; they are only included when a host imports them.
 
@@ -430,7 +432,6 @@ A command-by-command comparison with AFFiNE is in [docs/command-comparison.md](d
 ## Roadmap
 
 - Database: formulas and relations. Calendar view is intentionally out of scope.
-- Simple table: merged cells.
 - Collaboration adapter (Yjs/Automerge) behind an explicit interface.
 - Virtualized rendering for 10k+ block documents.
 - Vue/Svelte wrappers (the web component already works in both).

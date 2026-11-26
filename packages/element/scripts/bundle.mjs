@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { minify } from 'terser';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import esbuild from 'esbuild';
@@ -73,15 +74,29 @@ const shared = {
   plugins: [minifyStylesPlugin],
 };
 
+// Preserve source mappings through the final compression pass for both standalone builds.
+async function bundle(options) {
+  const { outputFiles } = await esbuild.build({ ...shared, ...options, write: false });
+  const js = outputFiles.find(file => file.path.endsWith('.js'));
+  const map = outputFiles.find(file => file.path.endsWith('.js.map'));
+  const filename = path.basename(js.path);
+  const result = await minify({ [filename]: js.text }, {
+    module: options.format === 'esm',
+    ecma: 2022,
+    compress: { passes: 3 },
+    sourceMap: { content: map.text, filename, url: filename + '.map' },
+  });
+  await mkdir(path.dirname(js.path), { recursive: true });
+  await Promise.all([writeFile(js.path, result.code), writeFile(map.path, result.map)]);
+}
+
 await Promise.all([
-  esbuild.build({
-    ...shared,
+  bundle({
     entryPoints: ['src/index.ts'],
     format: 'esm',
     outfile: 'dist/nobita.js',
   }),
-  esbuild.build({
-    ...shared,
+  bundle({
     entryPoints: ['src/global.ts'],
     format: 'iife',
     outfile: 'dist/nobita.global.js',

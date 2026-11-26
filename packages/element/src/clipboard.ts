@@ -327,25 +327,36 @@ function languageOf(pre: Element): string {
 }
 
 function tableToSimpleTable(table: HTMLTableElement): TableData | null {
-  const allRows = Array.from(table.rows);
-  if (allRows.length === 0) return null;
-  const width = allRows.reduce((max, row) => Math.max(max, row.cells.length), 0);
-  if (width === 0) return null;
-  const columns = Array.from({ length: width }, () => createTableColumn());
-  const rows = allRows.map(row => {
-    const cells = row.cells;
-    const tableRow = createTableRow();
-    columns.forEach((column, index) => {
-      const cell = cells[index];
-      if (!cell) return;
-      const runs = inlineRuns(cell, true);
+  const elements = Array.from(table.rows).slice(0, 1000);
+  const rows = elements.map(() => createTableRow());
+  const columns: ReturnType<typeof createTableColumn>[] = [];
+  const occupiedUntil: number[] = [];
+  for (const [r, element] of elements.entries()) {
+    let c = 0;
+    for (const td of element.cells) {
+      while ((occupiedUntil[c] ?? 0) > r) c++;
+      if (c >= 100) break;
+      const group = element.parentElement as HTMLTableSectionElement;
+      const remaining = Math.min(rows.length - r, (group.rows?.length ?? elements.length) - element.sectionRowIndex);
+      const height = Math.max(1, Math.min(td.rowSpan || remaining, remaining));
+      let width = Math.min(td.colSpan, 100 - c);
+      for (let i = 1; i < width; i++) {
+        if ((occupiedUntil[c + i] ?? 0) > r) { width = i; break; }
+      }
+      while (columns.length < c + width) columns.push(createTableColumn());
+      const runs = inlineRuns(td, true);
       const text = plainText(runs);
-      if (!text) return;
-      tableRow.cells[column.id] = hasRichMarks(runs) ? { text, runs } : { text };
-    });
-    return tableRow;
-  });
-  return { columns, rows };
+      if (text || width > 1 || height > 1) {
+        rows[r]!.cells[columns[c]!.id] = {
+          text, ...(hasRichMarks(runs) ? { runs } : {}),
+          ...(width > 1 ? { colspan: width } : {}), ...(height > 1 ? { rowspan: height } : {}),
+        };
+      }
+      for (let i = 0; i < width; i++) occupiedUntil[c + i] = r + height;
+      c += width;
+    }
+  }
+  return columns.length ? { columns, rows } : null;
 }
 
 function convertElement(element: Element, out: Block[]): void {

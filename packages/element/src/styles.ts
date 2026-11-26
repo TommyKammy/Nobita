@@ -568,6 +568,7 @@ input, select, textarea { font: inherit; color: inherit; }
   table-layout: fixed;
   font-size: 14px;
 }
+.nb-table-grid tr:empty { height: 28px; }
 .nb-table-grid td {
   position: relative;
   border: 1px solid var(--nb-border);
