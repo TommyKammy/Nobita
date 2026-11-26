@@ -113,12 +113,15 @@ export {
   moveTableRowTo,
   normalizeTableData,
   setTableCellRuns,
+  hasRichMarks,
   setTableCellText,
   setTableColumnColor,
   setTableColumnWidth,
   setTableRowColor,
   tableCellText,
   tableToTsv,
+  tsvCell,
+  setTableRangeText,
 } from './table.js';
 
 export type {

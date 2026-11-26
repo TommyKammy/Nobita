@@ -16,7 +16,7 @@ import {
   plainText,
   runsLength,
   setTableCellRuns,
-  setTableCellText,
+  setTableRangeText,
   setTableColumnColor,
   setTableColumnWidth,
   setTableRowColor,
@@ -25,6 +25,7 @@ import {
 import type { PageInfo, TableCell, TableData } from '@nobita/core';
 import {
   btn,
+  cellKey,
   el,
   readRichTextRuns,
   runsSignature,
@@ -61,10 +62,6 @@ const TABLE_COLORS = PALETTE_COLORS.map(color => ({
   name: color.charAt(0).toUpperCase() + color.slice(1),
   color: HIGHLIGHT_HEX[color],
 }));
-
-function cellKey(rowId: string, columnId: string): string {
-  return `${rowId}\u0000${columnId}`;
-}
 
 interface TableAreaBounds {
   rowStart: number;
@@ -265,6 +262,9 @@ export class SimpleTableView {
     this.#richText.clearPendingMarks();
     this.#richText.resetToolbar();
     this.#closePopover();
+    const active = (this.element.getRootNode() as ShadowRoot).activeElement;
+    const focusedHandle = active instanceof HTMLButtonElement && this.element.contains(active)
+      ? active.dataset : undefined;
     this.#resetRefs();
     this.#colElements = [];
     this.#selectionOverlay = null;
@@ -327,12 +327,10 @@ export class SimpleTableView {
           vertical: boolean,
           map: Map<string, HTMLElement>
         ): HTMLElement => {
-          const handle = el('div', `nb-table-${axis}-handle`);
+          const handle = btn(`nb-table-${axis}-handle`, { ariaLabel: label });
           handle.dataset[`${axis}Id`] = id;
           handle.dataset.visible = 'false';
           handle.dataset.active = 'false';
-          handle.setAttribute('role', 'button');
-          handle.setAttribute('aria-label', label);
           handle.append(dots(vertical));
           handle.addEventListener(
             'pointerdown',
@@ -505,6 +503,11 @@ export class SimpleTableView {
     this.#syncedData = this.#data;
     this.#syncHover();
     this.#syncSelection();
+    if (focusedHandle?.rowId) {
+      (this.#rowHandles.get(focusedHandle.rowId) ?? this.#rowHandles.values().next().value)?.focus();
+    } else if (focusedHandle?.columnId) {
+      (this.#colHandles.get(focusedHandle.columnId) ?? this.#colHandles.values().next().value)?.focus();
+    }
   }
 
   #syncValues(): void {
@@ -871,19 +874,9 @@ export class SimpleTableView {
     const bounds = this.#areaBounds();
     if (!bounds) return;
     this.#area = null;
-    let next = this.#data;
-    for (let rowIndex = bounds.rowStart; rowIndex <= bounds.rowEnd; rowIndex += 1) {
-      const row = this.#data.rows[rowIndex];
-      if (!row) continue;
-      for (
-        let columnIndex = bounds.columnStart;
-        columnIndex <= bounds.columnEnd;
-        columnIndex += 1
-      ) {
-        const column = this.#data.columns[columnIndex];
-        if (column) next = setTableCellText(next, row.id, column.id, '');
-      }
-    }
+    const emptyRow = Array<string>(bounds.columnEnd - bounds.columnStart + 1).fill('');
+    const grid = Array.from({ length: bounds.rowEnd - bounds.rowStart + 1 }, () => emptyRow);
+    const next = setTableRangeText(this.#data, bounds.rowStart, bounds.columnStart, grid);
     if (next !== this.#data) this.#host.commit(next);
     this.#syncSelection();
   }
@@ -926,7 +919,7 @@ export class SimpleTableView {
     event.stopPropagation();
 
     let data = this.#data;
-    const width = Math.max(0, ...grid.map(line => line.length));
+    const width = grid.reduce((max, line) => Math.max(max, line.length), 0);
     const neededColumns = bounds.columnStart + width;
     while (data.columns.length < neededColumns) {
       const last = data.columns[data.columns.length - 1];
@@ -942,31 +935,17 @@ export class SimpleTableView {
       data = result.data;
     }
 
-    let lastRowId = '';
-    let lastColumnId = '';
-    let widestColumn = -1;
-    grid.forEach((values, rowOffset) => {
-      const row = data.rows[bounds.rowStart + rowOffset];
-      if (!row) return;
-      lastRowId = row.id;
-      values.forEach((value, columnOffset) => {
-        const column = data.columns[bounds.columnStart + columnOffset];
-        if (!column) return;
-        data = setTableCellText(data, row.id, column.id, value);
-        if (columnOffset > widestColumn) {
-          widestColumn = columnOffset;
-          lastColumnId = column.id;
-        }
-      });
-    });
+    data = setTableRangeText(data, bounds.rowStart, bounds.columnStart, grid);
+    const lastRow = data.rows[Math.min(neededRows, data.rows.length) - 1];
+    const lastColumn = data.columns[Math.min(neededColumns, data.columns.length) - 1];
     const anchorRow = data.rows[bounds.rowStart];
     const anchorColumn = data.columns[bounds.columnStart];
     if (!anchorRow || !anchorColumn) return;
     this.#area = {
       anchorRowId: anchorRow.id,
       anchorColumnId: anchorColumn.id,
-      focusRowId: lastRowId || anchorRow.id,
-      focusColumnId: lastColumnId || anchorColumn.id,
+      focusRowId: lastRow?.id ?? anchorRow.id,
+      focusColumnId: lastColumn?.id ?? anchorColumn.id,
     };
     this.#host.commit(data);
     this.#syncSelection();
@@ -1304,10 +1283,11 @@ export class SimpleTableView {
       }
     }
     if (event.key === 'Tab') {
-      event.preventDefault();
       const rowIndex = this.#data.rows.findIndex(row => row.id === rowId);
       const columnIndex = this.#data.columns.findIndex(column => column.id === columnId);
       if (rowIndex < 0 || columnIndex < 0) return;
+      if (event.shiftKey && rowIndex === 0 && columnIndex === 0) return;
+      event.preventDefault();
       const nextColumn = event.shiftKey ? columnIndex - 1 : columnIndex + 1;
       if (nextColumn >= 0 && nextColumn < this.#data.columns.length) {
         this.focusCell(rowId, this.#data.columns[nextColumn]!.id, 'start');
@@ -1318,6 +1298,8 @@ export class SimpleTableView {
             ? this.#data.columns[this.#data.columns.length - 1]
             : this.#data.columns[0];
           if (targetColumn) this.focusCell(this.#data.rows[nextRow]!.id, targetColumn.id, 'start');
+        } else {
+          this.#colHandles.get(this.#data.columns[0]!.id)?.focus();
         }
       }
       return;
@@ -1401,7 +1383,7 @@ export class SimpleTableView {
       this.#openAxisMenu('row', rowHandle.dataset.rowId, anchor);
       return;
     }
-    const colHandle = target.closest<HTMLElement>('.nb-table-col-handle[data-column-id]');
+    const colHandle = target.closest<HTMLElement>('.nb-table-column-handle[data-column-id]');
     if (colHandle?.dataset.columnId) {
       event.preventDefault();
       event.stopPropagation();
@@ -1666,6 +1648,9 @@ export class SimpleTableView {
       place: { side: 'below', gap: 6, margin: 10, fallback: 'flip' },
       dismiss: { pointerTarget: root },
     });
+    if (anchor instanceof HTMLElement) {
+      content.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+    }
     popover.element.contentEditable = 'false';
     this.#popover = popover;
   }
@@ -1674,12 +1659,18 @@ export class SimpleTableView {
     const popover = this.#popover;
     if (!popover) return;
     this.#popover = null;
+    const restoreFocus = popover.element.matches(':focus-within');
+    const selected = this.#selected;
     popover.cleanup();
     popover.element.remove();
     if (this.#selected) {
       this.#selected = null;
       this.#syncSelection();
       this.#syncHover();
+    }
+    if (restoreFocus && selected) {
+      const handles = selected.type === 'row' ? this.#rowHandles : this.#colHandles;
+      handles.get(selected.id)?.focus();
     }
   }
 

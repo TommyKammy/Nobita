@@ -89,6 +89,20 @@ describe('SqlDocumentStore', () => {
     db.close();
   });
 
+  it('returns each concurrent writer its own revision', async () => {
+    const { db, sql } = await setup();
+    try {
+      let clock = 100;
+      const store = new SqlDocumentStore(sql, { now: () => ++clock });
+      const [first, second] = await Promise.all([store.save(doc('A')), store.save(doc('B'))]);
+      expect(first).toMatchObject({ title: 'A', version: 1, updatedAt: 101 });
+      expect(second).toMatchObject({ title: 'B', version: 2, updatedAt: 102 });
+      await expect(store.save(doc('stale'), { version: first.version })).rejects.toBeInstanceOf(DocumentConflictError);
+    } finally {
+      db.close();
+    }
+  });
+
   it('isolates workspaces and deletes documents', async () => {
     const { db, sql } = await setup();
     const alpha = new SqlDocumentStore(sql, { workspaceId: 'alpha' });

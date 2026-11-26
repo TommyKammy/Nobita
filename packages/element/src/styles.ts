@@ -635,6 +635,8 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .nb-table-row-handle,
 .nb-table-column-handle {
+  padding: 0;
+  border: 0;
   position: absolute;
   z-index: 4;
   display: flex;
@@ -672,6 +674,8 @@ input, select, textarea { font: inherit; color: inherit; }
   width: 2px;
   transform: translateX(-1px);
 }
+.nb-table-row-handle:focus-visible,
+.nb-table-column-handle:focus-visible,
 .nb-table-row-handle[data-visible="true"],
 .nb-table-column-handle[data-visible="true"],
 .nb-table-row-handle:hover,

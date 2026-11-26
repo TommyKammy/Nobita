@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Controlled React editor</title></head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React, { useState } from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { NobitaEditor } from '../../../packages/react/src/index.ts';
+      import { createBlock, createDoc } from '@nobita/core';
+
+      function ControlledEditor() {
+        const [doc, setDoc] = useState(() => createDoc({
+          blocks: [createBlock('paragraph', { id: 'controlled', text: 'Alpha' })],
+        }));
+        return React.createElement(NobitaEditor, {
+          doc,
+          onChange(next, meta) {
+            window.sources.push(meta.source);
+            if (window.sources.length < 5) setDoc(next);
+          },
+        });
+      }
+      window.sources = [];
+      createRoot(document.getElementById('root')).render(React.createElement(ControlledEditor));
+    </script>
+  </body>
+</html>

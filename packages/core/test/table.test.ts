@@ -25,6 +25,7 @@ import {
   setTableRowColor,
   tableCellText,
   tableToTsv,
+  setTableRangeText,
 } from '../src/table.js';
 
 describe('simple table', () => {
@@ -670,4 +671,18 @@ describe('simple table', () => {
       runs: [{ text: 'odd', marks: { link: 'https://example.com/a%29b' } }],
     });
   });
+});
+
+it('batch writes ragged ranges, preserving untouched references and no-op identity', () => {
+  const data = createTableData({ rows: 3, columns: 2 });
+  const col = data.columns[0]!.id;
+  const next = setTableRangeText(data, 0, 0, [['A', 'B', 'outside'], ['C']]);
+  expect(tableToTsv(next)).toBe('A\tB\nC\t""\n""\t""');
+  expect(next.rows[2]).toBe(data.rows[2]);
+  expect(data.rows[0]!.cells).toEqual({});
+  expect(setTableRangeText(next, 0, 0, [['A', 'B']])).toBe(next);
+  const cleared = setTableRangeText(next, 0, 0, [[''], ['']]);
+  expect(cleared.rows[0]!.cells[col]).toBeUndefined();
+  expect(cleared.rows[0]!.cells[next.columns[1]!.id]).toBe(next.rows[0]!.cells[next.columns[1]!.id]);
+  expect(tableToTsv(createTableData({ rows: 2, columns: 1 }))).toBe('""\n""');
 });

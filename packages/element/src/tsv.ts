@@ -1,9 +1,6 @@
 /** Spreadsheet-friendly TSV helpers shared by the table and database views. */
 
-export function tsvCell(value: string): string {
-  if (value === '') return '""';
-  return /[\t\n\r"]/u.test(value) ? `"${value.replace(/"/gu, '""')}"` : value;
-}
+export { tsvCell } from '@nobita/core';
 
 /** Parse TSV, including quoted tabs, newlines and escaped quotes. */
 export function parseTsv(source: string): string[][] {

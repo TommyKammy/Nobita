@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { TableData } from '../../packages/core/src/types';
 import { getDoc, openFixture } from './helpers';
 
 const tableDoc = () => ({
@@ -1114,4 +1115,57 @@ test('restores the original column width when column resizing is canceled', asyn
     (doc.blocks[0]?.props.table as { columns: Array<{ id: string; width?: number }> }).columns[0]
       ?.width
   ).toBe(160);
+});
+
+test('HTML paste preserves cell whitespace, marks and outer table coordinates', async ({ page }) => {
+  await openFixture(page);
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.setData('text/html', '<table><tr><td><b>  A</b><table><tr><td>B</td></tr></table>  </td><td>  </td><td>\nX\n</td></tr></table>');
+    document.querySelector('nobita-editor')!.shadowRoot!.querySelector('[data-block-id="b1"] .nb-text')!
+      .dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: data }));
+  });
+  const cells = page.locator('.nb-table-cell');
+  await expect(cells).toHaveCount(3);
+  const table = (await getDoc(page)).blocks.find(block => block.type === 'table')!.props.table as TableData;
+  expect(table.rows).toHaveLength(1);
+  expect(table.columns.map(column => table.rows[0]!.cells[column.id]?.text)).toEqual(['  AB  ', '  ', '\nX\n']);
+  expect(await cells.first().locator('.nb-m-bold').textContent()).toBe('  A');
+  await page.evaluate(() => {
+    const editor = window.__editor!;
+    const html = new DOMParser().parseFromString(editor.getHTML(), 'text/html').querySelector('table')!.outerHTML;
+    window.__setDoc();
+    const data = new DataTransfer();
+    data.setData('text/html', html);
+    window.__host.shadowRoot!.querySelector('[data-block-id="b1"] .nb-text')!
+      .dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: data }));
+  });
+  const restored = (await getDoc(page)).blocks.find(block => block.type === 'table')!.props.table as TableData;
+  expect(restored.columns.map(col => restored.rows[0]!.cells[col.id])).toEqual(
+    table.columns.map(col => table.rows[0]!.cells[col.id])
+  );
+});
+
+test('keyboard opens axis actions and Escape returns focus to the trigger', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page, tableDoc());
+  await page.evaluate(() => window.__editor!.focus('t1'));
+  for (const [label, key] of [['Column 1 actions', 'Enter'], ['Row 1 actions', 'Space']] as const) {
+    const handle = page.getByRole('button', { name: label, exact: true });
+    for (let i = 0; i < 25 && !(await handle.evaluate(el => el.matches(':focus'))); i++) {
+      await page.keyboard.press('Tab');
+    }
+    await expect(handle).toBeFocused();
+    await page.keyboard.press(key);
+    await expect(page.locator('.nb-table-menu button:focus')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(handle).toBeFocused();
+    await expect(page.locator('.nb-table-menu')).toHaveCount(0);
+  }
+  const row = page.getByRole('button', { name: 'Row 1 actions', exact: true });
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Duplicate', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.nb-table-grid tbody tr')).toHaveCount(3);
+  await expect(row).toBeFocused();
 });
