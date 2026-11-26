@@ -1,5 +1,6 @@
 import { icon } from './icons.js';
 import { styles } from './styles.js';
+import { Virtualizer } from './virtualizer.js';
 import {
   EditorStore,
   DatabaseEvalContext,
@@ -131,6 +132,7 @@ export type ImageUploadHandler = (
 ) => ImageUploadResult | string | Promise<ImageUploadResult | string>;
 
 export interface NobitaOptions {
+  virtualize?: boolean | { threshold?: number; overscanPx?: number };
   doc?: Doc | string;
   readonly?: boolean;
   theme?: NobitaTheme;
@@ -243,6 +245,9 @@ export class NobitaEditor implements BlockHost {
   #overlay!: HTMLElement;
   #views = new Map<string, BlockView>();
   #viewIndex = new Map<string, BlockView>();
+  #virtual: Virtualizer | undefined;
+  #layout: number[] = [];
+  #gaps: HTMLElement[] = [];
   #syncedBlocks: readonly Block[] | null = null;
   #placeholderBlockId: string | null = null;
   #menu: Menu;
@@ -742,6 +747,7 @@ export class NobitaEditor implements BlockHost {
   destroy(): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
+    this.#virtual?.destroy();
     this.#bodyEvents.abort();
     this.#unsubscribe();
     this.#unsubscribeSelection();
@@ -1869,37 +1875,81 @@ export class NobitaEditor implements BlockHost {
     this.#title.contentEditable = this.#readonly ? 'false' : 'true';
   }
 
-  #syncBody(blocks: readonly Block[]): void {
-    if (blocks === this.#syncedBlocks) return;
+  #syncBody(blocks: readonly Block[], pins?: string[]): void {
+    const unchanged = blocks === this.#syncedBlocks;
+    if (unchanged && !pins) return;
     this.#syncedBlocks = blocks;
-    if (this.#views.size > 0) {
-      const ids = new Set(blocks.map(block => block.id));
+    const option = this.#options.virtualize;
+    const config = typeof option === 'object' ? option : undefined;
+    let layout: number[] | undefined;
+    if (option !== false && blocks.length >= (config?.threshold ?? 300)) {
+      this.#virtual ??= new Virtualizer(this.#body, Math.max(0, config?.overscanPx ?? 800),
+        () => this.#syncBody(this.doc.blocks, []));
+      const selection = this.#currentSelection() ?? this.#lastSelection;
+      const active = this.root.activeElement?.closest<HTMLElement>('.nb-block');
+      layout = this.#virtual.layout(blocks, [
+        this.#compositionBlockId, this.#drag?.blockId, active?.dataset.blockId, this.#focusedBlockId,
+        selection?.anchor.blockId, selection?.focus.blockId, ...(pins ?? []),
+      ]);
+      if (unchanged && layout.length === this.#layout.length && layout.every((n, i) => n === this.#layout[i])) return;
+      this.#layout = layout;
+    } else if (this.#virtual) {
+      this.#virtual.destroy();
+      this.#virtual = undefined;
+      this.#layout = [];
+    }
+    for (const gap of this.#gaps) gap.remove();
+    this.#gaps.length = 0;
+    if (this.#views.size) {
+      const ids = new Set(layout ? layout.filter(i => i >= 0).map(i => blocks[i]!.id) : blocks.map(b => b.id));
       for (const [id, view] of this.#views) {
         if (ids.has(id)) continue;
+        this.#virtual?.unobserve(view.element);
         view.destroy();
         this.#views.delete(id);
       }
     }
     let cursor = this.#body.firstChild;
-    let number = 0;
-    blocks.forEach((block, index) => {
+    let number = 0, previous = -1;
+    const render = (block: Block, index: number) => {
+      if (block.type === 'numbered' && previous !== index - 1) {
+        number = 0;
+        for (let i = index - 1; i >= 0 && blocks[i]!.type === 'numbered'; i--) number++;
+      }
+      previous = index;
       number = block.type === 'numbered' ? number + 1 : 0;
+      const context = { depth: 0, index, number };
       let view = this.#views.get(block.id);
       if (!view) {
-        view = new BlockView(this, block, {
-          depth: 0,
-          index,
-          number,
-        });
+        view = new BlockView(this, block, context);
         this.#views.set(block.id, view);
       }
-      if (view.element === cursor) {
-        cursor = cursor.nextSibling;
-      } else {
-        this.#body.insertBefore(view.element, cursor);
+      if (view.element === cursor) cursor = cursor.nextSibling;
+      else this.#body.insertBefore(view.element, cursor);
+      view.update(block, context);
+      this.#virtual?.observe(view.element);
+    };
+    if (!layout) { blocks.forEach(render); return; }
+    for (const index of layout) {
+      if (index >= 0) render(blocks[index]!, index);
+      else {
+        const gap = document.createElement('div');
+        gap.contentEditable = 'false';
+        gap.setAttribute('aria-hidden', 'true');
+        gap.style.height = -index + 'px';
+        this.#body.insertBefore(gap, cursor);
+        this.#gaps.push(gap);
       }
-      view.update(block, { depth: 0, index, number });
-    });
+    }
+    if (this.#selectedBlockIds.size) this.#syncBlockSelection();
+  }
+
+  /** Reveal a block (including a nested block) without changing the selection. */
+  scrollToBlock(blockId: string): boolean {
+    if (this.#virtual) this.#syncBody(this.doc.blocks, [blockId]);
+    const view = this.#findView(blockId);
+    view?.element.scrollIntoView({ block: 'nearest' });
+    return !!view;
   }
 
   #syncPlaceholders(): void {
@@ -1936,6 +1986,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   #focusBlock(blockId: string, offset: number): void {
+    if (this.#virtual) this.scrollToBlock(blockId);
     const view = this.#findView(blockId);
     const block = view?.block ?? findBlock(this.store.doc.blocks, blockId);
     if (!view || !block) return;
@@ -1998,6 +2049,7 @@ export class NobitaEditor implements BlockHost {
 
   #restoreSelection(selection: EditorSelection | null, preventScroll = false): void {
     if (!selection) return;
+    if (this.#virtual) this.#syncBody(this.doc.blocks, [selection.anchor.blockId, selection.focus.blockId]);
     const anchorView = this.#findView(selection.anchor.blockId);
     const focusView = this.#findView(selection.focus.blockId);
     if (!anchorView?.textElement || !focusView?.textElement) return;
