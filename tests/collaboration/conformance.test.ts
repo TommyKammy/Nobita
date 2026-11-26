@@ -678,6 +678,30 @@ for (const engine of ['automerge', 'yjs']) {
       ]);
     }
   );
+  it(
+    engine + ' replaces an IME selection spanning a remote paragraph split',
+    () => {
+      const { a, b, send } = pair(engine, {
+        ...seed,
+        blocks: [block('a', 'abcd')],
+      });
+      a.beginComposition({ blockId: 'a', from: 1, to: 3 });
+      const previous = b.getDoc(),
+        { doc } = splitBlock(previous, 'a', 2, 'suffix');
+      b.applyLocalChange(
+        { previous, doc, source: 'input', selection: null },
+        diffDocs(previous, doc)
+      );
+      send();
+      a.commitComposition('日');
+      send();
+      expect(b.getDoc().blocks.map((block) => block.text)).toEqual([
+        [{ text: 'a日' }],
+        [{ text: 'd' }],
+      ]);
+      expect(a.getDoc()).toEqual(b.getDoc());
+    }
+  );
   it.each(['', 'cXb'])(
     engine + ' edits reordered native slices to produce %j',
     (replacement) => {

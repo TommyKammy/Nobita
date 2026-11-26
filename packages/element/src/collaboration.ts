@@ -31,10 +31,23 @@ export function connect(
       `[data-row-id="${CSS.escape(row)}"][data-column-id="${CSS.escape(col)}"] :is(.nb-table-cell,.nb-db-rich-text)`
     );
   }
+  function targetOf(cell: HTMLElement | null | undefined) {
+    const detail = cell?.closest<HTMLElement>('[data-record-owner]')?.dataset;
+    const rowId =
+      detail?.rowId ??
+      cell?.closest<HTMLElement>('[data-row-id]')?.dataset.rowId;
+    const columnId =
+      cell?.closest<HTMLElement>('[data-column-id]')?.dataset.columnId;
+    const id =
+      detail?.recordOwner ??
+      cell?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId;
+    return { detail, rowId, columnId, id };
+  }
   const receive = ({
     doc,
     remapPoint,
     remapCellOffset,
+    remapPageOffset,
     history,
   }: RemoteDocUpdate) => {
     if (composing) return;
@@ -42,38 +55,39 @@ export function connect(
     const cell = root.activeElement?.closest<HTMLElement>(
       '.nb-table-cell,.nb-db-rich-text'
     );
-    const coords = cell?.closest<HTMLElement>(
-      '[data-row-id][data-column-id]'
-    )?.dataset;
-    const id = cell?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId;
+    const { detail, rowId, columnId, id } = targetOf(cell);
     const sel = nativeSelection(root);
     let restoreCell: (() => void) | undefined;
     if (
-      remapCellOffset &&
       cell &&
       id &&
-      coords?.rowId &&
-      coords.columnId &&
+      rowId &&
+      (columnId
+        ? remapCellOffset
+        : cell.matches('.nb-db-page-text') && remapPageOffset) &&
       sel?.anchorNode &&
       sel.focusNode &&
       cell.contains(sel.anchorNode) &&
       cell.contains(sel.focusNode)
     ) {
-      const { rowId, columnId } = coords;
-      const anchor = remapCellOffset(
-        id,
-        rowId,
-        columnId,
-        domPointToOffset(cell, sel.anchorNode, sel.anchorOffset)
-      );
-      const focus = remapCellOffset(
-        id,
-        rowId,
-        columnId,
-        domPointToOffset(cell, sel.focusNode, sel.focusOffset)
-      );
+      const remap = (node: Node, offset: number) => {
+        const at = domPointToOffset(cell, node, offset);
+        return columnId
+          ? remapCellOffset!(id, rowId, columnId, at)
+          : remapPageOffset!(id, rowId, at);
+      };
+      const anchor = remap(sel.anchorNode, sel.anchorOffset);
+      const focus = remap(sel.focusNode, sel.focusOffset);
       restoreCell = () => {
-        const el = cell.isConnected ? cell : cellText(id, rowId, columnId);
+        const el = cell.isConnected
+          ? cell
+          : detail
+            ? root.querySelector<HTMLElement>(
+                `[data-record-owner="${CSS.escape(id)}"][data-row-id="${CSS.escape(rowId)}"] ${columnId ? `[data-column-id="${CSS.escape(columnId)}"] .nb-db-rich-text` : '.nb-db-page-text'}`
+              )
+            : columnId
+              ? cellText(id, rowId, columnId)
+              : null;
         if (!el || anchor === null || focus === null) return;
         el.focus({ preventScroll: true });
         const a = offsetToDomPoint(el, anchor),
@@ -111,10 +125,7 @@ export function connect(
       const text = (
         node instanceof Element ? node : node.parentElement
       )?.closest<HTMLElement>(inputSelector);
-      const detail = text?.closest<HTMLElement>('[data-record-owner]')?.dataset;
-      const id =
-        detail?.recordOwner ??
-        text?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId;
+      const { id, rowId: row, columnId: col } = targetOf(text);
       if (
         !text ||
         !id ||
@@ -124,13 +135,6 @@ export function connect(
         return;
       const a = domPointToOffset(text, node, sel.anchorOffset),
         b = domPointToOffset(text, sel.focusNode, sel.focusOffset);
-      const cell = text.closest<HTMLElement>(
-        '[data-row-id][data-column-id]'
-      )?.dataset;
-      const row = detail?.rowId ?? cell?.rowId;
-      const col = detail
-        ? text.closest<HTMLElement>('[data-column-id]')?.dataset.columnId
-        : cell?.columnId;
       if (
         !text.classList.contains('nb-text') &&
         !(row && (col || text.matches('.nb-db-page-text')))
@@ -182,13 +186,14 @@ export function connect(
         offset: target.from,
       });
       store.applyRemote(update.doc);
-      const text = target.rowId === undefined
-        ? bodyText(point?.blockId ?? target.blockId)
-        : original?.isConnected
-          ? original
-          : target.columnId !== undefined
-            ? cellText(target.blockId, target.rowId, target.columnId)
-            : null;
+      const text =
+        target.rowId === undefined
+          ? bodyText(point?.blockId ?? target.blockId)
+          : original?.isConnected
+            ? original
+            : target.columnId !== undefined
+              ? cellText(target.blockId, target.rowId, target.columnId)
+              : null;
       if (text) {
         const p = offsetToDomPoint(text, point?.offset ?? target.from);
         nativeSelection(root)?.collapse(p.node, p.offset);

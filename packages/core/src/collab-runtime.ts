@@ -620,6 +620,32 @@ export class SharedAdapter implements CollaborationAdapter {
     this.#snapshot = this.#read();
     const doc = this.#snapshot,
       updatedText = this.#text;
+    const remapGridOffset = (
+      id: string,
+      row: string,
+      col: string | undefined,
+      i: number
+    ) => {
+      const b = find(doc.blocks, id),
+        grid = b?.props.table ?? b?.props.database;
+      if (
+        !grid?.rows.some((r) => r.id === row) ||
+        (col === undefined
+          ? !b?.props.database
+          : !grid.columns.some((c) => c.id === col))
+      )
+        return null;
+      return offsets(
+        gridTextPath(
+          this.store,
+          id,
+          b?.props.table ? 'table' : 'database',
+          row,
+          col
+        ),
+        i
+      );
+    };
     const update: RemoteDocUpdate = {
       doc,
       ...(history && { history }),
@@ -633,25 +659,8 @@ export class SharedAdapter implements CollaborationAdapter {
         );
         return mapped && find(doc.blocks, mapped.blockId) ? mapped : null;
       },
-      remapCellOffset: (id, row, col, i) => {
-        const b = find(doc.blocks, id),
-          grid = b?.props.table ?? b?.props.database;
-        if (
-          !grid?.rows.some((r) => r.id === row) ||
-          !grid.columns.some((c) => c.id === col)
-        )
-          return null;
-        return offsets(
-          gridTextPath(
-            this.store,
-            id,
-            b?.props.table ? 'table' : 'database',
-            row,
-            col
-          ),
-          i
-        );
-      },
+      remapCellOffset: remapGridOffset,
+      remapPageOffset: (id, row, i) => remapGridOffset(id, row, undefined, i),
     };
     for (const fn of this.#listeners) fn(update);
   }
@@ -703,7 +712,7 @@ export class SharedAdapter implements CollaborationAdapter {
         const at = anchor.resolve();
         return at === null
           ? null
-          : this.#text.logical(anchor.path, at, target.blockId);
+          : this.#text.logical(anchor.path, at, target.blockId, false, exact);
       };
     };
     let i = target.from;
@@ -754,15 +763,6 @@ export class SharedAdapter implements CollaborationAdapter {
       )
         return { doc: this.#snapshot };
     }
-    const ranges: { start: number; length: number }[] = [];
-    for (const char of comp.selected) {
-      const current = char.offset();
-      if (current?.blockId !== id) continue;
-      const at = current.offset;
-      const last = ranges.at(-1);
-      if (last && last.start + last.length === at) last.length += char.length;
-      else ranges.push({ start: at, length: char.length });
-    }
     let from = start;
     const desired = { ...marksAt(this.#text.runs(path), start) };
     delete desired.mention;
@@ -774,14 +774,37 @@ export class SharedAdapter implements CollaborationAdapter {
       }
     }
     this.store.transact(() => {
-      for (const range of ranges.reverse()) {
-        this.#text.splice(path, range.start, range.length, '');
-        from -= Math.max(0, Math.min(range.length, from - range.start));
-      }
+      // Insert while the original boundary characters still identify the
+      // intended side of a remote split. Then resolve the exact characters
+      // selected at composition start against the updated native texts.
       this.#text.splice(path, from, 0, text);
-      if (!text.length) return;
-      const actual = marksAt(this.#text.runs(path), from + text.length);
-      applyMarkChanges(this.#text, path, from, text.length, actual, desired);
+      if (text.length) {
+        const actual = marksAt(this.#text.runs(path), from + text.length);
+        applyMarkChanges(this.#text, path, from, text.length, actual, desired);
+      }
+      const ranges: { path: string; start: number; length: number }[] = [];
+      for (const char of comp.selected) {
+        const current = char.offset();
+        if (
+          !current ||
+          (current.blockId !== id &&
+            !find(this.#snapshot.blocks, current.blockId))
+        )
+          continue;
+        const selectedPath =
+          comp.target.rowId === undefined ? bodyText(current.blockId) : path;
+        const at = current.offset;
+        const last = ranges.at(-1);
+        if (last?.path === selectedPath && last.start + last.length === at)
+          last.length += char.length;
+        else
+          ranges.push({ path: selectedPath, start: at, length: char.length });
+      }
+      for (const range of ranges.sort((a, b) => b.start - a.start)) {
+        this.#text.splice(range.path, range.start, range.length, '');
+        if (range.path === path)
+          from -= Math.max(0, Math.min(range.length, from - range.start));
+      }
     });
     this.#snapshot = this.#read();
     return {

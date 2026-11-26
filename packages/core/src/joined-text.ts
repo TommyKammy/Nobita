@@ -141,7 +141,13 @@ export class JoinedText implements TextBackend {
       ? runsLength(this.store.runs(p.path))
       : this.store.resolveBoundary(p.path, p.to);
   }
-  logical(path: string, offset: number, preferred: string, snapshot = false) {
+  logical(
+    path: string,
+    offset: number,
+    preferred: string,
+    snapshot = false,
+    exact = false
+  ) {
     const owners = this.owners.get(path);
     if (!owners) return { blockId: JSON.parse(path)[0] as string, offset };
     for (const id of [preferred, ...owners]) {
@@ -149,7 +155,11 @@ export class JoinedText implements TextBackend {
       for (const part of this.groups.get(bodyText(id)) ?? []) {
         const start = snapshot ? part.start : this.start(part),
           end = snapshot ? part.end : this.end(part);
-        if (part.path === path && start <= offset && offset <= end)
+        if (
+          part.path === path &&
+          start <= offset &&
+          (exact ? offset < end : offset <= end)
+        )
           return { blockId: id, offset: prefix + offset - start };
         prefix += end - start;
       }

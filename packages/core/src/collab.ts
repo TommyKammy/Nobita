@@ -62,6 +62,11 @@ export interface RemoteDocUpdate {
   /** Set only for a history operation initiated by this replica. */
   history?: 'undo' | 'redo';
   doc: Doc;
+  remapPageOffset?: (
+    blockId: string,
+    rowId: string,
+    offset: number
+  ) => number | null;
   remapCellOffset?: (
     blockId: string,
     rowId: string,
