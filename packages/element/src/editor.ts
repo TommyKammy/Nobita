@@ -3360,7 +3360,11 @@ export class NobitaEditor implements BlockHost {
     return out;
   }
 
-  #insertPageLinkFromState(state: PageLinkState, page: PageInfo): void {
+  #insertPageLinkFromState(
+    state: PageLinkState,
+    page: PageInfo,
+    preserveExternalSelection = false
+  ): void {
     const pageId = page.id.trim();
     if (!pageId) return;
     const pageTitle = page.title.trim() || 'Untitled page';
@@ -3369,19 +3373,33 @@ export class NobitaEditor implements BlockHost {
     if (!block) return;
     const end = Math.min(state.end, runsLength(block.text));
     const runs = deleteTextRange(block.text, state.start, end);
-    this.#pageLink = null;
+    if (!preserveExternalSelection || this.#pageLink === state) {
+      this.#pageLink = null;
+    }
+    const selectionBefore =
+      preserveExternalSelection
+        ? this.#selectedBlockIds.size === 0
+          ? this.#currentSelection()
+          : null
+        : null;
+    const touchesSelection =
+      !preserveExternalSelection ||
+      (selectionBefore !== null &&
+        (selectionBefore.anchor.blockId === state.blockId ||
+          selectionBefore.focus.blockId === state.blockId));
+
     if (state.mode === 'block') {
       const cleaned = replaceBlockText(this.store.doc, state.blockId, runs);
       const updatedBlock = findBlock(cleaned.blocks, state.blockId);
+      let next: Doc;
+      let targetBlockId: string;
       if (updatedBlock && updatedBlock.type === 'paragraph' && runsLength(updatedBlock.text) === 0) {
-        const next = setBlockType(cleaned, state.blockId, 'page', {
+        next = setBlockType(cleaned, state.blockId, 'page', {
           pageId,
           pageTitle,
           ...(pageIcon ? { pageIcon } : {}),
         });
-        const point: Point = { blockId: state.blockId, offset: 0 };
-        this.#commit(next, { anchor: point, focus: point }, { restore: false });
-        this.#focusBlock(state.blockId, 0);
+        targetBlockId = state.blockId;
       } else {
         const pageBlock = createBlock('page', {
           props: {
@@ -3390,13 +3408,19 @@ export class NobitaEditor implements BlockHost {
             ...(pageIcon ? { pageIcon } : {}),
           },
         });
-        const next = insertBlockRelative(cleaned, state.blockId, pageBlock, 'after');
-        const point: Point = { blockId: pageBlock.id, offset: 0 };
+        next = insertBlockRelative(cleaned, state.blockId, pageBlock, 'after');
+        targetBlockId = pageBlock.id;
+      }
+      if (touchesSelection) {
+        const point: Point = { blockId: targetBlockId, offset: 0 };
         this.#commit(next, { anchor: point, focus: point }, { restore: false });
-        this.#focusBlock(pageBlock.id, 0);
+        this.#focusBlock(targetBlockId, 0);
+      } else {
+        this.#commit(next, selectionBefore, { restore: false });
       }
       return;
     }
+
     const nextRuns = insertTextAt(runs, state.start, pageTitle, {
       page: {
         id: pageId,
@@ -3405,12 +3429,32 @@ export class NobitaEditor implements BlockHost {
       },
     });
     const next = replaceBlockText(this.store.doc, state.blockId, nextRuns);
-    const caret: Point = {
-      blockId: state.blockId,
-      offset: state.start + pageTitle.length,
+    if (!preserveExternalSelection) {
+      const caret: Point = {
+        blockId: state.blockId,
+        offset: state.start + pageTitle.length,
+      };
+      this.#commit(next, { anchor: caret, focus: caret });
+      this.#focusBlock(state.blockId, caret.offset);
+      return;
+    }
+    const delta = pageTitle.length - (end - state.start);
+    const adjustPoint = (point: Point): Point => {
+      if (point.blockId !== state.blockId || point.offset <= state.start) {
+        return point;
+      }
+      if (point.offset >= end) {
+        return { blockId: point.blockId, offset: Math.max(0, point.offset + delta) };
+      }
+      return { blockId: point.blockId, offset: state.start + pageTitle.length };
     };
-    this.#commit(next, { anchor: caret, focus: caret });
-    this.#focusBlock(state.blockId, caret.offset);
+    const nextSelection = selectionBefore
+      ? {
+          anchor: adjustPoint(selectionBefore.anchor),
+          focus: adjustPoint(selectionBefore.focus),
+        }
+      : null;
+    this.#commit(next, nextSelection, { restore: touchesSelection });
   }
 
   async #resolveClosingBracketPageLink(
@@ -3442,42 +3486,7 @@ export class NobitaEditor implements BlockHost {
     ) {
       return;
     }
-    const selectionBefore =
-      this.#selectedBlockIds.size === 0 ? this.#currentSelection() : null;
-    const pageId = exact.id.trim();
-    if (!pageId) return;
-    const pageTitle = exact.title.trim() || 'Untitled page';
-    const pageIcon = exact.icon?.trim();
-    const runs = deleteTextRange(block.text, snapshot.start, snapshot.end);
-    const nextRuns = insertTextAt(runs, snapshot.start, pageTitle, {
-      page: {
-        id: pageId,
-        title: pageTitle,
-        ...(pageIcon ? { icon: pageIcon } : {}),
-      },
-    });
-    const next = replaceBlockText(this.store.doc, snapshot.blockId, nextRuns);
-    const delta = pageTitle.length - (snapshot.end - snapshot.start);
-    const adjustPoint = (point: Point): Point => {
-      if (point.blockId !== snapshot.blockId || point.offset <= snapshot.start) {
-        return point;
-      }
-      if (point.offset >= snapshot.end) {
-        return { blockId: point.blockId, offset: Math.max(0, point.offset + delta) };
-      }
-      return { blockId: point.blockId, offset: snapshot.start + pageTitle.length };
-    };
-    const nextSelection = selectionBefore
-      ? {
-          anchor: adjustPoint(selectionBefore.anchor),
-          focus: adjustPoint(selectionBefore.focus),
-        }
-      : null;
-    const touchesSelection =
-      selectionBefore !== null &&
-      (selectionBefore.anchor.blockId === snapshot.blockId ||
-        selectionBefore.focus.blockId === snapshot.blockId);
-    this.#commit(next, nextSelection, { restore: touchesSelection });
+    this.#insertPageLinkFromState(snapshot, exact, true);
   }
 
   async #createAndInsertPage(state: PageLinkState, title: string): Promise<void> {
@@ -3497,7 +3506,7 @@ export class NobitaEditor implements BlockHost {
       if (!created?.id) return;
       const blockAfter = findBlock(this.store.doc.blocks, snapshot.blockId);
       if (!blockAfter || plainText(blockAfter.text) !== textBefore) return;
-      this.#insertPageLinkFromState(snapshot, created);
+      this.#insertPageLinkFromState(snapshot, created, true);
     } catch {
       // Host creation errors leave the document unchanged.
     }
@@ -3533,7 +3542,8 @@ export class NobitaEditor implements BlockHost {
           mode: 'block',
           items: [],
         },
-        created
+        created,
+        true
       );
     } catch {
       // Host creation errors leave the document unchanged.
@@ -3583,6 +3593,7 @@ export class NobitaEditor implements BlockHost {
         ? {
             createPage: () => {
               removeSlash();
+              this.#focusBlock(blockId, slashOffset);
               void this.#createSlashPage(blockId, slashOffset);
             },
           }

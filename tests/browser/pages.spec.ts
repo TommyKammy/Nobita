@@ -1048,3 +1048,87 @@ test('preserves focus and selection in another paragraph when delayed [[Title]] 
   expect(blockById(doc, 'b1')?.text).toBe('Roadmap');
   expect(blockById(doc, 'b2')?.text).toBe('Updated paragraph');
 });
+
+test('preserves focus and selection in another paragraph when delayed page creation resolves', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await setDoc(page, {
+    version: 1,
+    id: 'wiki-async-create-selection',
+    title: '',
+    blocks: [
+      { id: 'b1', type: 'paragraph', text: [], props: {}, children: [] },
+      { id: 'b2', type: 'paragraph', text: [], props: {}, children: [] },
+      { id: 'b3', type: 'paragraph', text: [{ text: 'Editing here' }], props: {}, children: [] },
+    ],
+  });
+  await page.evaluate(() => {
+    const pending: Array<() => void> = [];
+    (window as unknown as { __flushPageCreate: () => void }).__flushPageCreate = () => {
+      while (pending.length > 0) pending.shift()?.();
+    };
+    let count = 0;
+    const editor = (window as unknown as {
+      __editor?: {
+        setPageProvider(provider: unknown): void;
+        focus(blockId: string, offset?: number): void;
+      };
+    }).__editor;
+    editor?.setPageProvider({
+      search: () => [],
+      create: (title: string) =>
+        new Promise(resolve => {
+          const id = `p-async-${++count}`;
+          pending.push(() => resolve({ id, title }));
+        }),
+    });
+    editor?.focus('b1', 0);
+  });
+
+  // Trigger async inline creation from [[ in b1.
+  await page.keyboard.type('[[AsyncInline');
+  await expect(page.locator('.nb-menu-item', { hasText: 'Create "AsyncInline"' })).toBeVisible();
+  await page.locator('.nb-menu-item', { hasText: 'Create "AsyncInline"' }).click();
+
+  // Trigger async /new-page block creation in b2.
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { focus(blockId: string, offset?: number): void };
+    }).__editor;
+    editor?.focus('b2', 0);
+  });
+  await page.keyboard.type('/new-page');
+  await expect(page.locator('.nb-menu-item', { hasText: 'New page' })).toBeVisible();
+  await page.keyboard.press('Enter');
+
+  // Move focus to b3 before either async creation resolves.
+  await page.evaluate(() => {
+    const editor = (window as unknown as {
+      __editor?: { focus(blockId: string, offset?: number): void };
+    }).__editor;
+    editor?.focus('b3', 12);
+  });
+
+  // Resolve both pending creations.
+  await page.evaluate(() => {
+    (window as unknown as { __flushPageCreate?: () => void }).__flushPageCreate?.();
+  });
+
+  await expect
+    .poll(async () => {
+      const doc = await getDoc(page);
+      return (
+        blockById(doc, 'b1')?.runs[0]?.marks?.page?.id === 'p-async-1' &&
+        doc.blocks[1]?.type === 'page' &&
+        doc.blocks[1]?.props.pageId === 'p-async-2'
+      );
+    })
+    .toBe(true);
+
+  // Typing must continue in b3 without focus jumping back to b1 or b2.
+  await page.keyboard.type('!');
+  const doc = await getDoc(page);
+  expect(blockById(doc, 'b1')?.text).toBe('AsyncInline');
+  expect(blockById(doc, 'b3')?.text).toBe('Editing here!');
+});
