@@ -45,6 +45,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body,
 #app {
@@ -315,10 +319,6 @@ svg {
   background: color-mix(in oklab, var(--danger) 8%, var(--surface));
   color: var(--text);
   font-size: 13px;
-}
-
-.trash-banner[hidden] {
-  display: none;
 }
 
 .trash-banner-text {

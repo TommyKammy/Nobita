@@ -627,6 +627,7 @@ function trashedPageRow(id: string, record: PageRecord): HTMLElement {
   row.append(iconElement, title, actions);
   row.addEventListener('click', () => openPage(id));
   row.addEventListener('keydown', event => {
+    if (event.target !== row) return;
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       openPage(id);
@@ -717,6 +718,7 @@ function pageRow(
     renamePage(id, next);
   });
   row.addEventListener('keydown', event => {
+    if (event.target !== row) return;
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       openPage(id);
@@ -1100,11 +1102,16 @@ function deletePermanently(id: string): void {
   const record = state.pages[id];
   if (!record) return;
   const label = titleOf(record);
-  if (!window.confirm(`Delete “${label}” permanently? This cannot be undone.`)) return;
   const ids = isTrashed(record)
     ? collectRestoreTargetIds(treeInputs(), id, { includeAllDescendants: true })
     : collectTrashTargetIds(treeInputs(), id);
   const removeIds = ids.size > 0 ? ids : new Set([id]);
+  const nestedCount = removeIds.size - 1;
+  const confirmMessage =
+    nestedCount > 0
+      ? `Delete “${label}” and ${nestedCount} nested ${nestedCount === 1 ? 'page' : 'pages'} permanently? This cannot be undone.`
+      : `Delete “${label}” permanently? This cannot be undone.`;
+  if (!window.confirm(confirmMessage)) return;
   for (const targetId of removeIds) delete state.pages[targetId];
   if (state.activeId && removeIds.has(state.activeId)) {
     if (currentView === 'trash') {
