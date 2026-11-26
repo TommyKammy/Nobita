@@ -4,7 +4,7 @@ import {
   type NobitaEditorElement,
   type NobitaChangeDetail,
 } from '@nobita/element';
-import { createBlock, createDoc, type Doc } from '@nobita/core';
+import { DatabaseEvalContext, type DatabaseData, createBlock, createDoc, type Doc } from '@nobita/core';
 
 declare global {
   interface Window {
@@ -13,6 +13,7 @@ declare global {
     __editor: NobitaEditor | null;
     __host: NobitaEditorElement;
     __setDoc: (doc?: Doc) => void;
+    __benchFormulas: () => number;
     __benchSetSize: (count: number) => number;
   }
 }
@@ -64,3 +65,23 @@ host.addEventListener('nobita-change', event => {
 host.doc = seed();
 window.__editor = host.editor;
 window.__ready = true;
+
+window.__benchFormulas = () => {
+  const data: DatabaseData = {
+    variant: 'database',
+    columns: [
+      { id: 'hours', name: 'Hours', type: 'number' },
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: 'f' + i, name: 'Formula ' + i, type: 'formula' as const,
+        formula: { expression: 'round(prop("hours") * ' + (i+1) + ')' },
+      })),
+    ],
+    rows: Array.from({ length: 100 }, (_, i) => ({ id: String(i), cells: { hours: { text: String(i) } } })),
+  };
+  const context = new DatabaseEvalContext();
+  const start = performance.now();
+  const projected = context.project(data);
+  const elapsed = performance.now() - start;
+  if (projected.rows[99]?.cells.f4?.text !== '495') throw new Error('Incomplete formula benchmark');
+  return elapsed;
+};

@@ -1,3 +1,4 @@
+import { documentEvaluation } from './database-eval.js';
 import { tableSpanAt } from './table-spans.js';
 import { createBlock, createDoc } from './doc.js';
 import { cloneDatabaseData, databaseCellDisplay, normalizeDatabaseData, sortedDatabaseRows } from './database.js';
@@ -178,12 +179,12 @@ function blockInnerHtml(block: Block): string {
  * Render a document to a semantic HTML fragment. Block ids are included as
  * data attributes so a host can map HTML back to blocks if it wants to.
  */
-export function blocksToHtml(blocks: readonly Block[]): string {
+export function blocksToHtml(blocks: readonly Block[], context = documentEvaluation(blocks)): string {
   const out: string[] = [];
   for (const block of blocks) {
     const inner = blockInnerHtml(block);
     const align = block.props.align ? ` style="text-align:${block.props.align}"` : '';
-    const children = block.children.length > 0 ? `\n${blocksToHtml(block.children)}` : '';
+    const children = block.children.length > 0 ? `\n${blocksToHtml(block.children, context)}` : '';
     switch (block.type) {
       case 'heading': {
         const level = block.props.level ?? 1;
@@ -234,7 +235,7 @@ export function blocksToHtml(blocks: readonly Block[]): string {
       case 'database':
         out.push(
           block.props.database
-            ? `<div data-block-id="${block.id}">${databaseToHtml(block.props.database)}</div>`
+            ? `<div data-block-id="${block.id}">${databaseToHtml(context.project(block.props.database))}</div>`
             : `<div data-block-id="${block.id}"></div>`
         );
         break;
@@ -338,7 +339,7 @@ export function docToHtml(doc: Doc): string {
   return `${title}\n${blocksToHtml(doc.blocks)}`;
 }
 
-export function blocksToPlainText(blocks: readonly Block[], indent = 0): string {
+export function blocksToPlainText(blocks: readonly Block[], indent = 0, context = documentEvaluation(blocks)): string {
   const lines: string[] = [];
   const pad = '  '.repeat(indent);
   let number = 0;
@@ -374,7 +375,7 @@ export function blocksToPlainText(blocks: readonly Block[], indent = 0): string 
         const data = block.props.database;
         if (data) {
           lines.push(`${pad}${data.columns.map(column => column.name).join(' | ')}`);
-          for (const row of sortedDatabaseRows(data)) {
+          for (const row of sortedDatabaseRows(data,context)) {
             lines.push(
               `${pad}${data.columns
                 .map(column =>
@@ -405,7 +406,7 @@ export function blocksToPlainText(blocks: readonly Block[], indent = 0): string 
         break;
     }
     if (block.children.length > 0) {
-      lines.push(blocksToPlainText(block.children, indent + 1));
+      lines.push(blocksToPlainText(block.children, indent + 1, context));
     }
   }
   return lines.join('\n');

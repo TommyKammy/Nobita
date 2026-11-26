@@ -5,6 +5,7 @@ export type {
   BlockProps,
   BlockType,
   CalloutTone,
+  DatabaseFormulaConfig, DatabaseRelationConfig, DatabaseRelationRef, DatabaseTarget, DatabaseResolver,
   DatabaseCell,
   DatabaseColumn,
   DatabaseColumnType,
@@ -55,43 +56,9 @@ export {
   isTextualBlock,
 } from './types.js';
 
-export {
-  DATABASE_COLUMN_TYPES,
-  DATABASE_FILTER_OPERATORS,
-  DATABASE_STAT_LABELS,
-  DATABASE_STAT_TYPES,
-  cloneDatabaseData,
-  createDatabaseColumn,
-  createDatabaseData,
-  createDatabaseRow,
-  createDatabaseView,
-  databaseCellDisplay,
-  databaseCellText,
-  databaseFilterGroup,
-  databaseRowNumber,
-  databaseSorts,
-  databaseStatValue,
-  databaseTitleColumn,
-  databaseView,
-  databaseViewColumnStates,
-  databaseViews,
-  databaseVisibleColumns,
-  DEFAULT_DATABASE_COLUMN_WIDTH,
-  MAX_DATABASE_COLUMN_WIDTH,
-  MIN_DATABASE_COLUMN_WIDTH,
-  duplicateDatabaseData,
-  filteredDatabaseRows,
-  groupedDatabaseRows,
-  isDatabaseColumnType,
-  normalizeDatabaseData,
-  searchDatabaseRows,
-  sortedDatabaseRows,
-} from './database.js';
-export type {
-  CreateDatabaseOptions,
-  DatabaseGroup,
-  DatabaseViewColumnState,
-} from './database.js';
+export * from './database.js';
+export { DatabaseEvalContext, storedDatabase, formulaNames, documentDatabases } from './database-eval.js';
+export * from './database-relations.js';
 
 export {
   buildTableOccupancyGrid, clearTableRange, expandTableRange, tableSpanAt,

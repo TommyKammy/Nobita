@@ -1,5 +1,6 @@
 import {
   databaseCellText,
+  databaseCellDisplay,
   normalizeRuns,
   safeHref,
 } from '@nobita/core';
@@ -59,6 +60,7 @@ export interface DatabaseDetailContext {
   openAddPropertyMenu(anchor: HTMLElement): void;
   openFilesPopover(columnId: string, rowId: string, anchor: HTMLElement): void;
   openPeoplePopover(columnId: string, rowId: string, anchor: HTMLElement): void;
+  openComputed(columnId: string, anchor: HTMLElement, rowId?: string): void;
   openImagePopover(columnId: string, rowId: string, anchor: HTMLElement): void;
   richText: DatabaseRichTextController;
   resolvePage?: (pageId: string) => PageInfo | null;
@@ -380,6 +382,7 @@ export class DatabaseDetailController {
   ): void {
     if (column.type === 'files') applyFilesLabel(button, cell?.files ?? [], column.name);
     else if (column.type === 'people') applyPeopleLabel(button, cell?.people ?? [], column.name);
+    else if (column.type === 'formula' || column.type === 'relation') button.textContent = databaseCellDisplay(cell,column.type);
     else if (column.type === 'image') applyImageLabel(button, cell?.text, column.name);
   }
 
@@ -548,13 +551,15 @@ export class DatabaseDetailController {
       return field;
     }
 
-    if (column.type === 'files' || column.type === 'people') {
+    if (['formula','relation','files','people'].includes(column.type)) {
       const button = btn('nb-db-select nb-db-multi nb-db-detail-picker', {
         disabled: readonly,
       });
       this.#applyPickerLabel(button, column, cell);
       button.addEventListener('click', () => {
-        if (column.type === 'files') {
+        if (column.type === 'formula' || column.type === 'relation') {
+          this.#ctx.openComputed(column.id,button,column.relation ? row.id : undefined);
+        } else if (column.type === 'files') {
           this.#ctx.openFilesPopover(column.id, row.id, button);
         } else {
           this.#ctx.openPeoplePopover(column.id, row.id, button);

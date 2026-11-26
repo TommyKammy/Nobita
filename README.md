@@ -179,6 +179,12 @@ A document is deliberately simple, stable JSON:
 - A `table` block is a simple editable grid (`props.table`). It follows AFFiNE's table model: row/column handles sit on the first cell edges (click or right-click for menus, drag to reorder rows/columns), cells support inline rich-text formatting (`cell.runs` with `cell.text` plain projection and HTML/Markdown table round-trip) and cell right-click context menus, drag selection covers multiple cells (copy, cut, paste and clear), hover plus controls add rows/columns, and row/column background colors are available. It has no properties or views.
 - A `database` block is the typed data view (`props.database`). It has typed columns, row records and one or more named views.
 
+A **Relation** property links rows by ID. Select the target database in the property settings, then click a cell to search for rows. Select a reverse relation property to keep both ends in sync in one undo step. The target can be the same database.
+
+A **Formula** property computes a read-only value for each row. Click a formula cell to edit its expression. For example, `sum(pluck(prop("Tasks"), "Hours"))` totals hours from linked tasks. The editor saves column IDs so renaming either property preserves the formula. Sorting, filtering, searching, statistics and exports use calculated values. The document stores the expression and row links.
+
+For targets outside the document, provide `databaseProvider(query)` for discovery and `resolveDatabase(databaseId, pageId)` for synchronous lookup. Replace the resolved snapshot and call `editor.refreshDatabases()` when it changes. Use `onRelationSync(change)` to apply paired link changes in the target document.
+
 ```json
 {
   "type": "database",
@@ -431,7 +437,6 @@ A command-by-command comparison with AFFiNE is in [docs/command-comparison.md](d
 
 ## Roadmap
 
-- Database: formulas and relations. Calendar view is intentionally out of scope.
 - Collaboration adapter (Yjs/Automerge) behind an explicit interface.
 - Virtualized rendering for 10k+ block documents.
 - Vue/Svelte wrappers (the web component already works in both).

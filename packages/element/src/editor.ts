@@ -1,5 +1,15 @@
+import { icon } from './icons.js';
+import { styles } from './styles.js';
 import {
   EditorStore,
+  DatabaseEvalContext,
+  documentDatabases,
+  storedDatabase,
+  relationChanges,
+  updateDatabaseRelations,
+  type DatabaseResolver,
+  type DatabaseTarget,
+  type RelationChange,
   applyMarkPatch,
   atomicRangeAt,
   blocksToHtml,
@@ -80,7 +90,6 @@ import {
   selectionRect,
 } from './dom.js';
 import { pointAnchor, type FloatingAnchor } from './floating.js';
-import { icon } from './icons.js';
 import { blockRange, orderedRange, selectionBlocks } from './selection.js';
 import { readRunsFromDom, refreshInlinePageChips } from './inline-dom.js';
 import { Menu, type MenuItem } from './menu.js';
@@ -89,7 +98,6 @@ import {
   buildMultiBlockMenuItems,
   buildSlashMenuItems,
 } from './menu-items.js';
-import { styles } from './styles.js';
 import { LinkPopover, Toolbar, type ToolbarMark } from './toolbar.js';
 
 export type NobitaTheme = 'light' | 'dark' | 'auto';
@@ -141,6 +149,9 @@ export interface NobitaOptions {
   /** Navigate to a page reference. The host owns loading and routing. */
   onOpenPage?: (pageId: string) => void;
   /** Optional cached metadata used to refresh page reference titles/icons. */
+  databaseProvider?: (query: string) => readonly DatabaseTarget[] | Promise<readonly DatabaseTarget[]>;
+  resolveDatabase?: DatabaseResolver;
+  onRelationSync?: ((change: RelationChange) => void) | undefined;
   resolvePage?: (pageId: string) => PageInfo | null;
 }
 
@@ -487,11 +498,16 @@ export class NobitaEditor implements BlockHost {
   }
 
   getMarkdown(): string {
-    return blocksToMarkdown(this.store.doc);
+    return blocksToMarkdown(this.store.doc, {
+      resolveDatabase: this.resolveDatabase.bind(this),
+    });
   }
 
   getHTML(): string {
-    return blocksToHtml(this.store.doc.blocks);
+    return blocksToHtml(
+      this.store.doc.blocks,
+      new DatabaseEvalContext(this.resolveDatabase.bind(this))
+    );
   }
 
   /** Stable fragment for linking to a block inside the host page. */
@@ -1060,12 +1076,63 @@ export class NobitaEditor implements BlockHost {
     this.#commit(toggleChecked(this.store.doc, blockId), this.store.selection);
   }
 
-  updateDatabase(blockId: string, data: DatabaseData, options: { mergeKey?: string } = {}): void {
+  #databaseListeners = new Set<() => void>();
+  #databaseBlocks?: readonly Block[];
+  #databaseIndex = new Map<string, DatabaseData>();
+  #localDatabases() {
+    if (this.#databaseBlocks !== this.doc.blocks) {
+      this.#databaseBlocks = this.doc.blocks;
+      this.#databaseIndex = documentDatabases(this.doc.blocks);
+    }
+    return this.#databaseIndex;
+  }
+  resolveDatabase(id: string, pageId?: string) {
+    return (
+      (!pageId ? this.#localDatabases().get(id) : undefined) ??
+      this.#options.resolveDatabase?.(id, pageId)
+    );
+  }
+  async databaseTargets(query: string): Promise<readonly DatabaseTarget[]> {
+    const local: DatabaseTarget[] = [...this.#localDatabases()].map(
+      ([databaseId, data]) => ({ databaseId, title: data.title || databaseId })
+    );
+    const matches = local.filter(t =>
+      t.title.toLowerCase().includes(query.toLowerCase())
+    );
+    try {
+      return [
+        ...matches,
+        ...((await this.#options.databaseProvider?.(query)) ?? []),
+      ];
+    } catch {
+      return matches;
+    }
+  }
+  observeDatabases(fn: () => void) {
+    this.#databaseListeners.add(fn);
+    return () => {
+      this.#databaseListeners.delete(fn);
+    };
+  }
+  /** Call after the host replaces a resolved external database snapshot. */
+  refreshDatabases(): void {
+    for (const fn of this.#databaseListeners) fn();
+  }
+
+  updateDatabase(
+    blockId: string,
+    data: DatabaseData,
+    options: { mergeKey?: string } = {}
+  ): void {
     if (this.#readonly) return;
-    const next = updateBlock(this.store.doc, blockId, block => {
-      if (block.type !== 'database') return block;
-      return { ...block, props: { ...block.props, database: data } };
-    });
+    const before = this.#localDatabases().get(blockId);
+    if (!before) return;
+    const next = updateDatabaseRelations(
+      this.doc,
+      blockId,
+      before,
+      storedDatabase(data)
+    );
     this.store.update(() => next, {
       ...(options.mergeKey ? { mergeKey: options.mergeKey } : {}),
       source: 'database',
@@ -1754,13 +1821,29 @@ export class NobitaEditor implements BlockHost {
     });
   }
 
-  #onStoreChange(change: { doc: Doc; source: string }): void {
+  #onStoreChange(change: { doc: Doc; previous: Doc; source: string }): void {
     if (this.#destroyed) return;
     if (change.source === 'replace') {
       this.#docEpoch += 1;
       this.clearBlockSelection();
     }
     this.#syncBody(change.doc.blocks);
+    this.refreshDatabases();
+    const sync = this.#options.onRelationSync;
+    if (sync && change.source !== 'replace') {
+      const before = documentDatabases(change.previous.blocks),
+        after = this.#localDatabases();
+      for (const id of new Set([...before.keys(), ...after.keys()])) {
+        if (before.get(id) === after.get(id)) continue;
+        for (const delta of relationChanges(id, before.get(id), after.get(id)))
+          if (
+            delta.target.pageId ||
+            (!after.has(delta.target.databaseId) &&
+              this.#options.resolveDatabase?.(delta.target.databaseId))
+          )
+            sync(delta);
+      }
+    }
     if (change.source !== 'replace' && this.#selectedBlockIds.size > 0) {
       for (const id of [...this.#selectedBlockIds]) {
         if (!this.#findView(id) && !findBlock(change.doc.blocks, id)) {

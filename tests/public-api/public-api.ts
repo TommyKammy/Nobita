@@ -68,6 +68,9 @@ export function publicApiFixture(host: HTMLElement): void {
     onSelectionChange: (selection: EditorSelection | null) => {
       void selection;
     },
+    databaseProvider: query => [{ databaseId: 'tasks', pageId: 'work', title: query }],
+    resolveDatabase: (databaseId, pageId) => { void databaseId; void pageId; return null; },
+    onRelationSync: change => { void change.linked; void change.targetRowId; },
     onOpenPage: pageId => void pageId,
     resolvePage: (pageId: string): PageInfo | null => ({ id: pageId, title: 'Page' }),
     pageProvider: {
@@ -79,6 +82,7 @@ export function publicApiFixture(host: HTMLElement): void {
   void editor.insertPageLink({ id: 'p1', title: 'Page' });
   void editor.insertInlinePageLink({ id: 'p1', title: 'Page' });
   editor.refreshPageLinks();
+  editor.refreshDatabases();
   void extractPageLinks(doc);
   void buildBacklinkIndex([doc]);
   void getBacklinks([doc], 'p1');

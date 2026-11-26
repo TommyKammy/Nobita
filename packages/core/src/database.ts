@@ -1,3 +1,5 @@
+import { DatabaseEvalContext, computedDisplay } from './database-eval.js';
+import { mapFormulaReferences } from './formula.js';
 import { createId } from './id.js';
 import type {
   DatabaseCell,
@@ -35,6 +37,7 @@ export const DATABASE_COLUMN_TYPES: readonly DatabaseColumnType[] = [
   'image',
   'files',
   'people',
+  'relation', 'formula',
 ];
 
 export const isDatabaseColumnType = (value: unknown): value is DatabaseColumnType =>
@@ -251,6 +254,16 @@ function parseProgressNumber(raw: string): number | null {
 
 function parseCell(value: unknown, type?: DatabaseColumnType): DatabaseCell {
   if (!isRecord(value)) return {};
+  if (type === 'formula') return {};
+  if (type === 'relation') {
+    const seen = new Set<string>();
+    const relations = Array.isArray(value.relations) ? value.relations.flatMap(ref => {
+      if (!isRecord(ref) || typeof ref.rowId !== 'string' || !ref.rowId || seen.has(ref.rowId)) return [];
+      seen.add(ref.rowId);
+      return [{ rowId: ref.rowId, ...(typeof ref.label === 'string' ? { label: ref.label } : {}) }];
+    }) : [];
+    return relations.length ? { relations } : {};
+  }
   const runs = parseInlineRuns(value.runs);
   const plain = runs.length > 0 ? plainText(runs) : '';
   const text =
@@ -305,10 +318,55 @@ function parseColumn(value: unknown, index: number, seen: Set<string>): Database
           .slice(0, 20)
       )
     : undefined;
+  const rel = value.relation;
+  const fx = value.formula;
+  const fmt = isRecord(fx) && isRecord(fx.format) ? fx.format : {};
   return {
     id,
     name,
     type,
+    ...(type === 'relation' &&
+    isRecord(rel) &&
+    typeof rel.databaseId === 'string'
+      ? {
+          relation: {
+            databaseId: rel.databaseId,
+            ...(typeof rel.pageId === 'string' && rel.pageId
+              ? { pageId: rel.pageId }
+              : {}),
+            ...(rel.limit === 1 ? { limit: 1 as const } : {}),
+            ...(typeof rel.syncedColumnId === 'string' && rel.syncedColumnId
+              ? { syncedColumnId: rel.syncedColumnId }
+              : {}),
+          },
+        }
+      : {}),
+    ...(type === 'formula' && isRecord(fx) && typeof fx.expression === 'string'
+      ? {
+          formula: {
+            expression: fx.expression,
+            ...(isRecord(fx.format)
+              ? {
+                  format: {
+                    ...(fmt.numberFormat === 'percent' ||
+                    fmt.numberFormat === 'currency' ||
+                    fmt.numberFormat === 'number'
+                      ? { numberFormat: fmt.numberFormat }
+                      : {}),
+                    ...(typeof fmt.currency === 'string' &&
+                    /^[A-Z]{3}$/.test(fmt.currency)
+                      ? { currency: fmt.currency }
+                      : {}),
+                    ...(typeof fmt.decimals === 'number' &&
+                    Number.isInteger(fmt.decimals)
+                      ? { decimals: Math.max(0, Math.min(20, fmt.decimals)) }
+                      : {}),
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
     ...(options ? { options } : {}),
     ...(data && Object.keys(data).length > 0 ? { data } : {}),
     ...(width ? { width } : {}),
@@ -328,6 +386,7 @@ function parseRow(
   const rawCells = isRecord(value.cells) ? value.cells : {};
   for (const column of columns) {
     const cell = parseCell(rawCells[column.id], column.type);
+    if (column.relation?.limit === 1 && cell.relations) cell.relations = cell.relations.slice(0,1);
     if (Object.keys(cell).length > 0) cells[column.id] = cell;
   }
   const pageContent = isRecord(value.page)
@@ -659,12 +718,13 @@ export function normalizeDatabaseData(value: unknown, fallbackVariant: DatabaseV
   };
 }
 
-function cloneCell(cell: DatabaseCell): DatabaseCell {
+export function cloneDatabaseCell(cell: DatabaseCell): DatabaseCell {
   return {
     ...cell,
     ...(cell.runs ? { runs: cloneRuns(cell.runs) } : {}),
     ...(cell.values ? { values: [...cell.values] } : {}),
     ...(cell.files ? { files: cell.files.map(file => ({ ...file })) } : {}),
+    ...(cell.relations ? { relations: cell.relations.map(ref => ({...ref})) } : {}),
     ...(cell.people ? { people: cell.people.map(person => ({ ...person })) } : {}),
   };
 }
@@ -814,13 +874,15 @@ export function cloneDatabaseData(data: DatabaseData): DatabaseData {
     ...(data.titleColumnId ? { titleColumnId: data.titleColumnId } : {}),
     columns: data.columns.map(column => ({
       ...column,
+      ...(column.relation ? {relation:{...column.relation}} : {}),
+      ...(column.formula ? {formula:{...column.formula,...(column.formula.format ? {format:{...column.formula.format}} : {})}} : {}),
       ...(column.options ? { options: [...column.options] } : {}),
       ...(column.data ? { data: { ...column.data } } : {}),
     })),
     rows: data.rows.map(row => ({
       id: row.id,
       cells: Object.fromEntries(
-        Object.entries(row.cells).map(([key, cell]) => [key, cloneCell(cell)])
+        Object.entries(row.cells).map(([key, cell]) => [key, cloneDatabaseCell(cell)])
       ),
       ...(row.page ? { page: cloneRowPage(row.page) } : {}),
     })),
@@ -832,7 +894,7 @@ export function cloneDatabaseData(data: DatabaseData): DatabaseData {
 }
 
 /** Deep clone with fresh row and column ids (copy, duplicate, paste). */
-export function duplicateDatabaseData(data: DatabaseData): DatabaseData {
+export function duplicateDatabaseData(data: DatabaseData, sourceId?: string, copyId?: string): DatabaseData {
   const columnMap = new Map<string, string>();
   const columns = data.columns.map(column => {
     const id = createId('c');
@@ -849,12 +911,31 @@ export function duplicateDatabaseData(data: DatabaseData): DatabaseData {
     const cells: Record<string, DatabaseCell> = {};
     for (const [oldId, cell] of Object.entries(row.cells)) {
       const nextId = columnMap.get(oldId);
-      if (nextId) cells[nextId] = cloneCell(cell);
+      if (nextId) cells[nextId] = cloneDatabaseCell(cell);
     }
     const id = createId('r');
     rowMap.set(row.id, id);
     return { id, cells, ...(row.page ? { page: cloneRowPage(row.page) } : {}) };
   });
+  for (const col of columns) {
+    if (col.formula) col.formula = { ...col.formula, ...(col.formula.format ? {format:{...col.formula.format}} : {}),
+      expression:mapFormulaReferences(col.formula.expression,(key, rel) => {
+        if (rel) {
+          const link = data.columns.find(c=>c.id === rel)?.relation;
+          if (!link || link.pageId || link.databaseId !== sourceId) return key;
+        }
+        return columnMap.get(key) ?? key;
+      }) };
+    if (!col.relation) continue;
+    const { syncedColumnId, ...config } = col.relation;
+    col.relation = config;
+    if (!config.pageId && copyId && config.databaseId === sourceId) {
+      config.databaseId = copyId;
+      const reverse = syncedColumnId && columnMap.get(syncedColumnId);
+      if (reverse) col.relation.syncedColumnId = reverse;
+      for (const row of rows) for (const ref of row.cells[col.id]?.relations ?? []) ref.rowId = rowMap.get(ref.rowId) ?? ref.rowId;
+    }
+  }
   const view = data.view ? remapView(data.view, columnMap, undefined, rowMap) : undefined;
   const viewIdMap = new Map<string, string>();
   const views = data.views?.map(item => {
@@ -887,8 +968,12 @@ function rawCellText(cell: DatabaseCell): string {
   return cell.text ?? (cell.runs ? plainText(cell.runs) : '');
 }
 
-export function databaseCellText(cell: DatabaseCell | undefined, type: DatabaseColumnType): string {
+export function databaseCellText(cell: DatabaseCell | undefined, type: DatabaseColumnType,
+  evaluation?: { context: DatabaseEvalContext; row: DatabaseRow; columnId: string }
+): string {
+  if (evaluation) cell = evaluation.context.row(evaluation.row).cells[evaluation.columnId];
   if (!cell) return '';
+  if (type === 'relation') return cell.text ?? cell.relations?.map(r=>r.label ?? r.rowId).join(', ') ?? '';
   if (type === 'checkbox') return cell.checked ? 'true' : '';
   if (type === 'multi-select') return (cell.values ?? []).join(', ');
   if (type === 'files') return (cell.files ?? []).map(file => file.name).join(', ');
@@ -901,8 +986,13 @@ export function databaseCellText(cell: DatabaseCell | undefined, type: DatabaseC
   return rawCellText(cell);
 }
 
-export function databaseCellDisplay(cell: DatabaseCell | undefined, type: DatabaseColumnType): string {
+export function databaseCellDisplay(cell: DatabaseCell | undefined, type: DatabaseColumnType,
+  evaluation?: { context: DatabaseEvalContext; row: DatabaseRow; columnId: string }
+): string {
+  if (evaluation) cell = evaluation.context.row(evaluation.row).cells[evaluation.columnId];
   if (!cell) return '';
+  if (type === 'formula') return computedDisplay(cell) ?? cell.text ?? '';
+  if (type === 'relation') return databaseCellText(cell,type);
   if (type === 'checkbox') return cell.checked ? '✓' : '';
   if (type === 'multi-select') return (cell.values ?? []).join(' · ');
   if (type === 'files') return (cell.files ?? []).map(file => file.name).join(' · ');
@@ -916,6 +1006,7 @@ export function databaseCellDisplay(cell: DatabaseCell | undefined, type: Databa
 }
 
 function comparable(value: string, type: DatabaseColumnType): string | number {
+  if (type === 'formula' && value.trim() && Number.isFinite(Number(value))) return Number(value);
   if (type === 'number' || type === 'progress') {
     const number = Number.parseFloat(value);
     return Number.isFinite(number) ? number : Number.NaN;
@@ -1081,8 +1172,13 @@ function effectiveSorts(data: DatabaseData, view: DatabaseView): DatabaseSort[] 
   return sorts.length > 0 ? sorts : data.sort ? [data.sort] : [];
 }
 
+function evaluateRows(data: DatabaseData, context?: DatabaseEvalContext) {
+  return context ? context.project(data) : data.columns.some(c=>c.type === 'formula' || c.type === 'relation') ? new DatabaseEvalContext().project(data) : data;
+}
+
 /** Rows in display order, applying the saved view sort or legacy sort. */
-export function sortedDatabaseRows(data: DatabaseData): DatabaseRow[] {
+export function sortedDatabaseRows(data: DatabaseData, context?: DatabaseEvalContext): DatabaseRow[] {
+  data = evaluateRows(data,context);
   return sortRows(data.rows, data.columns, effectiveSorts(data, databaseView(data)));
 }
 
@@ -1132,8 +1228,10 @@ function matchesFilter(
       }
       return true;
     }
+    case 'formula':
     case 'number':
     case 'progress': {
+      if (column.type === 'formula' && !['equal','notEqual','greaterThan','lessThan','greaterThanOrEqual','lessThanOrEqual'].includes(filter.operator)) break;
       const left = Number.parseFloat(current);
       const normalizedExpected =
         column.type === 'progress' && expected.endsWith('%')
@@ -1254,8 +1352,9 @@ export function databaseFilterGroup(
 /** Rows after filters and sorting for a view. */
 export function filteredDatabaseRows(
   data: DatabaseData,
-  view: DatabaseView = databaseView(data)
+  view: DatabaseView = databaseView(data), context?: DatabaseEvalContext
 ): DatabaseRow[] {
+  data = evaluateRows(data,context);
   const filter = databaseFilterGroup(view);
   let rows: DatabaseRow[];
   if (filter.conditions.length === 0) {
@@ -1271,8 +1370,9 @@ export function filteredDatabaseRows(
 export function searchDatabaseRows(
   data: DatabaseData,
   rows: readonly DatabaseRow[],
-  query: string
+  query: string, context?: DatabaseEvalContext
 ): DatabaseRow[] {
+  if (context) { context.project(data); rows = rows.map(row => context.row(row)); }
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return [...rows];
   return rows.filter(row =>
@@ -1294,8 +1394,9 @@ function formatStatNumber(value: number): string {
 export function databaseStatValue(
   rows: readonly DatabaseRow[],
   column: DatabaseColumn,
-  type: DatabaseStatType | undefined
+  type: DatabaseStatType | undefined, context?: DatabaseEvalContext
 ): string {
+  if (context) rows = rows.map(row => context.row(row));
   if (!type) return '';
   if (type === 'count') return String(rows.length);
   if (type === 'countEmpty') {
@@ -1408,8 +1509,9 @@ function applyGroupSettings(
 /** Group filtered rows for a board or grouped view. */
 export function groupedDatabaseRows(
   data: DatabaseData,
-  view: DatabaseView = databaseView(data)
+  view: DatabaseView = databaseView(data), context?: DatabaseEvalContext
 ): DatabaseGroup[] {
+  data = evaluateRows(data,context);
   const rows = filteredDatabaseRows(data, view);
   const column = view.groupBy
     ? data.columns.find(item => item.id === view.groupBy)

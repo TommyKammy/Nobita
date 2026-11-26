@@ -1,5 +1,4 @@
 import {
-  cloneRuns,
   databaseCellText,
   normalizeMark,
   normalizeRuns,
@@ -64,6 +63,7 @@ export const COLUMN_TYPES: readonly { type: DatabaseColumnType; label: string }[
   { type: 'image', label: 'Image' },
   { type: 'files', label: 'Files' },
   { type: 'people', label: 'People' },
+  { type:'formula',label:'Formula' }, { type:'relation',label:'Relation' },
 ];
 
 export const TYPE_ICON: Record<DatabaseColumnType, string> = {
@@ -78,6 +78,7 @@ export const TYPE_ICON: Record<DatabaseColumnType, string> = {
   image: icon.image,
   files: icon.file,
   people: icon.user,
+  formula: icon.hash, relation: icon.link,
 };
 
 export const FILTER_LABELS: Record<DatabaseFilterOperator, string> = {
@@ -200,7 +201,7 @@ export function selectEl(
 export function filterOperators(type: DatabaseColumnType): DatabaseFilterOperator[] {
   const empty: DatabaseFilterOperator[] = ['isEmpty', 'isNotEmpty'];
   if (type === 'checkbox') return ['isChecked', 'isUnchecked', 'is', 'isNot'];
-  if (type === 'number' || type === 'progress') {
+  if (type === 'number' || type === 'progress' || type === 'formula') {
     return [
       'equal',
       'notEqual',
@@ -208,6 +209,7 @@ export function filterOperators(type: DatabaseColumnType): DatabaseFilterOperato
       'lessThan',
       'greaterThanOrEqual',
       'lessThanOrEqual',
+      ...(type === 'formula' ? ['contains','is','isNot'] as const : []),
       ...empty,
     ];
   }
@@ -637,22 +639,12 @@ export function applyPeopleLabel(
   button.append(el('span', undefined, summary || 'Add people…'));
 }
 
-export function cloneCell(cell: DatabaseCell): DatabaseCell {
-  return {
-    ...cell,
-    ...(cell.runs ? { runs: cloneRuns(cell.runs) } : {}),
-    ...(cell.values ? { values: [...cell.values] } : {}),
-    ...(cell.files ? { files: cell.files.map(file => ({ ...file })) } : {}),
-    ...(cell.people ? { people: cell.people.map(person => ({ ...person })) } : {}),
-  };
-}
-
 export function convertCell(
   cell: DatabaseCell,
   sourceType: DatabaseColumnType,
   targetType: DatabaseColumnType
 ): DatabaseCell | null {
-  if (targetType === 'files' || targetType === 'people') return null;
+  if (['files','people','formula','relation'].includes(targetType)) return null;
   const value = databaseCellText(cell, sourceType);
   if (targetType === 'checkbox') {
     return { checked: /^(true|1|yes|✓)$/iu.test(value.trim()) };
@@ -715,7 +707,7 @@ export function defaultFilterForColumn(column: DatabaseColumn): DatabaseFilter {
       value: column.options?.[0] ?? '',
     };
   }
-  if (column.type === 'number' || column.type === 'progress') {
+  if (column.type === 'number' || column.type === 'progress' || column.type === 'formula') {
     return { columnId: column.id, operator: 'equal', value: '' };
   }
   if (column.type === 'image') return { columnId: column.id, operator: 'isNotEmpty' };

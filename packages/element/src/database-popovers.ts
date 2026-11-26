@@ -2,6 +2,10 @@ import {
   DATABASE_STAT_LABELS,
   DATABASE_STAT_TYPES,
   createId,
+  databaseTitleColumn,
+  formulaNames,
+  type DatabaseResolver,
+  type DatabaseTarget,
   databaseFilterGroup,
   databaseSorts,
   databaseStatValue,
@@ -42,6 +46,8 @@ import type { DatabaseImageUploader } from './database-view.js';
 
 export interface DatabasePopoversContext {
   rootElement: HTMLElement;
+  resolveDatabase: DatabaseResolver;
+  databaseTargets(query: string): Promise<readonly DatabaseTarget[]>;
   getEventsSignal(): AbortSignal;
   getReadonly(): boolean;
   getUploadImage(): DatabaseImageUploader | undefined;
@@ -778,8 +784,17 @@ export class DatabasePopoversController {
     content.append(popTitle('Group'));
     const groupable =
       view.type === 'board'
-        ? ['select', 'multi-select', 'checkbox']
-        : ['text', 'number', 'date', 'select', 'multi-select', 'checkbox'];
+        ? ['select', 'multi-select', 'checkbox', 'formula', 'relation']
+        : [
+            'text',
+            'number',
+            'date',
+            'select',
+            'multi-select',
+            'checkbox',
+            'formula',
+            'relation',
+          ];
     const select = selectEl('Group by column', [
       { value: '', label: 'None', selected: !view.groupBy },
       ...data.columns
@@ -1205,6 +1220,180 @@ export class DatabasePopoversController {
     return { field, formatSelect, decimals, decimalPatch };
   }
 
+  async openComputed(
+    columnId: string,
+    anchor: HTMLElement | FloatingAnchor,
+    rowId?: string
+  ) {
+    const ctx = this.#ctx;
+    const data = ctx.getData();
+    const column = data.columns.find(c => c.id === columnId);
+    if (!column || ctx.getReadonly()) return;
+    const content = el('div', 'nb-db-column-popover');
+    const save = (patch: Partial<DatabaseColumn>, reset = false) => {
+      const latest = ctx.getData();
+      const rows = reset
+        ? latest.rows.map(row => {
+            const cells = { ...row.cells };
+            delete cells[columnId];
+            return { ...row, cells };
+          })
+        : latest.rows;
+      ctx.commit({
+        ...latest,
+        rows,
+        columns: latest.columns.map(c =>
+          c.id === columnId ? { ...c, ...patch } : c
+        ),
+      });
+      this.closePopover();
+    };
+    const action = (label: string, fn: () => void) => {
+      const button = btn(undefined, { text: label });
+      button.addEventListener('click', fn);
+      content.append(button);
+      return button;
+    };
+    if (column.type === 'formula') {
+      const input = document.createElement('textarea');
+      input.setAttribute('aria-label', 'Formula expression');
+      input.value = formulaNames(
+        column.formula?.expression ?? '',
+        data,
+        ctx.resolveDatabase,
+        true
+      );
+      content.append(popTitle('Edit formula'), input);
+      action('Save formula', () =>
+        save({
+          formula: {
+            ...column.formula,
+            expression: formulaNames(
+              input.value,
+              ctx.getData(),
+              ctx.resolveDatabase
+            ),
+          },
+        })
+      );
+      this.showPopover(anchor, content);
+      input.focus();
+      return;
+    }
+    const rel = column.relation;
+    const search = document.createElement('input');
+    search.type = 'search';
+    const list = el('div', 'nb-db-pop-actions');
+    if (rowId && rel) {
+      search.setAttribute('aria-label', 'Search rows');
+      content.append(popTitle('Linked rows'), search, list);
+      const render = () => {
+        const target = ctx.resolveDatabase(rel.databaseId, rel.pageId);
+        const title = target && databaseTitleColumn(target);
+        const refs =
+          ctx.getData().rows.find(r => r.id === rowId)?.cells[columnId]
+            ?.relations ?? [];
+        const options = new Map(refs.map(r => [r.rowId, r.label ?? r.rowId]));
+        for (const r of target?.rows ?? [])
+          options.set(r.id, (title && r.cells[title.id]?.text) || r.id);
+        list.replaceChildren();
+        for (const [id, label] of options) {
+          if (!label.toLowerCase().includes(search.value.toLowerCase()))
+            continue;
+          const selected = refs.some(ref => ref.rowId === id);
+          const button = btn(undefined, { text: label });
+          button.setAttribute('aria-pressed', String(selected));
+          button.onclick = () => {
+            const remaining = refs.filter(r => r.rowId !== id);
+            const relations = selected
+              ? remaining
+              : [...(rel.limit ? [] : remaining), { rowId: id, label }];
+            ctx.commitCell(
+              rowId,
+              columnId,
+              relations.length ? { relations } : {}
+            );
+            render();
+          };
+          list.append(button);
+        }
+      };
+      search.oninput = render;
+      render();
+      this.showPopover(anchor, content);
+      search.focus();
+      return;
+    }
+    const target = document.createElement('select');
+    const reverse = document.createElement('select');
+    const single = document.createElement('input');
+    single.type = 'checkbox';
+    single.checked = rel?.limit === 1;
+    const field = (label: string, control: HTMLElement) => {
+      const wrapper = el('label', 'nb-db-field');
+      wrapper.append(label, control);
+      content.append(wrapper);
+    };
+    field('Search databases', search);
+    field('Target database', target);
+    field('Reverse property', reverse);
+    field('Single row', single);
+    let targets: readonly DatabaseTarget[] = [];
+    const refreshReverse = () => {
+      const choice = targets[target.selectedIndex];
+      const db =
+        choice && ctx.resolveDatabase(choice.databaseId, choice.pageId);
+      reverse.replaceChildren(new Option('One-way', ''));
+      for (const c of db?.columns ?? [])
+        if (c.type === 'relation') {
+          reverse.add(
+            new Option(c.name, c.id, false, c.id === rel?.syncedColumnId)
+          );
+        }
+    };
+    target.onchange = refreshReverse;
+    let generation = 0;
+    const refresh = async () => {
+      const token = ++generation;
+      const results = await ctx.databaseTargets(search.value);
+      if (token !== generation) return;
+      targets = results;
+      target.replaceChildren(
+        ...targets.map(
+          t =>
+            new Option(
+              t.title,
+              t.databaseId,
+              false,
+              t.databaseId === rel?.databaseId && t.pageId === rel.pageId
+            )
+        )
+      );
+      refreshReverse();
+    };
+    search.oninput = () => {
+      void refresh();
+    };
+    action('Save relation', () => {
+      const choice = targets[target.selectedIndex];
+      if (!choice) return;
+      const { databaseId, pageId } = choice;
+      save(
+        {
+          relation: {
+            databaseId,
+            ...(pageId ? { pageId } : {}),
+            ...(single.checked ? { limit: 1 } : {}),
+            ...(reverse.value ? { syncedColumnId: reverse.value } : {}),
+          },
+        },
+        databaseId !== rel?.databaseId || pageId !== rel?.pageId
+      );
+    });
+    this.showPopover(anchor, content);
+    await refresh();
+  }
+
   openColumnPopover(columnId: string, anchor: HTMLElement | FloatingAnchor): void {
     if (this.#ctx.getReadonly()) return;
     const data = this.#ctx.getData();
@@ -1290,6 +1479,15 @@ export class DatabasePopoversController {
       });
       actions.append(button);
     };
+    if (column.type === 'formula' || column.type === 'relation') {
+      action(
+        column.type === 'formula' ? 'Edit formula' : 'Configure relation',
+        icon.check,
+        () => {
+          void this.openComputed(columnId, anchor);
+        }
+      );
+    }
     action('Done', icon.check, () => {}, { applyFirst: true });
     const hidden = state?.hide ?? false;
     action(hidden ? 'Show In View' : 'Hide In View', icon.checkboxSquare, () => {
