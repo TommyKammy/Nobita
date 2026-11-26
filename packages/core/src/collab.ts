@@ -55,6 +55,12 @@ export type DocPatch =
 
 export interface RemoteDocUpdate {
   doc: Doc;
+  remapCellOffset?: (
+    blockId: string,
+    rowId: string,
+    columnId: string,
+    offset: number
+  ) => number | null;
   remapPoint?: (point: Point) => Point | null;
 }
 export interface PeerPresence {
@@ -105,15 +111,12 @@ export function diffDocs(previous: Doc, next: Doc): DocPatch[] {
     b.forEach((block, index) =>
       current.set(block.id, { block, parentId, index })
     );
-    const ids = new Set([...a, ...b].map((block) => block.id));
-    for (const id of ids) {
-      const left = aByParent(old.get(id)),
-        right = aByParent(current.get(id));
-      if (left?.children.length || right?.children.length)
-        scan(left?.children ?? [], right?.children ?? [], id);
-    }
-    function aByParent(entry?: Entry) {
-      return entry?.parentId === parentId ? entry.block : undefined;
+    const left = new Map(a.map((block) => [block.id, block]));
+    const right = new Map(b.map((block) => [block.id, block]));
+    for (const id of new Set([...left.keys(), ...right.keys()])) {
+      const before = left.get(id)?.children,
+        after = right.get(id)?.children;
+      if (before?.length || after?.length) scan(before ?? [], after ?? [], id);
     }
   }
   scan(previous.blocks, next.blocks, null);

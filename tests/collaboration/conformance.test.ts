@@ -205,3 +205,94 @@ for (const engine of ['automerge', 'yjs'])
       expect(runs.at(-1)?.marks?.bold).toBe(true);
     });
   });
+
+for (const engine of ['automerge', 'yjs']) {
+  it(engine + ' remaps a caret between disjoint offline edits', () => {
+    const { a, b, send } = pair(engine, seed);
+    let offsets: number[] = [];
+    a.subscribe((u) => {
+      offsets = [0, 1, 2].map(
+        (offset) => u.remapPoint!({ blockId: 'a', offset })!.offset
+      );
+    });
+    edit(b, (d) => {
+      d.blocks[0]!.text = [{ text: 'Xab' }];
+    });
+    edit(b, (d) => {
+      d.blocks[0]!.text = [{ text: 'XabY' }];
+    });
+    send();
+    expect(offsets).toEqual([1, 2, 4]);
+  });
+  it(engine + ' syncs a rotated ancestor chain', () => {
+    const initial = structuredClone(seed),
+      [a, b, c, d] = initial.blocks;
+    initial.blocks = [a!];
+    a!.children = [b!];
+    b!.children = [c!];
+    c!.children = [d!];
+    const peers = pair(engine, initial);
+    edit(peers.a, (doc) => {
+      const a = doc.blocks[0]!,
+        b = a.children[0]!,
+        c = b.children[0]!,
+        d = c.children[0]!;
+      b.children = [];
+      d.children = [a];
+      doc.blocks = [c];
+    });
+    peers.send();
+    expect(peers.b.getDoc()).toEqual(peers.a.getDoc());
+    expect(
+      peers.b.getDoc().blocks[0]?.children[0]?.children[0]?.children[0]?.id
+    ).toBe('b');
+  });
+}
+it('Automerge field undo preserves independent checks and later same-value writes', () => {
+  const check = (adapter: CollaborationAdapter, value: boolean) =>
+    edit(adapter, (d) => {
+      d.blocks[0]!.props.checked = value;
+    });
+  const { a, b, send } = pair('automerge', seed);
+  check(a, true);
+  check(b, true);
+  send();
+  a.undo();
+  send();
+  expect(b.getDoc().blocks[0]!.props.checked).toBe(true);
+  b.undo();
+  send();
+  expect(a.getDoc().blocks[0]!.props.checked).toBeUndefined();
+  check(a, true);
+  send();
+  check(b, false);
+  check(b, true);
+  send();
+  a.undo();
+  send();
+  expect(b.getDoc().blocks[0]!.props.checked).toBe(true);
+});
+it('keeps a third concurrent Automerge check through two independent undos', () => {
+  const a = new AutomergeCollaborationAdapter(seed),
+    b = new AutomergeCollaborationAdapter(a.save()),
+    c = new AutomergeCollaborationAdapter(a.save());
+  for (const peer of [a, b, c])
+    edit(peer, (d) => {
+      d.blocks[0]!.props.checked = true;
+    });
+  function sync() {
+    const states = [a, b, c].map((p) => p.save());
+    for (const p of [a, b, c]) for (const state of states) p.receive(state);
+  }
+  sync();
+  a.undo();
+  b.undo();
+  sync();
+  expect(c.getDoc().blocks[0]!.props.checked).toBe(true);
+  c.undo();
+  sync();
+  expect(a.getDoc().blocks[0]!.props.checked).toBeUndefined();
+  b.redo();
+  sync();
+  expect(c.getDoc().blocks[0]!.props.checked).toBe(true);
+});

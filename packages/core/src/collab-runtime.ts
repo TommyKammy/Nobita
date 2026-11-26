@@ -15,12 +15,13 @@ import type {
   DocChange,
   InlineMark,
   InlineRun,
-  Point,
   TableData,
 } from './types.js';
 
 export type Fields = Record<string, unknown>;
+export type OffsetMap = (key: string, offset: number) => number;
 export interface Backend {
+  offsets: OffsetMap;
   actor: string;
   read(key: string): Fields;
   field(key: string, name: string, value: unknown): void;
@@ -522,12 +523,28 @@ export class SharedAdapter implements CollaborationAdapter {
     this.#snapshot = this.#read();
   }
   protected received() {
-    const old = this.#snapshot;
+    const offsets = this.store.offsets;
     this.#snapshot = this.#read();
     const doc = this.#snapshot;
     const update: RemoteDocUpdate = {
       doc,
-      remapPoint: (p) => remap(old, doc, p),
+      remapPoint: (p) =>
+        find(doc.blocks, p.blockId)
+          ? { ...p, offset: offsets(bodyText(p.blockId), p.offset) }
+          : null,
+      remapCellOffset: (id, row, col, i) => {
+        const b = find(doc.blocks, id),
+          grid = b?.props.table ?? b?.props.database;
+        if (
+          !grid?.rows.some((r) => r.id === row) ||
+          !grid.columns.some((c) => c.id === col)
+        )
+          return null;
+        return offsets(
+          key(id, b?.props.table ? 'table' : 'database', row, col),
+          i
+        );
+      },
     };
     for (const fn of this.#listeners) fn(update);
   }
@@ -624,20 +641,4 @@ function find(blocks: Block[], id: string): Block | undefined {
     const child = find(b.children, id);
     if (child) return child;
   }
-}
-function remap(a: Doc, b: Doc, p: Point): Point | null {
-  const before = find(a.blocks, p.blockId),
-    after = find(b.blocks, p.blockId);
-  if (!after) return null;
-  const { from, removed, inserted } = textEdit(
-    plainText(before?.text ?? []),
-    plainText(after.text)
-  );
-  return {
-    ...p,
-    offset:
-      p.offset < from
-        ? p.offset
-        : Math.max(from, p.offset - removed) + inserted.length,
-  };
 }

@@ -140,3 +140,62 @@ test('table and database history are disabled without adapter history, and disco
   await expect(page.locator('#editor .nb-text').first()).toHaveText('ab');
   await expect(page.locator('#peer .nb-text').first()).toHaveText('ab');
 });
+
+for (const [id, selector] of [
+  ['t', '.nb-table-cell'],
+  ['d', '.nb-db-rich-text'],
+]) {
+  test(
+    id + ' keeps normal typing at the logical cell offset',
+    async ({ page }) => {
+      await openFixture(page);
+      await page.evaluate(async () => {
+        const path = '/peers.ts';
+        await (await import(path)).setupPeers();
+      });
+      const cell = page.locator('#editor ' + selector).first();
+      await cell.click();
+      await cell.evaluate((el) =>
+        (el.getRootNode() as ShadowRoot & { getSelection(): Selection })
+          .getSelection()
+          .collapse(el.firstChild, 1)
+      );
+      await page.evaluate((id) => {
+        const peer = (document.querySelector('#peer') as typeof window.__host)
+          .editor!;
+        peer.store.update((d) => {
+          const doc = structuredClone(d),
+            b = doc.blocks.find((b) => b.id === id)!;
+          (b.props.table ?? b.props.database)!.rows[0]!.cells.c!.text = 'Bab';
+          return doc;
+        });
+      }, id);
+      await page.keyboard.type('X');
+      await expect(page.locator('#peer ' + selector).first()).toHaveText(
+        'BaXb'
+      );
+    }
+  );
+}
+test('document replacements stay in sync with the peer', async ({ page }) => {
+  await openFixture(page);
+  await page.evaluate(async () => {
+    const path = '/peers.ts';
+    await (await import(path)).setupPeers();
+    const editor = window.__editor!,
+      doc = structuredClone(editor.doc);
+    doc.blocks = [{ ...doc.blocks[0]!, id: 'replacement' }];
+    window.__host.doc = doc;
+    editor.focus('replacement', 1);
+  });
+  await page.keyboard.type('X');
+  await expect(
+    page.locator('#peer [data-block-id="replacement"] .nb-text')
+  ).toHaveText('aXb');
+  await expect(
+    page.evaluate(() =>
+      window.__editor!.setDoc({ ...window.__editor!.doc, id: 'other' })
+    )
+  ).rejects.toThrow(/Disconnect collaboration/);
+  await expect(page.locator('#editor .nb-text').first()).toHaveText('aXb');
+});

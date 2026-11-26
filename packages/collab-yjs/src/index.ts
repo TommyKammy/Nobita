@@ -3,10 +3,38 @@ import type { Doc, InlineRun, PeerPresence } from '@nobita/core';
 import {
   SharedAdapter,
   type Backend,
+  type OffsetMap,
   type PresenceChannel,
 } from '@nobita/core/collab-runtime';
 
 class YBackend implements Backend {
+  offsets: OffsetMap = (_, i) => i;
+  captureOffsets(tx: Y.Transaction) {
+    const deltas = new Map<Y.Text, Y.YTextEvent['delta']>();
+    for (const events of tx.changedParentTypes.values())
+      for (const event of events) {
+        if (event instanceof Y.YTextEvent)
+          deltas.set(event.target, event.delta);
+      }
+    this.offsets = (key, offset) => {
+      let old = 0,
+        next = 0;
+      for (const op of deltas.get(this.text(key)) ?? []) {
+        if (op.retain) {
+          if (offset < old + op.retain) return next + offset - old;
+          old += op.retain;
+          next += op.retain;
+        }
+        if (op.insert)
+          next += typeof op.insert === 'string' ? op.insert.length : 1;
+        if (op.delete) {
+          if (offset < old + op.delete) return next;
+          old += op.delete;
+        }
+      }
+      return next + offset - old;
+    };
+  }
   readonly origin = {};
   readonly history: Y.UndoManager;
   constructor(readonly doc: Y.Doc) {
@@ -93,12 +121,9 @@ export class YjsCollaborationAdapter extends SharedAdapter {
     const backend = new YBackend(doc);
     super(backend, seed, presence);
     const listener = (tx: Y.Transaction) => {
-      if (
-        tx.changed.size &&
-        tx.origin !== backend.origin &&
-        tx.origin !== backend.history
-      )
-        this.received();
+      if (!tx.changed.size || tx.origin === backend.origin) return;
+      backend.captureOffsets(tx);
+      if (tx.origin !== backend.history) this.received();
     };
     doc.on('afterTransaction', listener);
     this.#off = () => {

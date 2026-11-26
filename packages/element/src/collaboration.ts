@@ -18,23 +18,76 @@ export function connect(
   const events = new AbortController(),
     capture = { capture: true, signal: events.signal };
   let composing: CompositionTarget | null = null;
-  const receive = ({ doc, remapPoint }: RemoteDocUpdate) => {
+  const block = (id: string) =>
+    root.querySelector<HTMLElement>('[data-block-id="' + CSS.escape(id) + '"]');
+  const bodyText = (id: string) =>
+    block(id)?.querySelector<HTMLElement>('.nb-text');
+  function cellText(id: string, row: string, col: string) {
+    return block(id)?.querySelector<HTMLElement>(
+      `[data-row-id="${CSS.escape(row)}"][data-column-id="${CSS.escape(col)}"] :is(.nb-table-cell,.nb-db-rich-text)`
+    );
+  }
+  const receive = ({ doc, remapPoint, remapCellOffset }: RemoteDocUpdate) => {
     if (composing) return;
     const active = root.activeElement?.classList.contains('nb-body');
+    const cell = root.activeElement?.closest<HTMLElement>(
+      '.nb-table-cell,.nb-db-rich-text'
+    );
+    const coords = cell?.closest<HTMLElement>(
+      '[data-row-id][data-column-id]'
+    )?.dataset;
+    const id = cell?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId;
+    const sel = nativeSelection(root);
+    let restoreCell: (() => void) | undefined;
+    if (
+      remapCellOffset &&
+      cell &&
+      id &&
+      coords?.rowId &&
+      coords.columnId &&
+      sel?.anchorNode &&
+      sel.focusNode &&
+      cell.contains(sel.anchorNode) &&
+      cell.contains(sel.focusNode)
+    ) {
+      const { rowId, columnId } = coords;
+      const anchor = remapCellOffset(
+        id,
+        rowId,
+        columnId,
+        domPointToOffset(cell, sel.anchorNode, sel.anchorOffset)
+      );
+      const focus = remapCellOffset(
+        id,
+        rowId,
+        columnId,
+        domPointToOffset(cell, sel.focusNode, sel.focusOffset)
+      );
+      restoreCell = () => {
+        const el = cell.isConnected ? cell : cellText(id, rowId, columnId);
+        if (!el || anchor === null || focus === null) return;
+        el.focus({ preventScroll: true });
+        const a = offsetToDomPoint(el, anchor),
+          f = offsetToDomPoint(el, focus);
+        nativeSelection(root)?.setBaseAndExtent(
+          a.node,
+          a.offset,
+          f.node,
+          f.offset
+        );
+      };
+    }
     store.applyRemote(doc, remapPoint);
+    restoreCell?.();
     if (active) restore();
   };
   store.setHistoryAdapter(adapter);
   store.applyRemote(adapter.getDoc());
   const remote = adapter.subscribe(receive);
   const local = store.subscribe((change) => {
-    if (change.source !== 'remote' && change.source !== 'replace')
+    if (change.source !== 'remote')
       adapter.applyLocalChange(change, diffDocs(change.previous, change.doc));
   });
-  const block = (id: string) =>
-    root.querySelector<HTMLElement>('[data-block-id="' + CSS.escape(id) + '"]');
-  const bodyText = (id: string) =>
-    block(id)?.querySelector<HTMLElement>('.nb-text');
   const inputSelector = '.nb-text,.nb-table-cell,.nb-db-rich-text';
   root.addEventListener(
     'compositionstart',
@@ -96,13 +149,7 @@ export function connect(
       const text =
         target.rowId === undefined
           ? bodyText(target.blockId)
-          : block(target.blockId)?.querySelector<HTMLElement>(
-              '[data-row-id="' +
-                CSS.escape(target.rowId) +
-                '"][data-column-id="' +
-                CSS.escape(target.columnId) +
-                '"] :is(.nb-table-cell,.nb-db-rich-text)'
-            );
+          : cellText(target.blockId, target.rowId, target.columnId);
       if (text) {
         const p = offsetToDomPoint(text, point?.offset ?? target.from);
         nativeSelection(root)?.collapse(p.node, p.offset);

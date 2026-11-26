@@ -3,6 +3,7 @@ import type { Doc, InlineRun } from '@nobita/core';
 import {
   SharedAdapter,
   type Backend,
+  type OffsetMap,
   type PresenceChannel,
 } from '@nobita/core/collab-runtime';
 
@@ -13,13 +14,37 @@ type State = {
 };
 type Action = () => void;
 
+// New writes include a unique identity, including deletions. Older snapshots contain bare JSON.
+function payload(value: string | undefined) {
+  if (value?.startsWith('@'))
+    return value.slice(value.indexOf('|') + 1) || undefined;
+  return value;
+}
+
 class AutomergeBackend implements Backend {
   doc: A.Doc<State>;
+  offsets: OffsetMap = (_, i) => i;
+  captureOffsets(before: A.Doc<State>, after: A.Doc<State>) {
+    this.offsets = (key, offset) => {
+      const path = ['texts', key],
+        old = before.texts[key],
+        next = after.texts[key];
+      if (next === undefined) return 0;
+      if (old === undefined || offset >= old.length) return next.length;
+      return A.getCursorPosition(
+        after,
+        path,
+        A.getCursor(before, path, offset)
+      );
+    };
+  }
+  private sequence = 0;
   // Flat field identities avoid competing Automerge map creations on previously empty blocks.
   private names = new Map<string, Set<string>>();
   reindex() {
     this.names.clear();
     for (const path of Object.keys(this.doc.fields)) {
+      if (path.startsWith('!')) continue;
       const [k, n] = JSON.parse(path) as [string, string];
       this.track(k, n);
     }
@@ -48,7 +73,7 @@ class AutomergeBackend implements Backend {
   read(k: string) {
     return Object.fromEntries(
       Array.from(this.names.get(k) ?? []).flatMap((n) => {
-        const v = this.state.fields[JSON.stringify([k, n])];
+        const v = payload(this.visibleField(JSON.stringify([k, n])));
         return v === undefined ? [] : [[n, JSON.parse(v)]];
       })
     );
@@ -56,17 +81,58 @@ class AutomergeBackend implements Backend {
   field(k: string, n: string, v: unknown) {
     this.track(k, n);
     const path = JSON.stringify([k, n]),
-      map = this.state.fields;
-    const old = map[path],
-      encoded = JSON.stringify(v);
-    if (old === encoded) return;
-    if (encoded === undefined) delete map[path];
-    else map[path] = encoded;
+      value = JSON.stringify(v);
+    const previous = this.visibleField(path);
+    if (payload(previous) === value) return;
+    const token = `@${this.actor}:${++this.sequence}`;
+    this.state.fields[path] = token + '|' + (value ?? '');
     if (k !== 'clocks')
-      this.recording.push(() => {
-        if (this.state.fields[path] === encoded)
-          this.field(k, n, old === undefined ? undefined : JSON.parse(old));
-      });
+      this.recording.push(() => this.toggleUndo('!' + token, previous ?? ''));
+  }
+
+  // Mask just this operation. Assigning to the register here would resolve *all*
+  // concurrent writes, including those belonging to other actors.
+  private toggleUndo(key: string, previous: string) {
+    const fields = this.state.fields;
+    if (fields[key] === undefined) fields[key] = previous;
+    else delete fields[key];
+    this.recording.push(() => this.toggleUndo(key, previous));
+  }
+
+  private visibleField(path: string) {
+    const fields = this.state.fields;
+    let winner = fields[path];
+    const undone = (v: string | undefined) =>
+      v?.startsWith('@') ? fields['!' + v.slice(0, v.indexOf('|'))] : undefined;
+    if (undone(winner) === undefined) return winner;
+    const conflicts = A.getConflicts(fields, path);
+    if (conflicts) {
+      // Match Automerge's register ordering among the still-active operations.
+      let bestCounter = -1,
+        bestActor = '',
+        best: string | undefined;
+      for (const [id, raw] of Object.entries(conflicts)) {
+        if (typeof raw !== 'string' || undone(raw) !== undefined) continue;
+        const split = id.indexOf('@'),
+          counter = Number(id.slice(0, split)),
+          actor = id.slice(split + 1);
+        if (
+          counter > bestCounter ||
+          (counter === bestCounter && actor > bestActor)
+        ) {
+          bestCounter = counter;
+          bestActor = actor;
+          best = raw;
+        }
+      }
+      if (best !== undefined) return best;
+    }
+    let predecessor = undone(winner);
+    while (predecessor !== undefined) {
+      winner = predecessor || undefined;
+      predecessor = undone(winner);
+    }
+    return winner;
   }
   ensureList(k: string) {
     this.state.lists[k] ??= [];
@@ -189,10 +255,12 @@ class AutomergeBackend implements Backend {
     const actions: Action[] = [];
     this.recording = actions;
     try {
+      const before = this.doc;
       this.doc = A.change(this.doc, (d) => {
         this.draft = d;
         fn();
       });
+      this.captureOffsets(before, this.doc);
     } finally {
       delete this.draft;
       this.recording = [];
@@ -255,6 +323,7 @@ export class AutomergeCollaborationAdapter extends SharedAdapter {
     const old = this.backend.doc;
     const merged = A.merge(old, A.load<State>(bytes));
     this.backend.doc = merged;
+    this.backend.captureOffsets(old, merged);
     this.backend.reindex();
     if (!A.equals(old, merged)) this.received();
   }

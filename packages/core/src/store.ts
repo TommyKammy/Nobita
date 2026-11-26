@@ -110,6 +110,7 @@ export class EditorStore {
   /** Replace the document, e.g. when opening another page. Clears history by default. */
   replaceDoc(doc: Doc, options: { history?: boolean } = {}): void {
     if (doc === this.#doc) return;
+    if (this.#historyAdapter && this.#doc.id !== doc.id) throw new Error('Disconnect collaboration before changing document IDs');
     const previous = this.#doc;
     this.#doc = doc;
     this.#selection = null;
