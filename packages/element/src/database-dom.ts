@@ -22,7 +22,7 @@ import type {
   InlineRun,
   PageInfo,
 } from '@nobita/core';
-import { nativeSelection } from './dom.js';
+import { el, nativeSelection } from './dom.js';
 import { icon } from './icons.js';
 import {
   domPointToRunsOffset,
@@ -118,17 +118,7 @@ export const TAG_TO_MARK: Record<string, BooleanMarkKey> = {
 
 export const DATABASE_ROWS_MIME = 'application/x-nobita-database-rows';
 
-/** Create an element with optional class name and text content. */
-export function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className?: string,
-  text?: string
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
+export { el } from './dom.js';
 
 export interface ButtonOptions {
   text?: string;

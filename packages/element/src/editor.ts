@@ -30,6 +30,8 @@ import {
   insertBlocksAfter,
   insertTextAt,
   isTextualBlock,
+  isCustomBlockType,
+  type CustomBlockType,
   locateBlock,
   markdownToBlocks,
   markStateInRange,
@@ -75,13 +77,14 @@ import {
   type TextAlign,
   type TextColor,
 } from '@nobita/core';
-import { BlockView, type BlockDisplayState } from './block-view.js';
+import { BlockView, type BlockDisplayState, type CustomBlockRenderer } from './block-view.js';
 import type { BlockHost } from './bridge.js';
 import {
   readClipboardPayload,
   serializeBlocksForClipboard,
 } from './clipboard.js';
 import {
+  el,
   caretRect,
   closestElement,
   domPointToOffset,
@@ -245,7 +248,7 @@ export class NobitaEditor implements BlockHost {
   #body!: HTMLElement;
   #tail!: HTMLElement;
   #overlay!: HTMLElement;
-  #display: BlockDisplayState = { databases: new Map(), revealed: new WeakSet() };
+  #display: BlockDisplayState = { custom: new Map(), databases: new Map(), revealed: new WeakSet() };
   #printing = false;
   #views = new Map<string, BlockView>();
   #viewIndex = new Map<string, BlockView>();
@@ -338,38 +341,30 @@ export class NobitaEditor implements BlockHost {
     this.#hostElement.dataset.theme = theme;
     const style = document.createElement('style');
     style.textContent = styles;
-    const rootElement = document.createElement('div');
-    rootElement.className = 'nb-root';
+    const rootElement = el('div', 'nb-root');
     rootElement.dataset.theme = theme;
-    this.#page = document.createElement('div');
-    this.#page.className = 'nb-page';
-    const titleWrap = document.createElement('div');
-    titleWrap.className = 'nb-title-wrap';
-    this.#title = document.createElement('div');
-    this.#title.className = 'nb-title';
+    this.#page = el('div', 'nb-page');
+    const titleWrap = el('div', 'nb-title-wrap');
+    this.#title = el('div', 'nb-title');
     this.#title.contentEditable = this.#readonly ? 'false' : 'true';
     this.#title.spellcheck = options.spellcheck ?? true;
     this.#title.setAttribute('role', 'textbox');
     this.#title.setAttribute('aria-label', 'Document title');
     this.#title.dataset.placeholder = 'Untitled';
     titleWrap.append(this.#title);
-    this.#body = document.createElement('div');
-    this.#body.className = 'nb-body';
+    this.#body = el('div', 'nb-body');
     this.#body.tabIndex = -1;
     this.#body.contentEditable = this.#readonly ? 'false' : 'true';
     this.#body.spellcheck = options.spellcheck ?? true;
     this.#body.setAttribute('role', 'textbox');
     this.#body.setAttribute('aria-multiline', 'true');
     this.#body.setAttribute('aria-label', 'Document body');
-    this.#tail = document.createElement('div');
-    this.#tail.className = 'nb-tail';
+    this.#tail = el('div', 'nb-tail');
     this.#page.append(titleWrap, this.#body, this.#tail);
-    const scroll = document.createElement('div');
-    scroll.className = 'nb-scroll';
+    const scroll = el('div', 'nb-scroll');
     scroll.append(this.#page);
     rootElement.append(scroll);
-    this.#overlay = document.createElement('div');
-    this.#overlay.className = 'nb-overlay';
+    this.#overlay = el('div', 'nb-overlay');
     rootElement.append(this.#overlay);
     this.root.append(style, rootElement);
 
@@ -527,6 +522,16 @@ export class NobitaEditor implements BlockHost {
 
   /** ---- public API ---- */
 
+  /** Register or replace an instance-local renderer. Pass null to restore the fallback. */
+  registerCustomBlock(type: CustomBlockType, render: CustomBlockRenderer | null): void {
+    if (!isCustomBlockType(type)) throw new TypeError('Expected a custom: block type');
+    if (render) this.#display.custom.set(type, render);
+    else this.#display.custom.delete(type);
+    for (const view of this.#viewIndex.values()) {
+      if (view.block.type === type) view.renderCustomBlock();
+    }
+  }
+
   getDoc(): Doc {
     return this.store.doc;
   }
@@ -632,7 +637,7 @@ export class NobitaEditor implements BlockHost {
     });
     const next = replaceBlockText(doc, block.id, nextRuns);
     const caret: Point = { blockId: block.id, offset: point.offset + pageTitle.length };
-    this.#commit(next, { anchor: caret, focus: caret });
+    this.#commit(next, caretSelection(caret));
     this.#focusBlock(block.id, caret.offset);
     return true;
   }
@@ -913,7 +918,7 @@ export class NobitaEditor implements BlockHost {
     }
     const caret: Point = { blockId, offset };
     const next = replaceBlockText(this.store.doc, blockId, runs);
-    this.#commit(next, { anchor: caret, focus: caret }, { mergeKey: `text:${blockId}` });
+    this.#commit(next, caretSelection(caret), { mergeKey: `text:${blockId}` });
   }
 
   keyDown(blockId: string, event: KeyboardEvent): void {
@@ -1216,7 +1221,7 @@ export class NobitaEditor implements BlockHost {
     }
     const { doc, block } = appendParagraphAfter(this.store.doc, blockId);
     const caret: Point = { blockId: block.id, offset: 0 };
-    this.#commit(doc, { anchor: caret, focus: caret });
+    this.#commit(doc, caretSelection(caret));
     this.#focusBlock(block.id, 0);
   }
 
@@ -1270,7 +1275,7 @@ export class NobitaEditor implements BlockHost {
         next = removeBlocks(next, replaceIds).doc;
         this.clearBlockSelection();
         const point: Point = { blockId: block.id, offset: 0 };
-        this.#commit(next, { anchor: point, focus: point }, { restore: false });
+        this.#commit(next, caretSelection(point), { restore: false });
       } else {
         this.#commit(next, this.store.selection);
       }
@@ -1350,8 +1355,7 @@ export class NobitaEditor implements BlockHost {
   beginDrag(blockId: string, event: PointerEvent, handle: HTMLElement): void {
     if (this.#readonly) return;
     if (this.#drag) this.#endDrag();
-    const line = document.createElement('div');
-    line.className = 'nb-drop-line';
+    const line = el('div', 'nb-drop-line');
     this.#drag = {
       blockId,
       startX: event.clientX,
@@ -1383,7 +1387,7 @@ export class NobitaEditor implements BlockHost {
   #isNestedField(target: EventTarget | null): boolean {
     if (!(target instanceof Node)) return false;
     const element = target.nodeType === Node.ELEMENT_NODE ? (target as Element) : target.parentElement;
-    return Boolean(element?.closest('.nb-caption, .nb-db, .nb-image-placeholder, .nb-page-link, .nb-table, input, textarea, select'));
+    return Boolean(element?.closest('.nb-custom, .nb-caption, .nb-db, .nb-image-placeholder, .nb-page-link, .nb-table, input, textarea, select'));
   }
 
   #activeBlockId(target: EventTarget | null): string | null {
@@ -1605,13 +1609,13 @@ export class NobitaEditor implements BlockHost {
         }
         const row = target.closest<HTMLElement>('.nb-row');
         if (!row) return;
-        if (target.closest('button, input, select, .nb-text, .nb-caption, .nb-db, .nb-table')) {
+        if (target.closest('button, input, select, textarea, .nb-custom :focus, .nb-text, .nb-caption, .nb-db, .nb-table')) {
           return;
         }
         const blockId = row.closest<HTMLElement>('.nb-block')?.dataset.blockId;
         if (!blockId) return;
         const block = this.#findView(blockId)?.block;
-        if (block?.type === 'divider' || (block?.type === 'image' && Boolean(block.props.src))) {
+        if ((block && isCustomBlockType(block.type)) || block?.type === 'divider' || (block?.type === 'image' && Boolean(block.props.src))) {
           if (event.shiftKey) {
             const anchor = this.#blockAnchorId ?? this.#focusedBlockId ?? blockId;
             this.#selectBlockRange(anchor, blockId);
@@ -1863,7 +1867,7 @@ export class NobitaEditor implements BlockHost {
       if (!isTextualBlock(last)) {
         const { doc, block } = appendParagraphAfter(this.store.doc, last.id);
         const caret: Point = { blockId: block.id, offset: 0 };
-        this.#commit(doc, { anchor: caret, focus: caret });
+        this.#commit(doc, caretSelection(caret));
         this.#focusBlock(block.id, 0);
         return;
       }
@@ -2073,6 +2077,10 @@ export class NobitaEditor implements BlockHost {
       view.focusImageInput();
       return;
     }
+    if (isCustomBlockType(block.type)) {
+      this.#setBlockSelection([blockId], blockId, blockId);
+      return;
+    }
     if (block.type === 'divider') {
       const next = this.#adjacentTextBlock(blockId, 1);
       if (next) this.#focusBlock(next.id, 0);
@@ -2084,7 +2092,7 @@ export class NobitaEditor implements BlockHost {
       return;
     }
     const point: Point = { blockId, offset };
-    this.#restoreSelection({ anchor: point, focus: point }, false);
+    this.#restoreSelection(caretSelection(point), false);
     this.#focusedBlockId = blockId;
   }
 
@@ -2241,7 +2249,7 @@ export class NobitaEditor implements BlockHost {
           doc = insertBlockRelative(doc, point.blockId, paragraph, 'after');
           caret = { blockId: paragraph.id, offset: 0 };
         }
-        this.#commit(doc, { anchor: caret, focus: caret });
+        this.#commit(doc, caretSelection(caret));
         if (blockMatch.type === 'divider') this.#focusBlock(caret.blockId, 0);
         return;
       }
@@ -2261,7 +2269,7 @@ export class NobitaEditor implements BlockHost {
         doc = replaceBlockText(replaced, point.blockId, inserted);
         this.#pendingMarks = undefined;
         const caret: Point = { blockId: point.blockId, offset: caretOffset + 1 };
-        this.#commit(doc, { anchor: caret, focus: caret }, { mergeKey: `text:${point.blockId}` });
+        this.#commit(doc, caretSelection(caret), { mergeKey: `text:${point.blockId}` });
         return;
       }
     }
@@ -2276,7 +2284,7 @@ export class NobitaEditor implements BlockHost {
     doc = replaceBlockText(doc, point.blockId, runs);
     const caret: Point = { blockId: point.blockId, offset: point.offset + text.length };
     this.#pendingMarks = undefined;
-    this.#commit(doc, { anchor: caret, focus: caret }, { mergeKey: `text:${point.blockId}` });
+    this.#commit(doc, caretSelection(caret), { mergeKey: `text:${point.blockId}` });
 
     if (text === '/' && this.#isSlashPosition(before, point.offset)) {
       this.#openSlashMenu(point.blockId, point.offset);
@@ -2359,7 +2367,7 @@ export class NobitaEditor implements BlockHost {
     const selection = this.#currentSelection();
     if (!selection || this.#isCollapsed(selection)) return;
     const { doc, caret } = this.#applyDeletion(this.store.doc, selection);
-    this.#commit(doc, caret ? { anchor: caret, focus: caret } : null);
+    this.#commit(doc, caret ? caretSelection(caret) : null);
   }
 
   #onEnter(blockId: string): void {
@@ -2412,14 +2420,14 @@ export class NobitaEditor implements BlockHost {
 
     const result = splitBlock(this.store.doc, blockId, point.offset);
     const caret: Point = { blockId: result.newBlock.id, offset: 0 };
-    this.#commit(result.doc, { anchor: caret, focus: caret });
+    this.#commit(result.doc, caretSelection(caret));
     this.#focusBlock(caret.blockId, caret.offset);
   }
 
   #insertParagraphAfter(blockId: string): void {
     const { doc, block } = appendParagraphAfter(this.store.doc, blockId);
     const caret: Point = { blockId: block.id, offset: 0 };
-    this.#commit(doc, { anchor: caret, focus: caret });
+    this.#commit(doc, caretSelection(caret));
     this.#focusBlock(block.id, 0);
   }
 
@@ -2440,7 +2448,7 @@ export class NobitaEditor implements BlockHost {
       const end = atomic?.end ?? point.offset;
       const runs = deleteTextRange(block.text, start, end);
       const caret: Point = { blockId, offset: start };
-      this.#commit(replaceBlockText(this.store.doc, blockId, runs), { anchor: caret, focus: caret }, {
+      this.#commit(replaceBlockText(this.store.doc, blockId, runs), caretSelection(caret), {
         mergeKey: `delete:${blockId}`,
       });
       return;
@@ -2448,7 +2456,7 @@ export class NobitaEditor implements BlockHost {
     if (block.type !== 'paragraph' && isTextualBlock(block)) {
       const next = setBlockType(this.store.doc, blockId, 'paragraph');
       const caret: Point = { blockId, offset: 0 };
-      this.#commit(next, { anchor: caret, focus: caret });
+      this.#commit(next, caretSelection(caret));
       return;
     }
     const location = locateBlock(this.store.doc.blocks, blockId);
@@ -2461,7 +2469,7 @@ export class NobitaEditor implements BlockHost {
     const merged = mergeBlockWithPrevious(this.store.doc, blockId);
     if (!merged) return;
     const caret: Point = { blockId: merged.caretBlockId, offset: merged.caretOffset };
-    this.#commit(merged.doc, { anchor: caret, focus: caret });
+    this.#commit(merged.doc, caretSelection(caret));
     this.#focusBlock(caret.blockId, caret.offset);
   }
 
@@ -2483,7 +2491,7 @@ export class NobitaEditor implements BlockHost {
       const end = atomic?.end ?? point.offset + 1;
       const runs = deleteTextRange(block.text, start, end);
       const caret: Point = { blockId, offset: start };
-      this.#commit(replaceBlockText(this.store.doc, blockId, runs), { anchor: caret, focus: caret }, {
+      this.#commit(replaceBlockText(this.store.doc, blockId, runs), caretSelection(caret), {
         mergeKey: `delete:${blockId}`,
       });
       return;
@@ -2494,7 +2502,7 @@ export class NobitaEditor implements BlockHost {
     const merged = mergeBlockWithNext(this.store.doc, blockId);
     if (!merged) return;
     const caret: Point = { blockId, offset: point.offset };
-    this.#commit(merged, { anchor: caret, focus: caret });
+    this.#commit(merged, caretSelection(caret));
   }
 
   #convertBlock(blockId: string, type: BlockType, props: Partial<BlockProps> = {}): void {
@@ -2507,7 +2515,7 @@ export class NobitaEditor implements BlockHost {
       next = insertBlockRelative(next, blockId, paragraph, 'after');
       caret = { blockId: paragraph.id, offset: 0 };
     }
-    this.#commit(next, { anchor: caret, focus: caret });
+    this.#commit(next, caretSelection(caret));
     if (type === 'image') {
       this.#findView(blockId)?.focusImageInput();
     } else {
@@ -2558,7 +2566,7 @@ export class NobitaEditor implements BlockHost {
   async #writeBlocksToClipboard(blocks: Block[]): Promise<void> {
     const payload = serializeBlocksForClipboard(blocks, this.#resolveDatabase, blocks.map(duplicateBlockTree));
     if (await this.#writeModernClipboard(payload, true)) return;
-    if (this.#writeLegacyClipboard(payload)) return;
+    if (this.#writeLegacyClipboard(payload.text, payload)) return;
     if (await this.#writeModernClipboard(payload, false)) return;
     try {
       await navigator.clipboard?.writeText(payload.text);
@@ -2590,12 +2598,12 @@ export class NobitaEditor implements BlockHost {
     }
   }
 
-  #writeLegacyClipboard(payload: ClipboardPayload): boolean {
+  #writeLegacyClipboard(text: string, payload?: ClipboardPayload): boolean {
     if (typeof document.execCommand !== 'function' || !document.body) {
       return false;
     }
     const field = document.createElement('textarea');
-    field.value = payload.text;
+    field.value = text;
     field.setAttribute('readonly', '');
     field.style.position = 'fixed';
     field.style.left = '-9999px';
@@ -2603,11 +2611,11 @@ export class NobitaEditor implements BlockHost {
     field.style.opacity = '0';
     field.style.pointerEvents = 'none';
     const onCopy = (event: ClipboardEvent): void => {
-      if (!event.clipboardData) return;
+      if (!payload || !event.clipboardData) return;
       event.preventDefault();
       writeClipboardData(event.clipboardData, payload);
     };
-    document.addEventListener('copy', onCopy, true);
+    if (payload) document.addEventListener('copy', onCopy, true);
     document.body.append(field);
     try {
       field.focus();
@@ -2625,7 +2633,7 @@ export class NobitaEditor implements BlockHost {
     const next = indentBlock(this.store.doc, blockId);
     if (next === this.store.doc) return;
     const point = this.#pointFromCaret(blockId);
-    this.#commit(next, { anchor: point, focus: point });
+    this.#commit(next, caretSelection(point));
     this.#focusBlock(blockId, point.offset);
   }
 
@@ -2633,7 +2641,7 @@ export class NobitaEditor implements BlockHost {
     const next = dedentBlock(this.store.doc, blockId);
     if (next === this.store.doc) return;
     const point = this.#pointFromCaret(blockId);
-    this.#commit(next, { anchor: point, focus: point });
+    this.#commit(next, caretSelection(point));
     this.#focusBlock(blockId, point.offset);
   }
 
@@ -2646,7 +2654,7 @@ export class NobitaEditor implements BlockHost {
     }
     if (doc === this.store.doc) return;
     const point = this.#pointFromCaret(blockId);
-    this.#commit(doc, { anchor: point, focus: point });
+    this.#commit(doc, caretSelection(point));
     this.#focusBlock(blockId, point.offset);
   }
 
@@ -2847,7 +2855,7 @@ export class NobitaEditor implements BlockHost {
       const { doc, block } = appendParagraphAfter(this.store.doc, last.id);
       this.clearBlockSelection();
       const caret: Point = { blockId: block.id, offset: 0 };
-      this.#commit(doc, { anchor: caret, focus: caret });
+      this.#commit(doc, caretSelection(caret));
       this.#focusBlock(block.id, 0);
       return;
     }
@@ -2889,14 +2897,14 @@ export class NobitaEditor implements BlockHost {
     const focusBlock = focusBlockId ? findBlock(nextDoc.blocks, focusBlockId) : null;
     if (focusBlock && isTextualBlock(focusBlock)) {
       const caret: Point = { blockId: focusBlock.id, offset: runsLength(focusBlock.text) };
-      this.#commit(nextDoc, { anchor: caret, focus: caret });
+      this.#commit(nextDoc, caretSelection(caret));
       this.#focusBlock(caret.blockId, caret.offset);
       return;
     }
     const point: Point | null = focusBlock ? { blockId: focusBlock.id, offset: 0 } : null;
     this.#commit(
       nextDoc,
-      point ? { anchor: point, focus: point } : null,
+      point ? caretSelection(point) : null,
       { restore: false }
     );
     if (focusBlock) {
@@ -2946,7 +2954,7 @@ export class NobitaEditor implements BlockHost {
     const lastCopy = copies[copies.length - 1]!;
     if (isTextualBlock(lastCopy)) {
       const caret: Point = { blockId: lastCopy.id, offset: runsLength(lastCopy.text) };
-      this.#commit(nextDoc, { anchor: caret, focus: caret });
+      this.#commit(nextDoc, caretSelection(caret));
       this.#focusBlock(caret.blockId, caret.offset);
       return;
     }
@@ -3000,7 +3008,7 @@ export class NobitaEditor implements BlockHost {
       doc = insertBlocksAfter(doc, block.id, inserted);
       const last = inserted[inserted.length - 1] ?? block;
       caret = { blockId: last.id, offset: runsLength(last.text) };
-      this.#commit(doc, { anchor: caret, focus: caret });
+      this.#commit(doc, caretSelection(caret));
       this.#focusBlock(caret.blockId, caret.offset);
       return;
     }
@@ -3032,7 +3040,7 @@ export class NobitaEditor implements BlockHost {
       const last = inserted[inserted.length - 1];
       caret = { blockId: last?.id ?? block.id, offset: runsLength(last?.text ?? []) };
     }
-    this.#commit(doc, { anchor: caret, focus: caret });
+    this.#commit(doc, caretSelection(caret));
     this.#focusBlock(caret.blockId, caret.offset);
   }
 
@@ -3162,7 +3170,7 @@ export class NobitaEditor implements BlockHost {
   #alignBlockAt(blockId: string, align: TextAlign, offset: number): void {
     const next = setBlockAlign(this.store.doc, blockId, align);
     const caret: Point = { blockId, offset };
-    this.#commit(next, { anchor: caret, focus: caret });
+    this.#commit(next, caretSelection(caret));
     this.#focusBlock(blockId, offset);
   }
 
@@ -3426,7 +3434,7 @@ export class NobitaEditor implements BlockHost {
       blockId: mention.blockId,
       offset: mention.start + text.length,
     };
-    this.#commit(next, { anchor: caret, focus: caret });
+    this.#commit(next, caretSelection(caret));
     this.#focusBlock(mention.blockId, caret.offset);
   }
 
@@ -3662,7 +3670,7 @@ export class NobitaEditor implements BlockHost {
       }
       if (touchesSelection) {
         const point: Point = { blockId: targetBlockId, offset: 0 };
-        this.#commit(next, { anchor: point, focus: point }, { restore: false });
+        this.#commit(next, caretSelection(point), { restore: false });
         this.#focusBlock(targetBlockId, 0);
       } else {
         this.#commit(next, selectionBefore, { restore: false });
@@ -3683,7 +3691,7 @@ export class NobitaEditor implements BlockHost {
         blockId: state.blockId,
         offset: state.start + pageTitle.length,
       };
-      this.#commit(next, { anchor: caret, focus: caret });
+      this.#commit(next, caretSelection(caret));
       this.#focusBlock(state.blockId, caret.offset);
       return;
     }
@@ -3920,7 +3928,7 @@ export class NobitaEditor implements BlockHost {
       insertTextAt(block.text, offset, text)
     );
     const caret: Point = { blockId, offset: offset + text.length };
-    this.#commit(next, { anchor: caret, focus: caret });
+    this.#commit(next, caretSelection(caret));
     this.#focusBlock(blockId, caret.offset);
   }
 
@@ -3939,25 +3947,7 @@ export class NobitaEditor implements BlockHost {
         // Fall through to the legacy path.
       }
     }
-    if (typeof document.execCommand !== 'function' || !document.body) return;
-    const field = document.createElement('textarea');
-    field.value = text;
-    field.setAttribute('readonly', '');
-    field.style.position = 'fixed';
-    field.style.left = '-9999px';
-    field.style.top = '0';
-    field.style.opacity = '0';
-    field.style.pointerEvents = 'none';
-    document.body.append(field);
-    try {
-      field.focus();
-      field.select();
-      document.execCommand('copy');
-    } catch {
-      // Clipboard access can be denied; leave the document untouched.
-    } finally {
-      field.remove();
-    }
+    this.#writeLegacyClipboard(text);
   }
 
   #deleteBlock(blockId: string): void {
@@ -3971,7 +3961,7 @@ export class NobitaEditor implements BlockHost {
         const paragraph = createBlock('paragraph', { id: blockId });
         const next = updateBlock(this.store.doc, blockId, () => paragraph);
         const caret: Point = { blockId, offset: 0 };
-        this.#commit(next, { anchor: caret, focus: caret });
+        this.#commit(next, caretSelection(caret));
         this.#focusBlock(blockId, 0);
         return;
       }
@@ -3989,7 +3979,7 @@ export class NobitaEditor implements BlockHost {
     if (children.length > 0) doc = insertBlocksAfter(doc, blockId, children);
     doc = removeById(doc, blockId);
     const caret: Point = { blockId: previous?.id ?? next?.id ?? flat[0]?.id ?? blockId, offset: 0 };
-    this.#commit(doc, { anchor: caret, focus: caret });
+    this.#commit(doc, caretSelection(caret));
     this.#focusBlock(caret.blockId, caret.offset);
   }
 
@@ -4112,7 +4102,7 @@ export class NobitaEditor implements BlockHost {
     const next = moveBlock(this.store.doc, blockId, targetId, position);
     if (next === this.store.doc) return;
     const caret: Point = { blockId, offset: 0 };
-    this.#commit(next, { anchor: caret, focus: caret });
+    this.#commit(next, caretSelection(caret));
     this.#focusBlock(blockId, 0);
   };
 
@@ -4158,6 +4148,10 @@ export class NobitaEditor implements BlockHost {
 }
 
 /** ---- helpers without DOM ---- */
+
+function caretSelection(point: Point): EditorSelection {
+  return { anchor: point, focus: point };
+}
 
 function escapeMenuText(text: string): string {
   return text

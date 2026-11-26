@@ -14,6 +14,19 @@ import {
 import { block, seed, pair, edit } from './peers';
 for (const engine of ['automerge', 'yjs'])
   describe(engine, () => {
+    it('retains opaque custom blocks when another replica edits a paragraph', () => {
+      const initial = structuredClone(seed);
+      const card = initial.blocks[1]!;
+      card.type = 'custom:issue';
+      card.props.data = { tags: [null, false, 'open'] };
+      const { a, b, send } = pair(engine, initial);
+      edit(b, doc => { doc.blocks[0]!.text = [{ text: 'updated' }]; });
+      send();
+      expect(a.getDoc().blocks[0]!.text).toEqual([{ text: 'updated' }]);
+      expect(a.getDoc().blocks[1]).toEqual(card);
+      expect(b.getDoc()).toEqual(a.getDoc());
+    });
+
     it.each([true, false])(
       'resolves concurrent moves once (reverse=%s)',
       (reverse) => {

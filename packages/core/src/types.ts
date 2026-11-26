@@ -1,5 +1,13 @@
-/** Every block kind the editor ships with. Hosts can extend the registry. */
+/** The prefix reserves host-defined kinds independently of renderer registration. */
+export type CustomBlockType = `custom:${string}`;
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+export function isCustomBlockType(type: string): type is CustomBlockType {
+  return type.startsWith('custom:');
+}
+
 export type BlockType =
+  | CustomBlockType
   | 'paragraph'
   | 'heading'
   | 'bulleted'
@@ -338,6 +346,8 @@ export interface InlineRun {
 export type InlineContent = InlineRun[];
 
 export interface BlockProps {
+  /** Host-owned JSON payload for custom blocks. */
+  data?: JsonValue;
   level?: HeadingLevel;
   checked?: boolean;
   language?: string;
@@ -413,7 +423,7 @@ export const isTextualBlock = (block: Block): boolean =>
   block.type !== 'image' &&
   block.type !== 'database' &&
   block.type !== 'table' &&
-  block.type !== 'page';
+  block.type !== 'page' && !isCustomBlockType(block.type);
 
 export const isListBlock = (block: Block): boolean =>
   block.type === 'bulleted' || block.type === 'numbered' || block.type === 'todo';

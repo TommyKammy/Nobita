@@ -114,6 +114,35 @@ Events:
 - `nobita-page-open`: `{ pageId: string }`
 - `nobita-ready` (waits for an initially configured collaboration adapter)
 
+## Host-defined blocks
+
+Use a stable `custom:`-prefixed type for each host-defined block. Store its payload as JSON in `props.data`. Standard inline `text` can provide a portable description for text or Markdown export. The editor treats the block body as one non-editable unit and renders its children normally.
+
+```ts
+import { createBlock, createDoc } from '@nobita/core';
+import { createEditor } from '@nobita/element';
+
+const issue = createBlock('custom:acme.issue', {
+  text: 'Issue #42',
+  props: { data: { number: 42, status: 'open' } },
+});
+const editor = createEditor(document.querySelector<HTMLElement>('#notes')!, {
+  doc: createDoc({ blocks: [issue, createBlock('paragraph')] }),
+});
+
+editor.registerCustomBlock('custom:acme.issue', block => {
+  const data = block.props.data;
+  if (data && typeof data === 'object' && 'number' in data && typeof data.number === 'number') {
+    return `Issue #${data.number}`;
+  }
+  return 'Issue';
+});
+```
+
+`registerCustomBlock(type, renderer)` registers or replaces a renderer on one editor. Each call refreshes matching mounted blocks. Renderers receive the current block and a boolean indicating read-only mode. Return a DOM node or a string (displayed as text). Treat the input as immutable. Host controls should respect read-only mode and submit edits through the document store. Pass `null` to remove the renderer. For a web component, access the editor through `element.editor` after it is ready.
+
+If a renderer is absent or throws while displaying an unfamiliar payload, the editor displays the type name. Editing other blocks and saving as Nobita JSON preserves the custom type, JSON payload, inline text and children. This requires a client with custom-block support. Earlier versions normalize unknown block types to paragraphs. Markdown and HTML are presentation formats; use Nobita JSON to retain the opaque payload.
+
 ## `@nobita/core`
 
 Stable exports include:

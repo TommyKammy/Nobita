@@ -6,6 +6,7 @@
  * re-exported here.
  */
 export { NobitaEditor } from './editor.js';
+export type { CustomBlockRenderer } from './block-view.js';
 export type {
   ImageUploadHandler,
   ImageUploadResult,

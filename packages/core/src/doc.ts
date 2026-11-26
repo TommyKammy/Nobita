@@ -408,6 +408,7 @@ export function duplicateBlockTree(block: Block): Block {
     })),
     props: {
       ...block.props,
+      ...(block.props.data !== undefined && { data: structuredClone(block.props.data) }),
       ...(block.props.database
         ? { database: duplicateDatabaseData(block.props.database,block.id,id) }
         : {}),
