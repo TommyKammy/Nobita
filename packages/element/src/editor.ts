@@ -193,6 +193,13 @@ interface DragState {
 
 type ClipboardPayload = ReturnType<typeof serializeBlocksForClipboard>;
 
+function writeClipboardData(data: DataTransfer | null, payload: ClipboardPayload): void {
+  if (!data) return;
+  data.setData('text/plain', payload.text);
+  data.setData('text/html', payload.html);
+  data.setData('application/x-nobita+json', payload.json);
+}
+
 
 function normalizeLink(value: string): string {
   const trimmed = value.trim();
@@ -1056,10 +1063,7 @@ export class NobitaEditor implements BlockHost {
     const blocks = selectionBlocks(this.store.doc.blocks, selection);
     if (blocks.length === 0) return;
     event.preventDefault();
-    const serialized = serializeBlocksForClipboard(blocks, this.#resolveDatabase);
-    event.clipboardData?.setData('text/plain', serialized.text);
-    event.clipboardData?.setData('text/html', serialized.html);
-    event.clipboardData?.setData('application/x-nobita+json', serialized.json);
+    this.#copyBlocksToEvent(event, blocks);
     if (cut) {
       this.#deleteSelection();
     }
@@ -1073,10 +1077,10 @@ export class NobitaEditor implements BlockHost {
   #databaseListeners = new Set<() => void>();
   #databaseBlocks?: readonly Block[];
   #databaseIndex = new Map<string, DatabaseData>();
-  #localDatabases() {
-    if (this.#databaseBlocks !== this.doc.blocks) {
-      this.#databaseBlocks = this.doc.blocks;
-      this.#databaseIndex = documentDatabases(this.doc.blocks);
+  #localDatabases(blocks = this.doc.blocks) {
+    if (this.#databaseBlocks !== blocks) {
+      this.#databaseBlocks = blocks;
+      this.#databaseIndex = documentDatabases(blocks);
     }
     return this.#databaseIndex;
   }
@@ -2057,6 +2061,13 @@ export class NobitaEditor implements BlockHost {
       if (caret) this.#restoreSelection(caret);
       return;
     }
+    const previous = this.#localDatabases();
+    if (previous.size) {
+      const remaining = this.#localDatabases(next.blocks);
+      for (const [id, database] of previous) {
+        if (!remaining.has(id)) next = updateDatabaseRelations(next, id, database);
+      }
+    }
     this.store.update(() => next, {
       ...(caret ? { selection: caret } : {}),
       ...(options.history === false ? { history: false } : {}),
@@ -2487,9 +2498,7 @@ export class NobitaEditor implements BlockHost {
     const onCopy = (event: ClipboardEvent): void => {
       if (!event.clipboardData) return;
       event.preventDefault();
-      event.clipboardData.setData('text/plain', payload.text);
-      event.clipboardData.setData('text/html', payload.html);
-      event.clipboardData.setData('application/x-nobita+json', payload.json);
+      writeClipboardData(event.clipboardData, payload);
     };
     document.addEventListener('copy', onCopy, true);
     document.body.append(field);
@@ -2786,14 +2795,15 @@ export class NobitaEditor implements BlockHost {
     }
   }
 
+  #copyBlocksToEvent(event: ClipboardEvent, blocks: Block[]): void {
+    writeClipboardData(event.clipboardData, serializeBlocksForClipboard(blocks, this.#resolveDatabase));
+  }
+
   #copySelectedBlocks(event: ClipboardEvent, cut: boolean): void {
     event.preventDefault();
     const blocks = selectedTopLevelBlocks(this.store.doc.blocks, this.#selectedBlockIds);
     if (blocks.length === 0) return;
-    const serialized = serializeBlocksForClipboard(blocks, this.#resolveDatabase);
-    event.clipboardData?.setData('text/plain', serialized.text);
-    event.clipboardData?.setData('text/html', serialized.html);
-    event.clipboardData?.setData('application/x-nobita+json', serialized.json);
+    this.#copyBlocksToEvent(event, blocks);
     if (cut && !this.#readonly) {
       this.#deleteSelectedBlocks();
     }

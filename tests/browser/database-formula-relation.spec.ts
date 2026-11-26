@@ -445,3 +445,84 @@ for (const external of [false, true]) {
     }
   );
 }
+
+for (const nested of [false, true]) {
+  test(
+    'cleans paired links in one undo step after deleting ' +
+      (nested ? 'a parent selection' : 'a database from its menu'),
+    async ({ page }) => {
+      await openFixture(page);
+      await page.evaluate(
+        ({ tasks, projects, nested }) => {
+          const host = document.querySelector(
+            'nobita-editor'
+          ) as NobitaEditorElement;
+          delete projects.view;
+          projects.columns[1]!.relation!.syncedColumnId = 'back';
+          tasks.columns[2]!.relation = {
+            databaseId: 'projects',
+            syncedColumnId: 'tasks',
+          };
+          tasks.rows[0]!.cells.back = { relations: [{ rowId: 'p0' }] };
+          // A saved reverse-only reference must disappear with its target too.
+          delete tasks.rows[1]!.cells.back;
+          const block = {
+            id: 'tasks',
+            type: 'database' as const,
+            props: { database: tasks },
+            text: [],
+            children: [],
+          };
+          host.doc = {
+            ...host.doc,
+            blocks: [
+              { ...block, id: 'projects', props: { database: projects } },
+              nested
+                ? {
+                    id: 'parent',
+                    type: 'paragraph',
+                    text: [{ text: 'Parent' }],
+                    props: {},
+                    children: [block],
+                  }
+                : block,
+            ],
+          };
+          if (nested) host.selectBlocks(['parent']);
+          else host.editor!.openBlockMenu('tasks', host);
+        },
+        { tasks, projects, nested }
+      );
+      if (nested) await page.keyboard.press('Delete');
+      else await page.getByText('Delete', { exact: true }).click();
+      const state = () =>
+        page.evaluate(() => {
+          const editor = (
+            document.querySelector('nobita-editor') as NobitaEditorElement
+          ).editor!;
+          const data = editor.resolveDatabase('projects')!;
+          return [
+            !!editor.resolveDatabase('tasks'),
+            data.columns[1]?.relation?.syncedColumnId ?? null,
+            data.rows.map(
+              (r) => r.cells.tasks?.relations?.map((ref) => ref.rowId) ?? []
+            ),
+          ];
+        });
+      const deleted = [false, null, [[], []]];
+      expect(await state()).toEqual(deleted);
+      await page.evaluate(() =>
+        (
+          document.querySelector('nobita-editor') as NobitaEditorElement
+        ).editor!.undoDatabase()
+      );
+      expect(await state()).toEqual([true, 'back', [['t0'], ['t1']]]);
+      await page.evaluate(() =>
+        (
+          document.querySelector('nobita-editor') as NobitaEditorElement
+        ).editor!.redoDatabase()
+      );
+      expect(await state()).toEqual(deleted);
+    }
+  );
+}

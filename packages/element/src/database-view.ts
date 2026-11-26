@@ -1,4 +1,5 @@
 import {
+  clearDatabaseColumnCells,
   cloneDatabaseCell as cloneCell,
   DatabaseEvalContext,
   databaseCellDisplay,
@@ -2606,11 +2607,7 @@ export class DatabaseView {
   #deleteColumn(columnId: string): void {
     if (this.#data.columns.length <= 1) return;
     const columns = this.#data.columns.filter(column => column.id !== columnId);
-    const rows = this.#data.rows.map(row => {
-      const cells = { ...row.cells };
-      delete cells[columnId];
-      return { ...row, cells };
-    });
+    const rows = clearDatabaseColumnCells(this.#data.rows, columnId);
     const next: DatabaseData = {
       ...this.#data,
       columns,

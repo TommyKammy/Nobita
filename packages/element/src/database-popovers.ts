@@ -1,4 +1,5 @@
 import {
+  clearDatabaseColumnCells,
   DatabaseEvalContext,
   DATABASE_STAT_LABELS,
   DATABASE_STAT_TYPES,
@@ -1237,11 +1238,7 @@ export class DatabasePopoversController {
     const save = (patch: Partial<DatabaseColumn>, reset = false) => {
       const latest = ctx.getData();
       const rows = reset
-        ? latest.rows.map(row => {
-            const cells = { ...row.cells };
-            delete cells[columnId];
-            return { ...row, cells };
-          })
+        ? clearDatabaseColumnCells(latest.rows, columnId)
         : latest.rows;
       ctx.commit({
         ...latest,

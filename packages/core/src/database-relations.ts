@@ -93,17 +93,29 @@ export function relationChanges(
   return changes;
 }
 
+export function clearDatabaseColumnCells(rows: DatabaseRow[], columnId: string): DatabaseRow[] {
+  return rows.map(row => {
+    if (!row.cells[columnId]) return row;
+    const cells = { ...row.cells };
+    delete cells[columnId];
+    return { ...row, cells };
+  });
+}
+
+/** Omit the replacement when the source block was removed from the document. */
 export function updateDatabaseRelations(
   doc: Doc,
   sourceId: string,
   before: DatabaseData,
-  after: DatabaseData
+  after?: DatabaseData
 ): Doc {
-  const updates = new Map([[sourceId, after]]);
-  const changes = relationChanges(sourceId, before, after).filter(
-    (c) => !c.target.pageId
-  );
-  if (changes.length || before.columns !== after.columns) {
+  const updates = new Map<string, DatabaseData>();
+  if (after) updates.set(sourceId, after);
+  const changes = after
+    ? relationChanges(sourceId, before, after).filter(c => !c.target.pageId)
+    : [];
+  const schemaChanged = before.columns !== after?.columns;
+  if (changes.length || schemaChanged) {
     const local = documentDatabases(doc.blocks);
     const write = (
       id: string,
@@ -141,13 +153,14 @@ export function updateDatabaseRelations(
       if (!target || reverse?.type !== 'relation') return;
       const config = reverse.relation;
       if (!compatibleReverse(config, sourceId, columnId)) return;
-      if (attach !== undefined && Boolean(config?.syncedColumnId) !== attach) {
+      if (!after || (attach !== undefined && Boolean(config?.syncedColumnId) !== attach)) {
         const { syncedColumnId: _old, ...rest } = config ?? {
           databaseId: sourceId,
         };
         const relation = attach ? { ...rest, syncedColumnId: columnId } : rest;
         updates.set(rel.databaseId, {
           ...target,
+          rows: after ? target.rows : clearDatabaseColumnCells(target.rows, reverse.id),
           columns: target.columns.map((c) =>
             c === reverse ? { ...c, relation } : c
           ),
@@ -170,10 +183,10 @@ export function updateDatabaseRelations(
       write(databaseId, targetRowId, syncedColumnId, sourceRowId, linked);
     };
     for (const change of changes) if (!change.linked) apply(change);
-    if (before.columns !== after.columns) {
+    if (schemaChanged) {
       const configure = (
         from: DatabaseData,
-        to: DatabaseData,
+        to: DatabaseData | undefined,
         attach: boolean
       ) => {
         for (const col of from.columns) {
@@ -181,7 +194,7 @@ export function updateDatabaseRelations(
           if (
             rel?.syncedColumnId &&
             !rel.pageId &&
-            !sameBinding(to.columns.find((c) => c.id === col.id)?.relation, rel)
+            !sameBinding(to?.columns.find((c) => c.id === col.id)?.relation, rel)
           ) {
             const binding = bind(rel, col.id, attach);
             if (!attach || !binding) continue;
@@ -218,7 +231,7 @@ export function updateDatabaseRelations(
         }
       };
       configure(before, after, false);
-      configure(after, before, true);
+      if (after) configure(after, before, true);
     }
     for (const change of changes) if (change.linked) apply(change);
   }
