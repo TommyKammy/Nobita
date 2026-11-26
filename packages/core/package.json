@@ -10,9 +10,17 @@
       "nobita-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./collab-runtime": {
+      "nobita-source": "./src/collab-runtime.ts",
+      "types": "./dist/collab-runtime.d.ts",
+      "import": "./dist/collab-runtime.js"
     }
   },
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run"

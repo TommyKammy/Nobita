@@ -116,3 +116,9 @@ export function publicApiFixture(host: HTMLElement): void {
   void (null as unknown as typeof Menu);
   void editor;
 }
+
+export function connectPeer(host: NobitaEditorElement, adapter: import('@nobita/core').CollaborationAdapter) {
+  const options: NobitaOptions = {collaboration:adapter};
+  host.collaboration = options.collaboration;
+  return host.editor?.setCollaboration(adapter);
+}

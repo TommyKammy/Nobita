@@ -33,7 +33,7 @@ export interface NobitaReactHandle {
   redo(): boolean;
 }
 
-export interface NobitaEditorProps extends Pick<NobitaOptions, 'databaseProvider' | 'resolveDatabase' | 'onRelationSync'> {
+export interface NobitaEditorProps extends Pick<NobitaOptions, 'collaboration' | 'databaseProvider' | 'resolveDatabase' | 'onRelationSync'> {
   doc?: Doc | string;
   readonly?: boolean;
   theme?: NobitaTheme;
@@ -67,6 +67,16 @@ export const NobitaEditor = forwardRef<NobitaReactHandle, NobitaEditorProps>(
       const element = hostRef.current;
       if (element && props.doc !== undefined) element.doc = props.doc;
     }, [props.doc]);
+
+    useLayoutEffect(() => {
+      const element = hostRef.current;
+      if (!element) return;
+      element.collaboration = props.collaboration;
+      // Layout cleanups run before the next document prop is applied.
+      return () => {
+        element.collaboration = null;
+      };
+    }, [props.collaboration]);
 
     useLayoutEffect(() => {
       const element = hostRef.current;

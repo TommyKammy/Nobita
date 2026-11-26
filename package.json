@@ -15,7 +15,7 @@
     "dev": "pnpm --filter @nobita/demo dev",
     "build": "tsc -b tsconfig.json && pnpm --filter @nobita/element run bundle && pnpm --filter @nobita/demo build",
     "typecheck": "tsc -b tsconfig.json && pnpm typecheck:public-api && pnpm --filter @nobita/demo exec tsc -p tsconfig.json && pnpm --filter @nobita/example-cloudflare-d1 typecheck",
-    "test": "pnpm --filter @nobita/core --filter @nobita/storage test",
+    "test": "pnpm --filter @nobita/core --filter @nobita/storage test && vitest run tests/collaboration",
     "preview": "pnpm --filter @nobita/demo preview",
     "typecheck:public-api": "tsc -p tsconfig.public-api.json",
     "test:browser": "playwright test",
@@ -30,6 +30,7 @@
     "react-dom": "19.3.1",
     "typescript": "7.0.2",
     "vite": "^7.1.7",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "yjs": "^13.6.33"
   }
 }

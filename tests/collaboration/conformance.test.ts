@@ -1,0 +1,791 @@
+import { describe, it, expect } from 'vitest';
+import { AutomergeCollaborationAdapter } from '../../packages/collab-automerge/src/index';
+import {
+  diffDocs,
+  splitBlock,
+  moveBlock,
+  insertTextAt,
+  mergeBlockWithPrevious,
+  mergeBlockWithNext,
+  type InlineMark,
+  type Doc,
+  type CollaborationAdapter,
+} from '../../packages/core/src/index';
+import { block, seed, pair, edit } from './peers';
+for (const engine of ['automerge', 'yjs'])
+  describe(engine, () => {
+    it.each([true, false])(
+      'resolves concurrent moves once (reverse=%s)',
+      (reverse) => {
+        const initial = structuredClone(seed);
+        initial.blocks[1]!.children = [block('left'), block('right')];
+        initial.blocks[2]!.children = [block('first'), block('last')];
+        const { a, b, send, observe } = pair(engine, initial);
+        const move = (d: Doc, i: number) => {
+          const child = d.blocks.shift()!;
+          d.blocks[i]!.children.splice(1, 0, child);
+        };
+        edit(a, (d) => move(d, 0));
+        edit(b, (d) => move(d, 1));
+        expect(observe(true)).toEqual(observe(false));
+        send(reverse);
+        expect(a.getDoc()).toEqual(b.getDoc());
+        const children = a
+          .getDoc()
+          .blocks.map((x) => x.children.map((c) => c.id));
+        expect(children.flat().filter((id) => id === 'a')).toHaveLength(1);
+        expect(children.find((ids) => ids.includes('a'))?.indexOf('a')).toBe(1);
+      }
+    );
+    it.each(['body', 'table', 'database'])(
+      'preserves peer text through IME and local undo/redo in %s',
+      (kind) => {
+        const initial = structuredClone(seed),
+          target = initial.blocks[0]!;
+        if (kind !== 'body') {
+          const grid = {
+            columns: [{ id: 'col', name: 'Title', type: 'text' as const }],
+            rows: [
+              {
+                id: 'row',
+                cells: {
+                  col: { text: 'ab', ...(kind === 'table' && { colspan: 2 }) },
+                },
+              },
+            ],
+          };
+          target.type = kind as 'table' | 'database';
+          target.props =
+            kind === 'table'
+              ? {
+                  table: {
+                    ...grid,
+                    columns: [...grid.columns, { id: 'covered' }],
+                  },
+                }
+              : { database: { ...grid, variant: 'database' } };
+        }
+        const cell = (d: Doc) => {
+          const props = d.blocks[0]!.props;
+          return (props.table ?? props.database)?.rows[0]!.cells.col;
+        };
+        const value = (d: Doc) =>
+          cell(d)?.text ?? d.blocks[0]!.text.map((x) => x.text).join('');
+        const { a, b, send } = pair(engine, initial);
+        a.beginComposition({
+          blockId: 'a',
+          from: 1,
+          to: 1,
+          ...(kind === 'body'
+            ? {}
+            : {
+                rowId: 'row',
+                columnId: 'col',
+                pendingMarks: { bold: true as const },
+              }),
+        });
+        edit(b, (d) => {
+          if (kind === 'body') d.blocks[0]!.text = [{ text: 'Bab' }];
+          else cell(d)!.text = 'Bab';
+        });
+        send();
+        const u = a.commitComposition('日');
+        expect(value(u.doc)).toBe('Ba日b');
+        if (kind !== 'body')
+          expect(cell(u.doc)?.runs).toContainEqual({
+            text: '日',
+            marks: { bold: true },
+          });
+        expect(u.remapPoint?.({ blockId: 'a', offset: 1 })?.offset).toBe(3);
+        send();
+        expect(a.getDoc()).toEqual(b.getDoc());
+        expect(a.undo()).toBe(true);
+        send();
+        expect(value(b.getDoc())).toBe('Bab');
+        expect(a.redo()).toBe(true);
+        send();
+        expect(value(b.getDoc())).toBe('Ba日b');
+      }
+    );
+    it('undoes only local characters around a peer insertion and cancels composition', () => {
+      const { a, b, send } = pair(engine, seed);
+      edit(a, (d) => {
+        d.blocks[0]!.text = [{ text: 'aXYb' }];
+      });
+      send();
+      edit(b, (d) => {
+        d.blocks[0]!.text = [{ text: 'aX他Yb' }];
+      });
+      send();
+      a.beginComposition({ blockId: 'a', from: 1, to: 2 });
+      expect(a.cancelComposition().doc).toEqual(b.getDoc());
+      a.undo();
+      send();
+      expect(a.getDoc().blocks[0]?.text).toEqual([{ text: 'a他b' }]);
+      a.redo();
+      send();
+      expect(b.getDoc().blocks[0]?.text).toEqual([{ text: 'aX他Yb' }]);
+    });
+    it('merges a split and mark with offline concurrent typing', () => {
+      const { a, b, send } = pair(engine, seed);
+      edit(a, (d) => {
+        d.blocks[0]!.text = [{ text: 'a', marks: { bold: true } }];
+        d.blocks.splice(1, 0, block('split', 'b'));
+      });
+      edit(b, (d) => {
+        d.blocks[0]!.text = [{ text: 'Xab' }];
+      });
+      send();
+      expect(a.getDoc()).toEqual(b.getDoc());
+      expect(a.getDoc().blocks[1]?.id).toBe('split');
+      const runs = a.getDoc().blocks[0]!.text;
+      expect(runs.map((r) => r.text).join('')).toBe('Xa');
+      expect(runs.at(-1)?.marks?.bold).toBe(true);
+    });
+  });
+
+for (const engine of ['automerge', 'yjs']) {
+  it.each([false, true])(
+    engine + ' remaps disjoint offline edits (single batch=%s)',
+    (singleBatch) => {
+      const { a, b, send } = pair(engine, seed);
+      let offsets: number[] = [];
+      a.subscribe((u) => {
+        offsets = [0, 1, 2].map(
+          (offset) => u.remapPoint!({ blockId: 'a', offset })!.offset
+        );
+      });
+      if (!singleBatch)
+        edit(b, (d) => {
+          d.blocks[0]!.text = [{ text: 'Xab' }];
+        });
+      edit(b, (d) => {
+        d.blocks[0]!.text = [{ text: 'XabY' }];
+      });
+      send();
+      expect(offsets).toEqual([1, 2, 4]);
+    }
+  );
+  it(engine + ' syncs a rotated ancestor chain', () => {
+    const initial = structuredClone(seed),
+      [a, b, c, d] = initial.blocks;
+    initial.blocks = [a!];
+    a!.children = [b!];
+    b!.children = [c!];
+    c!.children = [d!];
+    const peers = pair(engine, initial);
+    edit(peers.a, (doc) => {
+      const a = doc.blocks[0]!,
+        b = a.children[0]!,
+        c = b.children[0]!,
+        d = c.children[0]!;
+      b.children = [];
+      d.children = [a];
+      doc.blocks = [c];
+    });
+    peers.send();
+    expect(peers.b.getDoc()).toEqual(peers.a.getDoc());
+    expect(
+      peers.b.getDoc().blocks[0]?.children[0]?.children[0]?.children[0]?.id
+    ).toBe('b');
+  });
+}
+it('Automerge field undo preserves independent checks and later same-value writes', () => {
+  const check = (adapter: CollaborationAdapter, value: boolean) =>
+    edit(adapter, (d) => {
+      d.blocks[0]!.props.checked = value;
+    });
+  const { a, b, send } = pair('automerge', seed);
+  check(a, true);
+  check(b, true);
+  send();
+  a.undo();
+  send();
+  expect(b.getDoc().blocks[0]!.props.checked).toBe(true);
+  b.undo();
+  send();
+  expect(a.getDoc().blocks[0]!.props.checked).toBeUndefined();
+  check(a, true);
+  send();
+  check(b, false);
+  check(b, true);
+  send();
+  a.undo();
+  send();
+  expect(b.getDoc().blocks[0]!.props.checked).toBe(true);
+});
+it('keeps a third concurrent Automerge check through two independent undos', () => {
+  const a = new AutomergeCollaborationAdapter(seed),
+    b = new AutomergeCollaborationAdapter(a.save()),
+    c = new AutomergeCollaborationAdapter(a.save());
+  for (const peer of [a, b, c])
+    edit(peer, (d) => {
+      d.blocks[0]!.props.checked = true;
+    });
+  function sync() {
+    const states = [a, b, c].map((p) => p.save());
+    for (const p of [a, b, c]) for (const state of states) p.receive(state);
+  }
+  sync();
+  a.undo();
+  b.undo();
+  sync();
+  expect(c.getDoc().blocks[0]!.props.checked).toBe(true);
+  c.undo();
+  sync();
+  expect(a.getDoc().blocks[0]!.props.checked).toBeUndefined();
+  b.redo();
+  sync();
+  expect(c.getDoc().blocks[0]!.props.checked).toBe(true);
+});
+
+for (const engine of ['automerge', 'yjs']) {
+  it.each([true, false])(
+    engine + ' merges concurrent record-page edits (existing page=%s)',
+    (existing) => {
+      const initial = structuredClone(seed),
+        row = {
+          id: 'r',
+          cells: {},
+          ...(existing && { page: { content: [{ text: 'ab' }] } }),
+        };
+      initial.blocks[0]!.type = 'database';
+      initial.blocks[0]!.props = {
+        database: { variant: 'database', columns: [], rows: [row] },
+      };
+      const { a, b, send } = pair(engine, initial);
+      const record = (d: Doc) => d.blocks[0]!.props.database!.rows[0]!;
+      edit(a, (d) => {
+        record(d).page = {
+          content: [
+            { text: 'A', marks: { bold: true } },
+            ...(existing ? [{ text: 'ab' }] : []),
+          ],
+        };
+      });
+      edit(b, (d) => {
+        record(d).page = {
+          content: [
+            ...(existing ? [{ text: 'ab' }] : []),
+            { text: 'B', marks: { italic: true } },
+          ],
+        };
+      });
+      send();
+      expect(a.getDoc()).toEqual(b.getDoc());
+      const content = record(b.getDoc()).page!.content;
+      expect(content.find((run) => run.text.includes('A'))?.marks?.bold).toBe(
+        true
+      );
+      expect(content.find((run) => run.text.includes('B'))?.marks?.italic).toBe(
+        true
+      );
+      if (existing) expect(content.map((r) => r.text).join('')).toBe('AabB');
+      a.undo();
+      send();
+      expect(
+        record(b.getDoc())
+          .page?.content.map((r) => r.text)
+          .join('')
+      ).toBe(existing ? 'abB' : 'B');
+    }
+  );
+}
+
+it('preserves concurrent identical Automerge formatting across independent undo and redo', () => {
+  const { a, b, send } = pair('automerge', seed);
+  for (const peer of [a, b])
+    edit(peer, (d) => {
+      d.blocks[0]!.text = [{ text: 'a', marks: { bold: true } }, { text: 'b' }];
+    });
+  send();
+  a.undo();
+  send();
+  expect(b.getDoc().blocks[0]!.text).toEqual([
+    { text: 'a', marks: { bold: true } },
+    { text: 'b' },
+  ]);
+  b.undo();
+  send();
+  expect(a.getDoc().blocks[0]!.text).toEqual([{ text: 'ab' }]);
+  a.redo();
+  send();
+  expect(b.getDoc().blocks[0]!.text[0]?.marks?.bold).toBe(true);
+});
+
+for (const engine of ['automerge', 'yjs']) {
+  it.each(['abX😀cd', 'aX😀d', 'aXd'])(
+    engine + ' replaces only the original IME characters in %s',
+    (remote) => {
+      const doc = structuredClone(seed);
+      doc.blocks[0]!.text = [{ text: 'ab😀cd' }];
+      const { a, b, send } = pair(engine, doc);
+      a.beginComposition({ blockId: 'a', from: 1, to: 5 });
+      edit(b, (d) => {
+        d.blocks[0]!.text = [{ text: remote }];
+      });
+      send();
+      const update = a.commitComposition('日');
+      const text = update.doc.blocks[0]!.text.map((r) => r.text).join('');
+      expect([...text].sort()).toEqual([...'a日Xd'].sort());
+      expect(update.remapPoint?.({ blockId: 'a', offset: 1 })?.offset).toBe(
+        text.indexOf('日') + 1
+      );
+      send();
+      expect(b.getDoc()).toEqual(a.getDoc());
+      a.undo();
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual([{ text: remote }]);
+    }
+  );
+}
+
+it('restores overlapping Automerge mark ranges independently after synchronization', () => {
+  const { a, b, send } = pair('automerge', seed);
+  edit(a, (d) => {
+    d.blocks[0]!.text = [{ text: 'ab', marks: { bold: true } }];
+  });
+  edit(b, (d) => {
+    d.blocks[0]!.text = [{ text: 'a' }, { text: 'b', marks: { bold: true } }];
+  });
+  send();
+  expect(a.getDoc().blocks[0]!.text).toEqual([
+    { text: 'ab', marks: { bold: true } },
+  ]);
+  a.undo();
+  send();
+  expect(b.getDoc().blocks[0]!.text).toEqual([
+    { text: 'a' },
+    { text: 'b', marks: { bold: true } },
+  ]);
+  // A later removal wins until its own author undoes it.
+  edit(a, (d) => {
+    d.blocks[0]!.text = [{ text: 'ab' }];
+  });
+  send();
+  expect(b.getDoc().blocks[0]!.text).toEqual([{ text: 'ab' }]);
+  a.undo();
+  send();
+  expect(b.getDoc().blocks[0]!.text).toEqual([
+    { text: 'a' },
+    { text: 'b', marks: { bold: true } },
+  ]);
+  b.undo();
+  send();
+  expect(a.getDoc().blocks[0]!.text).toEqual([{ text: 'ab' }]);
+});
+
+for (const engine of ['yjs', 'automerge']) {
+  for (const reference of [
+    { mention: { id: 'm', label: 'Ada' } },
+    { page: { id: 'p', title: 'Ada' } },
+  ]) {
+    it.each([false, true])(
+      engine +
+        ' IME after ' +
+        Object.keys(reference)[0] +
+        ' leaves the reference intact (pending bold=%s)',
+      (bold) => {
+        const initial = structuredClone(seed);
+        const chip = { text: 'Ada', marks: reference };
+        initial.blocks[0]!.text = [chip];
+        const { a, b, send } = pair(engine, initial);
+        a.beginComposition({
+          blockId: 'a',
+          from: 3,
+          to: 3,
+          ...(bold && { pendingMarks: { bold: true } }),
+        });
+        a.commitComposition('日');
+        send();
+        expect(b.getDoc().blocks[0]!.text).toEqual([
+          chip,
+          { text: '日', ...(bold && { marks: { bold: true } }) },
+        ]);
+        a.undo();
+        send();
+        expect(b.getDoc().blocks[0]!.text).toEqual([chip]);
+      }
+    );
+  }
+}
+
+for (const engine of ['automerge', 'yjs']) {
+  it.each([0, 1, 2])(
+    `${engine} IME inherits ordinary insertion marks at offset %i`,
+    (offset) => {
+      const doc = structuredClone(seed);
+      const runs = (doc.blocks[0]!.text = [
+        {
+          text: 'ab',
+          marks: { bold: true, link: 'https://example.com', color: 'blue' },
+        },
+        { text: 'c' },
+      ]);
+      const expected = insertTextAt(runs, offset, '日');
+      const { a, b, send } = pair(engine, doc);
+      a.beginComposition({ blockId: 'a', from: offset, to: offset });
+      expect(a.commitComposition('日').doc.blocks[0]!.text).toEqual(expected);
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual(expected);
+      a.undo();
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual(runs);
+      a.redo();
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual(expected);
+    }
+  );
+  it.each([false, true])(
+    `${engine} IME inherits non-atomic chip styling (toggle bold off=%s)`,
+    (toggle) => {
+      const doc = structuredClone(seed),
+        styling: InlineMark = { bold: true, color: 'blue' };
+      const chip = {
+        text: 'Ada',
+        marks: { ...styling, mention: { id: 'm', label: 'Ada' } },
+      };
+      doc.blocks[0]!.text = [chip];
+      const { a, b, send } = pair(engine, doc);
+      a.beginComposition({
+        blockId: 'a',
+        from: 3,
+        to: 3,
+        ...(toggle && { pendingMarks: {} }),
+      });
+      a.commitComposition('日');
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual([
+        chip,
+        { text: '日', marks: toggle ? { color: 'blue' } : styling },
+      ]);
+    }
+  );
+}
+
+for (const engine of ['automerge', 'yjs']) {
+  it.each(['table', 'database'] as const)(
+    engine + ' merges edits at a concurrently created %s intersection',
+    (kind) => {
+      const initial = structuredClone(seed),
+        grid = {
+          columns: [{ id: 'c1', name: 'Old', type: 'text' as const }],
+          rows: [{ id: 'r1', cells: {} }],
+        };
+      initial.blocks[0]!.props =
+        kind === 'table'
+          ? { table: grid }
+          : { database: { ...grid, variant: 'database' } };
+      initial.blocks[0]!.type = kind;
+      const { a, b, send } = pair(engine, initial),
+        data = (d: Doc) =>
+          (d.blocks[0]!.props.table ?? d.blocks[0]!.props.database)!;
+      edit(a, (d) => {
+        data(d).rows.push({ id: 'r2', cells: {} });
+      });
+      edit(b, (d) => {
+        data(d).columns.push({ id: 'c2', name: 'New', type: 'text' });
+      });
+      send();
+      for (const [peer, text] of [
+        [a, 'A'],
+        [b, 'B'],
+      ] as const)
+        edit(peer, (d) => {
+          data(d).rows[1]!.cells.c2 = { text };
+        });
+      send();
+      expect(a.getDoc()).toEqual(b.getDoc());
+      expect(
+        [...(data(a.getDoc()).rows[1]!.cells.c2!.text ?? '')].sort()
+      ).toEqual(['A', 'B']);
+      a.undo();
+      send();
+      expect(data(b.getDoc()).rows[1]!.cells.c2?.text).toBe('B');
+    }
+  );
+  it.each(['Backspace', 'Delete'])(
+    engine + ' preserves edits to the source paragraph across %s merge',
+    (direction) => {
+      const initial = structuredClone(seed);
+      initial.blocks[0]!.text = [{ text: 'a' }];
+      initial.blocks[1]!.text = [{ text: 'b' }];
+      const { a, b, send } = pair(engine, initial),
+        previous = a.getDoc();
+      const doc =
+        direction === 'Backspace'
+          ? mergeBlockWithPrevious(previous, 'b')!.doc
+          : mergeBlockWithNext(previous, 'a')!;
+      a.applyLocalChange(
+        { doc, previous, selection: null, source: 'update' },
+        diffDocs(previous, doc)
+      );
+      edit(b, (d) => {
+        d.blocks[1]!.text.push({ text: 'X', marks: { bold: true } });
+      });
+      send();
+      expect(a.getDoc()).toEqual(b.getDoc());
+      expect(a.getDoc().blocks[0]!.text).toEqual([
+        { text: 'ab' },
+        { text: 'X', marks: { bold: true } },
+      ]);
+      a.undo();
+      send();
+      expect(b.getDoc().blocks[1]!.text).toEqual([
+        { text: 'b' },
+        { text: 'X', marks: { bold: true } },
+      ]);
+      a.redo();
+      send();
+      edit(b, (d) => {
+        d.blocks[0]!.text = [
+          { text: 'A!' },
+          { text: 'X', marks: { bold: true } },
+        ];
+      });
+      send();
+      expect(a.getDoc()).toEqual(b.getDoc());
+      expect(a.getDoc().blocks[0]!.text).toEqual([
+        { text: 'A!' },
+        { text: 'X', marks: { bold: true } },
+      ]);
+    }
+  );
+}
+
+for (const engine of ['automerge', 'yjs']) {
+  it(
+    engine + ' preserves offline edits and formatting in the split suffix',
+    () => {
+      const initial = structuredClone(seed);
+      initial.blocks[0]!.text = [{ text: 'abcd' }];
+      const { a, b, send, observe } = pair(engine, initial);
+      const previous = a.getDoc(),
+        { doc } = splitBlock(previous, 'a', 2, 'suffix');
+      a.applyLocalChange(
+        { previous, doc, source: 'input', selection: null },
+        diffDocs(previous, doc)
+      );
+      edit(b, (d) => {
+        d.blocks[0]!.text = [
+          { text: 'ab' },
+          { text: 'cXd', marks: { bold: true } },
+        ];
+      });
+      send();
+      expect(
+        a
+          .getDoc()
+          .blocks.slice(0, 2)
+          .map((b) => b.text)
+      ).toEqual([[{ text: 'ab' }], [{ text: 'cXd', marks: { bold: true } }]]);
+      expect(observe(true)).toEqual(a.getDoc());
+      a.undo();
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual([
+        { text: 'ab' },
+        { text: 'cXd', marks: { bold: true } },
+      ]);
+      a.redo();
+      send();
+      edit(b, (d) => {
+        d.blocks[1]!.text.unshift({ text: '!' });
+      });
+      send();
+      expect(a.getDoc().blocks[0]!.text).toEqual([{ text: 'ab' }]);
+      expect(a.getDoc().blocks[1]!.text).toEqual([
+        { text: '!' },
+        { text: 'cXd', marks: { bold: true } },
+      ]);
+    }
+  );
+  it(
+    engine + ' replaces an IME selection spanning a remote paragraph split',
+    () => {
+      const { a, b, send } = pair(engine, {
+        ...seed,
+        blocks: [block('a', 'abcd')],
+      });
+      a.beginComposition({ blockId: 'a', from: 1, to: 3 });
+      const previous = b.getDoc(),
+        { doc } = splitBlock(previous, 'a', 2, 'suffix');
+      b.applyLocalChange(
+        { previous, doc, source: 'input', selection: null },
+        diffDocs(previous, doc)
+      );
+      send();
+      a.commitComposition('日');
+      send();
+      expect(b.getDoc().blocks.map((block) => block.text)).toEqual([
+        [{ text: 'a日' }],
+        [{ text: 'd' }],
+      ]);
+      expect(a.getDoc()).toEqual(b.getDoc());
+    }
+  );
+  it(
+    engine +
+      ' splits at the intended occurrence of a reordered native boundary',
+    () => {
+      const { a, b, send, observe } = pair(engine, {
+        ...seed,
+        blocks: [block('a', 'abcd'), block('x', 'X')],
+      });
+      const apply = (change: (doc: Doc) => Doc) => {
+        const previous = a.getDoc(),
+          doc = change(previous);
+        a.applyLocalChange(
+          { previous, doc, source: 'input', selection: null },
+          diffDocs(previous, doc)
+        );
+        expect(a.getDoc()).toEqual(doc);
+        return doc;
+      };
+      apply((doc) => splitBlock(doc, 'a', 2, 'suffix').doc);
+      apply((doc) => moveBlock(doc, 'suffix', 'a', 'before'));
+      apply((doc) => mergeBlockWithNext(doc, 'suffix')!);
+      const joined = apply((doc) => mergeBlockWithNext(doc, 'suffix')!);
+      expect(joined.blocks[0]!.text).toEqual([{ text: 'cdabX' }]);
+      const result = apply((doc) => splitBlock(doc, 'suffix', 4, 'last').doc);
+      expect(result.blocks.map((b) => b.text)).toEqual([
+        [{ text: 'cdab' }],
+        [{ text: 'X' }],
+      ]);
+      expect(observe(true)).toEqual(result);
+      send();
+      expect(b.getDoc()).toEqual(result);
+      a.undo();
+      send();
+      expect(b.getDoc()).toEqual(joined);
+      a.redo();
+      send();
+      expect(b.getDoc()).toEqual(result);
+    }
+  );
+  it(engine + ' locates a concurrent split inside a descendant slice', () => {
+    const { a, b, send, observe } = pair(engine, {
+      ...seed,
+      blocks: [block('a', 'abcd')],
+    });
+    const split = (
+      peer: CollaborationAdapter,
+      from: string,
+      at: number,
+      into: string
+    ) => {
+      const previous = peer.getDoc(),
+        { doc } = splitBlock(previous, from, at, into);
+      peer.applyLocalChange(
+        { previous, doc, source: 'input', selection: null },
+        diffDocs(previous, doc)
+      );
+    };
+    split(a, 'a', 1, 'rest');
+    send();
+    split(a, 'rest', 1, 'middle');
+    // The later logical clock forces this cut to replay after the concurrent
+    // split has already moved its native character into the middle paragraph.
+    edit(b, (doc) => {
+      doc.title = 'Edited';
+    });
+    split(b, 'rest', 2, 'last');
+    send();
+    expect(
+      Object.fromEntries(a.getDoc().blocks.map((b) => [b.id, b.text]))
+    ).toEqual({
+      a: [{ text: 'a' }],
+      rest: [{ text: 'b' }],
+      middle: [{ text: 'c' }],
+      last: [{ text: 'd' }],
+    });
+    expect(observe(true)).toEqual(a.getDoc());
+    expect(b.getDoc()).toEqual(a.getDoc());
+  });
+  it.each(['', 'cXb'])(
+    engine + ' edits reordered native slices to produce %j',
+    (replacement) => {
+      const initial = { ...seed, blocks: [block('a', 'abcd')] };
+      const { a, b, send } = pair(engine, initial);
+      const apply = (change: (doc: Doc) => Doc) => {
+        const previous = a.getDoc(),
+          doc = change(previous);
+        a.applyLocalChange(
+          { previous, doc, source: 'input', selection: null },
+          diffDocs(previous, doc)
+        );
+      };
+      apply((doc) => splitBlock(doc, 'a', 2, 'suffix').doc);
+      apply((doc) => moveBlock(doc, 'suffix', 'a', 'before'));
+      apply((doc) => mergeBlockWithNext(doc, 'suffix')!);
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual([{ text: 'cdab' }]);
+      const expected = replacement ? [{ text: replacement }] : [];
+      edit(b, (doc) => {
+        doc.blocks[0]!.text = expected;
+      });
+      send();
+      expect(a.getDoc().blocks[0]!.text).toEqual(expected);
+      expect(a.getDoc()).toEqual(b.getDoc());
+    }
+  );
+  it(
+    engine + ' keeps both concurrent joins of three adjacent paragraphs',
+    () => {
+      const initial = structuredClone(seed);
+      initial.blocks = ['a', 'b', 'c'].map((id) => block(id, id));
+      const { a, b, send } = pair(engine, initial);
+      for (const [peer, id] of [
+        [a, 'a'],
+        [b, 'b'],
+      ] as const) {
+        const previous = peer.getDoc(),
+          doc = mergeBlockWithNext(previous, id)!;
+        peer.applyLocalChange(
+          { previous, doc, source: 'input', selection: null },
+          diffDocs(previous, doc)
+        );
+      }
+      send();
+      expect(a.getDoc().blocks.map((b) => b.text)).toEqual([[{ text: 'abc' }]]);
+      expect(b.getDoc()).toEqual(a.getDoc());
+    }
+  );
+  it.each(['table', 'database'] as const)(
+    engine + ' retires a %s when converting its block',
+    (kind) => {
+      const { a, b, send } = pair(engine, seed);
+      const grid = (ids: string[]) => ({
+        columns: ids.map((id) => ({ id, name: id, type: 'text' as const })),
+        rows: ids.map((id) => ({ id, cells: {} })),
+      });
+      edit(a, (d) => {
+        d.blocks[0]!.type = kind;
+        d.blocks[0]!.props = { [kind]: grid(['reuse', 'old']) };
+      });
+      edit(a, (d) => {
+        (d.blocks[0]!.props.table ??
+          d.blocks[0]!.props.database)!.rows[0]!.cells.reuse = {
+          text: 'old content',
+        };
+      });
+      send();
+      const original = a.getDoc();
+      edit(a, (d) => {
+        d.blocks[0]!.type = 'paragraph';
+        d.blocks[0]!.props = {};
+      });
+      edit(a, (d) => {
+        d.blocks[0]!.type = kind;
+        d.blocks[0]!.props = { [kind]: grid(['new', 'reuse']) };
+      });
+      send();
+      expect(b.getDoc().blocks[0]!.props).toEqual({
+        [kind]: grid(['new', 'reuse']),
+      });
+      a.undo();
+      a.undo();
+      send();
+      expect(b.getDoc()).toEqual(original);
+    }
+  );
+}

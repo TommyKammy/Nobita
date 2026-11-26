@@ -399,6 +399,7 @@ export interface BlockLocation {
 export type BlockPosition = 'before' | 'after' | 'child';
 
 export interface DocChange {
+  previousSelection?: EditorSelection | null;
   doc: Doc;
   previous: Doc;
   selection: EditorSelection | null;

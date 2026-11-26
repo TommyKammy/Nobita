@@ -20,30 +20,7 @@ const minifyStylesPlugin = {
   },
 };
 
-// Internal view and controller members. Host API and document property names stay public.
-const controllerMethods = [
-  'focusAfterHistory', 'focusFirstCell', 'focusCell', 'caretOffset', 'setSelected', 'onHide',
-  'setQuery', 'setItems', 'isVisible', 'isOpen', 'copyMarkdown', 'copyBlocks', 'copyLink',
-  'rootElement', 'instanceId', 'pointFromCaret', 'keepTrigger', 'restoreFocus', 'filterable',
-  'startColumnId', 'endColumnId', 'startRowId', 'endRowId', 'defaultLabel', 'isReadonly',
-  'onDismiss', 'pointerTarget', 'dismissOnInsideScroll',
-  'getContentSignal', 'getEventsSignal', 'getSyncedData', 'getDetailElement', 'getScrollElement',
-  'getReadonly', 'getUploadImage', 'currentCell', 'commitCell', 'commitTextRuns', 'commitRowPage',
-  'commitColumnFields', 'commitDeletedRows', 'setPendingBoardFocus', 'addColumnOfType',
-  'addFilterForColumn', 'setGroupProperty', 'setFilterTree', 'defaultGroupColumn', 'patchViewColumn',
-  'applyFirst', 'formatSelect', 'decimalPatch', 'insertColumn', 'deleteColumn', 'focusAfter',
-  'activeView', 'titleColumn', 'syncValues', 'showPopover', 'closePopover',
-  'updateActiveView', 'groupsFor', 'columnStates', 'viewColumns', 'navigationRows', 'visibleColumns',
-  'openAddPropertyMenu', 'openDetailPanel', 'openComputed', 'openColumnPopover', 'openRowPopover',
-  'openPeoplePopover', 'openMultiSelectPopover', 'openSelectPopover', 'openFilesPopover', 'openImagePopover',
-  'openViewMenu', 'openGroupMenu', 'openAddViewMenu', 'attachRichTextHandlers', 'attachCompositionHandlers',
-  'openRenameView', 'openViewProperties', 'openFilterPopover', 'openGroupPopover', 'openSortPopover',
-  'openStatPopover', 'duplicateColumn', 'duplicateRow', 'moveColumn', 'moveView', 'moveGroup',
-  'addView', 'addCard', 'moveCard', 'clearSelectedRow', 'pasteIntoRichText', 'toggleInlineTag',
-  'focusImageCaption', 'focusImageInput', 'focusDatabase', 'focusPageLink', 'focusTable',
-  'refreshPageLink', 'pastePlainText', 'composingTargets', 'textElement', 'resetToolbar', 'richTextSelector', 'getSignal', 'isComposingKey',
-  'isEditingGroupTitle', 'clearDropIndicators', 'clearPendingMarks', 'setPendingMarks', 'syncToolbar',
-];
+import {controllerMethods} from './controller-methods.mjs';
 
 const shared = {
   absWorkingDir: root,
@@ -74,12 +51,15 @@ async function bundle(options) {
 }
 
 await Promise.all([
+  bundle({entryPoints: ['src/collaboration.ts'], format: 'esm', outfile: 'dist/collaboration.js'}),
   bundle({
+    external: ['./collaboration.js'],
     entryPoints: ['src/index.ts'],
     format: 'esm',
     outfile: 'dist/nobita.js',
   }),
   bundle({
+    external: ['./collaboration.js'],
     entryPoints: ['src/global.ts'],
     format: 'iife',
     outfile: 'dist/nobita.global.js',

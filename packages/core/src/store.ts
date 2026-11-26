@@ -1,3 +1,4 @@
+import type { CollaborationAdapter, RemoteDocUpdate } from './collab.js';
 import type { Doc, DocChange, EditorSelection } from './types.js';
 import { findBlock } from './doc.js';
 
@@ -62,11 +63,36 @@ export class EditorStore {
     return this.#selection;
   }
 
+  #historyAdapter: CollaborationAdapter | null = null;
+
+  setHistoryAdapter(adapter: CollaborationAdapter | null): void {
+    this.#historyAdapter = adapter;
+    this.#undo = [];
+    this.#redo = [];
+    this.#lastEntry = null;
+  }
+
+  applyRemote(
+    doc: Doc,
+    remap?: RemoteDocUpdate['remapPoint'],
+    source: 'remote' | 'undo' | 'redo' = 'remote',
+    historySelection?: EditorSelection | null
+  ): void {
+    let selection = historySelection === undefined ? this.selection : historySelection;
+    if (historySelection === undefined && selection && remap) {
+      const anchor = remap(selection.anchor), focus = remap(selection.focus);
+      selection = anchor && focus ? { anchor, focus } : null;
+    }
+    this.update(() => doc, { source, history: false, selection });
+  }
+
   get canUndo(): boolean {
+    if (this.#historyAdapter) return !!this.#historyAdapter.undo && (this.#historyAdapter.canUndo ?? true);
     return this.#undo.length > 0;
   }
 
   get canRedo(): boolean {
+    if (this.#historyAdapter) return !!this.#historyAdapter.redo && (this.#historyAdapter.canRedo ?? true);
     return this.#redo.length > 0;
   }
 
@@ -89,11 +115,13 @@ export class EditorStore {
   /** Replace the document, e.g. when opening another page. Clears history by default. */
   replaceDoc(doc: Doc, options: { history?: boolean } = {}): void {
     if (doc === this.#doc) return;
+    if (this.#historyAdapter && this.#doc.id !== doc.id) throw new Error('Disconnect collaboration before changing document IDs');
     const previous = this.#doc;
+    const previousSelection = this.#selection;
     this.#doc = doc;
     this.#selection = null;
     this.#lastEntry = null;
-    if (options.history && previous !== doc) {
+    if (!this.#historyAdapter && options.history && previous !== doc) {
       this.#undo.push({
         before: previous,
         after: doc,
@@ -107,7 +135,7 @@ export class EditorStore {
       this.#undo = [];
       this.#redo = [];
     }
-    this.#emit({ doc, previous, selection: null, source: 'replace' });
+    this.#emit({ doc, previous, previousSelection, selection: null, source: 'replace' });
   }
 
   update(mutator: (doc: Doc) => Doc, options: UpdateOptions = {}): Doc {
@@ -121,7 +149,7 @@ export class EditorStore {
     const selectionBefore = this.#selection;
     const selectionAfter = options.selection === undefined ? this.#selection : options.selection;
     const now = Date.now();
-    if (options.history !== false) {
+    if (!this.#historyAdapter && options.history !== false) {
       const mergeKey = options.mergeKey;
       const last = this.#undo[this.#undo.length - 1];
       const canMerge =
@@ -157,6 +185,7 @@ export class EditorStore {
     this.#emit({
       doc: next,
       previous,
+      previousSelection: selectionBefore,
       selection: this.#selection,
       source: options.source ?? 'update',
     });
@@ -164,6 +193,7 @@ export class EditorStore {
   }
 
   undo(): boolean {
+    if (this.#historyAdapter) return this.canUndo && (this.#historyAdapter.undo?.() ?? false);
     const entry = this.#undo.pop();
     if (!entry) return false;
     this.#redo.push(entry);
@@ -176,6 +206,7 @@ export class EditorStore {
   }
 
   redo(): boolean {
+    if (this.#historyAdapter) return this.canRedo && (this.#historyAdapter.redo?.() ?? false);
     const entry = this.#redo.pop();
     if (!entry) return false;
     this.#undo.push(entry);

@@ -11,9 +11,11 @@ const core = fileURLToPath(
 
 export default defineConfig({
   root,
+  optimizeDeps:{include:['yjs'],entries:['*.html','peers.ts']},
   resolve: {
     conditions: ['nobita-source'],
     alias: {
+      '@nobita/core/collab-runtime': fileURLToPath(new URL('../../packages/core/src/collab-runtime.ts',import.meta.url)),
       '@nobita/core': core,
       '@nobita/element': element,
     },

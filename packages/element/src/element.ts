@@ -36,6 +36,13 @@ export class NobitaEditorElement extends Base {
   #uploadImage: ImageUploadHandler | undefined;
   databaseProvider?: NobitaOptions['databaseProvider'];
   resolveDatabase?: NobitaOptions['resolveDatabase'];
+  #collaboration: NobitaOptions['collaboration'];
+  get collaboration(){return this.#collaboration;}
+  set collaboration(adapter:NobitaOptions['collaboration']) {
+    if(adapter===this.#collaboration)return;
+    this.#collaboration=adapter;
+    this.#editor?.setCollaboration(adapter??null);
+  }
   #onRelationSync: NobitaOptions['onRelationSync'];
   get onRelationSync() { return this.#onRelationSync; }
   set onRelationSync(callback: NobitaOptions['onRelationSync']) {
@@ -95,11 +102,17 @@ export class NobitaEditorElement extends Base {
       databaseProvider: query => this.databaseProvider?.(query) ?? [],
       resolveDatabase: (id,page) => this.resolveDatabase?.(id,page),
       onRelationSync: this.onRelationSync,
+      ...(this.collaboration && {collaboration:this.collaboration}),
       resolvePage: pageId => this.#resolvePage?.(pageId) ?? null,
     });
     this.#applyMinHeight();
     this.#pendingDoc = undefined;
-    this.dispatchEvent(new CustomEvent('nobita-ready', { bubbles: true, composed: true }));
+    const editor = this.#editor;
+    const ready = () => {
+      if (editor === this.#editor) this.dispatchEvent(new CustomEvent('nobita-ready', { bubbles: true, composed: true }));
+    };
+    if (this.collaboration) void editor.collaborationReady.then(ready);
+    else ready();
   }
 
   disconnectedCallback(): void {

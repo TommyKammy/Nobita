@@ -1,3 +1,4 @@
+import { recordTextTransfer } from './block-merge.js';
 import { createDocId, createId } from './id.js';
 import { createDatabaseData, duplicateDatabaseData } from './database.js';
 import { createTableData, duplicateTableData } from './table.js';
@@ -353,6 +354,7 @@ export function splitBlock(doc: Doc, id: string, offset: number, newId?: string)
   };
   let nextDoc = setBlockText(doc, id, before);
   nextDoc = insertBlocksAfter(nextDoc, id, [newBlock]);
+  if (at < length) recordTextTransfer(doc, nextDoc, id, newBlock.id, at);
   return { doc: nextDoc, newBlock, caretOffset: 0 };
 }
 
@@ -368,16 +370,11 @@ export function mergeBlockWithPrevious(doc: Doc, id: string): MergeResult | null
   if (!location || location.index === 0) return null;
   const previous = location.siblings[location.index - 1];
   if (!previous) return null;
-  const offset = runsLength(previous.text);
-  const mergedText = normalizeRuns([...previous.text, ...location.block.text]);
-  const mergedChildren = [...previous.children, ...location.block.children];
-  let nextDoc = updateBlock(doc, previous.id, block => ({
-    ...block,
-    text: mergedText,
-    children: mergedChildren,
-  }));
-  nextDoc = removeBlock(nextDoc, id);
-  return { doc: nextDoc, caretBlockId: previous.id, caretOffset: offset };
+  return {
+    doc: joinAdjacentBlocks(doc, previous, location.block),
+    caretBlockId: previous.id,
+    caretOffset: runsLength(previous.text),
+  };
 }
 
 /** Merge the next sibling into the end of a block. */
@@ -386,13 +383,18 @@ export function mergeBlockWithNext(doc: Doc, id: string): Doc | null {
   if (!location) return null;
   const next = location.siblings[location.index + 1];
   if (!next) return null;
-  let nextDoc = updateBlock(doc, id, block => ({
+  return joinAdjacentBlocks(doc, location.block, next);
+}
+
+function joinAdjacentBlocks(doc: Doc, into: Block, source: Block): Doc {
+  const merged = updateBlock(doc, into.id, block => ({
     ...block,
-    text: normalizeRuns([...block.text, ...next.text]),
-    children: [...block.children, ...next.children],
+    text: normalizeRuns([...block.text, ...source.text]),
+    children: [...block.children, ...source.children],
   }));
-  nextDoc = removeBlock(nextDoc, id === next.id ? id : next.id);
-  return nextDoc;
+  const next = removeBlock(merged, source.id);
+  recordTextTransfer(doc, next, source.id, into.id);
+  return next;
 }
 
 export function duplicateBlockTree(block: Block): Block {

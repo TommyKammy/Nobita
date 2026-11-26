@@ -1,0 +1,969 @@
+// Shared by the optional CRDT packages. This entry point is separate from the editor.
+import {
+  diffDocs,
+  type CollaborationAdapter,
+  type CompositionTarget,
+  type DocPatch,
+  type PeerPresence,
+  type RemoteDocUpdate,
+} from './collab.js';
+import { bodyText, JoinedText, type TextBackend } from './joined-text.js';
+import { BOOLEAN_MARK_KEYS } from './types.js';
+import { marksAt, plainText } from './text.js';
+import type {
+  Block,
+  DatabaseData,
+  DatabaseRow,
+  Doc,
+  DocChange,
+  EditorSelection,
+  InlineMark,
+  InlineRun,
+  Point,
+  TableData,
+} from './types.js';
+
+export type Fields = Record<string, unknown>;
+export type OffsetMap = (key: string, offset: number) => number;
+export interface HistorySelection {
+  undo?: () => EditorSelection | null;
+  redo?: () => EditorSelection | null;
+}
+export interface Backend {
+  offsets: OffsetMap;
+  diffText(
+    previous: string,
+    next: string
+  ): readonly (readonly [-1 | 0 | 1, string])[];
+  actor: string;
+  read(key: string): Fields;
+  field(key: string, name: string, value: unknown): void;
+  ensureList(key: string): void;
+  list(key: string): string[];
+  insert(key: string, index: number, value: string): void;
+  ensureText(key: string): void;
+  prepareCells?(keys: Iterable<string>): void;
+  textLength(key: string): number;
+  runs(key: string): InlineRun[];
+  splice(key: string, index: number, count: number, text: string): void;
+  format(
+    key: string,
+    index: number,
+    length: number,
+    name: string,
+    value: unknown
+  ): void;
+  insertSplitMarker(key: string, index: number): string;
+  resolveBoundary(key: string, token: string): number;
+  cursor(key: string, index: number, exact?: boolean): () => number | null;
+  transact(fn: () => void, selection?: HistorySelection): void;
+  undo(): boolean | HistorySelection;
+  redo(): boolean | HistorySelection;
+  readonly canUndo: boolean;
+  readonly canRedo: boolean;
+  clearHistory(): void;
+}
+export interface PresenceChannel {
+  user?: PeerPresence['user'];
+  publish(value: Omit<PeerPresence, 'clientId'> | null): void;
+  subscribe(listener: (peers: readonly PeerPresence[]) => void): () => void;
+}
+const key = (...path: (string | string[])[]) => JSON.stringify(path);
+const equal = (a: unknown, b: unknown) =>
+  a === b || JSON.stringify(a) === JSON.stringify(b);
+function fields(store: Backend, path: string, before: Fields, next: Fields) {
+  for (const name of new Set([...Object.keys(before), ...Object.keys(next)]))
+    if (!equal(before[name], next[name])) store.field(path, name, next[name]);
+}
+function applyMarkChanges(
+  store: TextBackend,
+  path: string,
+  from: number,
+  length: number,
+  actual: InlineMark | undefined,
+  desired: InlineMark | undefined
+) {
+  for (const name of new Set([
+    ...Object.keys(actual ?? {}),
+    ...Object.keys(desired ?? {}),
+  ]) as Set<keyof InlineMark>) {
+    if (!equal(actual?.[name], desired?.[name]))
+      store.format(path, from, length, name, desired?.[name]);
+  }
+}
+function writeText(
+  store: TextBackend,
+  path: string,
+  before: InlineRun[],
+  next: InlineRun[]
+) {
+  store.ensureText(path);
+  let offset = 0;
+  for (const [op, text] of store.diffText(plainText(before), plainText(next))) {
+    if (op === -1) store.splice(path, offset, text.length, '');
+    else {
+      if (op === 1) store.splice(path, offset, 0, text);
+      offset += text.length;
+    }
+  }
+  // Align existing and desired mark spans without replacing unchanged characters.
+  const actual = store.runs(path);
+  let pos = 0,
+    ai = 0,
+    used = 0;
+  for (const run of next) {
+    let left = run.text.length;
+    while (left > 0 && ai < actual.length) {
+      const span = actual[ai]!,
+        n = Math.min(left, span.text.length - used);
+      applyMarkChanges(store, path, pos, n, span.marks, run.marks);
+      pos += n;
+      left -= n;
+      used += n;
+      if (used === span.text.length) {
+        ai++;
+        used = 0;
+      }
+    }
+  }
+}
+function gridText(cell?: Fields): InlineRun[] {
+  return (
+    (cell?.runs as InlineRun[] | undefined) ??
+    (cell?.text ? [{ text: String(cell.text) }] : [])
+  );
+}
+type Grid = TableData | DatabaseData;
+function ids(store: Backend, path: string) {
+  // Entries are immutable. Only the newest position for a given ID is visible.
+  const entries = store
+    .list(path)
+    .map((s) => JSON.parse(s) as [string, number, string]);
+  const winner = new Map<string, (typeof entries)[number]>();
+  for (const e of entries) {
+    const w = winner.get(e[0]);
+    if (!w || e[1] > w[1] || (e[1] === w[1] && e[2] > w[2]))
+      winner.set(e[0], e);
+  }
+  return entries.flatMap((e, i) =>
+    winner.get(e[0]) === e ? [{ id: e[0], index: i }] : []
+  );
+}
+function place(
+  store: Backend,
+  path: string,
+  id: string,
+  following: string | undefined,
+  clock: number,
+  previous?: { id: string; index: number }
+) {
+  const index =
+    previous && previous.id === following
+      ? previous.index
+      : following === undefined
+        ? undefined
+        : ids(store, path).find((e) => e.id === following)?.index;
+  const at = index ?? store.list(path).length;
+  store.insert(path, at, JSON.stringify([id, clock, store.actor]));
+  return { id, index: at };
+}
+// Existing snapshots use the block ID directly. A replacement uses a fresh
+// namespace, including its cell texts, record pages and ordering metadata.
+function gridId(store: Backend, blockId: string, kind: string) {
+  const generation = store.read(key(blockId, 'grids'))[kind];
+  return typeof generation === 'string' ? [blockId, generation] : blockId;
+}
+function gridTextPath(
+  store: Backend,
+  id: string,
+  kind: string,
+  row: string,
+  column?: string
+) {
+  const storageId = gridId(store, id, kind);
+  return column === undefined
+    ? key(storageId, 'recordPage', row)
+    : key(storageId, kind, row, column);
+}
+function writeGrid(
+  store: Backend,
+  blockId: string,
+  kind: 'table' | 'database',
+  before: Grid | undefined,
+  next: Grid | undefined,
+  clock: number
+) {
+  if (!next) {
+    if (before) {
+      store.field(key(blockId, 'grids'), kind, undefined);
+      store.field(key(blockId, 'retiredGrids'), kind, true);
+    }
+    return;
+  }
+  if (!before)
+    store.field(
+      key(blockId, 'grids'),
+      kind,
+      store.read(key(blockId, 'retiredGrids'))[kind]
+        ? JSON.stringify([clock, store.actor])
+        : true
+    );
+  const id = gridId(store, blockId, kind),
+    base = key(id, kind);
+  const { rows, columns, ...meta } = next;
+  if (!before) {
+    store.ensureList(key(id, kind, 'columns'));
+    store.ensureList(key(id, kind, 'rows'));
+  }
+  if (!before || before.rows !== rows || before.columns !== columns) {
+    const priorRows = new Set(before?.rows.map((r) => r.id)),
+      priorColumns = new Set(before?.columns.map((c) => c.id));
+    const newColumns = columns.filter((c) => !priorColumns.has(c.id));
+    for (const row of rows)
+      for (const col of priorRows.has(row.id) ? newColumns : columns)
+        store.ensureText(key(id, kind, row.id, col.id));
+  }
+  const {
+    rows: oldRows = [],
+    columns: oldColumns = [],
+    ...prev
+  } = before ?? {};
+  fields(store, base, prev, meta);
+  function order(
+    axis: string,
+    a: readonly { id: string }[],
+    b: readonly { id: string }[]
+  ) {
+    if (
+      a === b ||
+      (a.length === b.length && a.every((v, i) => v.id === b[i]!.id))
+    )
+      return;
+    const nextIds = new Set(b.map((x) => x.id)),
+      oldIds = new Set(a.map((x) => x.id));
+    if (a.length === 0 && store.list(key(id, kind, axis)).length === 0) {
+      const path = key(id, kind, axis),
+        active = key(id, kind, axis, 'active');
+      b.forEach((item, i) => {
+        store.insert(path, i, JSON.stringify([item.id, clock, store.actor]));
+        store.field(active, item.id, true);
+      });
+      return;
+    }
+    const oldOrder = a.map((x) => x.id).filter((x) => nextIds.has(x));
+    for (let i = b.length - 1; i >= 0; i--) {
+      const item = b[i]!,
+        at = oldOrder.indexOf(item.id),
+        following = b[i + 1]?.id;
+      if (at >= 0 && oldOrder[at + 1] === following) continue;
+      if (at >= 0) oldOrder.splice(at, 1);
+      oldOrder.splice(
+        following === undefined ? oldOrder.length : oldOrder.indexOf(following),
+        0,
+        item.id
+      );
+      place(store, key(id, kind, axis), item.id, following, clock);
+    }
+    const active = key(id, kind, axis, 'active');
+    for (const x of nextIds) if (!oldIds.has(x)) store.field(active, x, true);
+    for (const x of oldIds)
+      if (!nextIds.has(x)) store.field(active, x, undefined);
+  }
+  order('columns', oldColumns, columns);
+  order('rows', oldRows, rows);
+  const oldCols = new Map(oldColumns.map((c) => [c.id, c]));
+  for (const c of columns)
+    if (c !== oldCols.get(c.id))
+      fields(
+        store,
+        key(id, kind, 'col', c.id),
+        { ...oldCols.get(c.id) },
+        { ...c }
+      );
+  const oldById = new Map(oldRows.map((r) => [r.id, r]));
+  for (const row of rows) {
+    const old = oldById.get(row.id);
+    if (row === old) continue;
+    const { cells, page, ...props }: DatabaseRow = row;
+    const {
+      cells: oldCells = {},
+      page: oldPage,
+      ...oldProps
+    }: Partial<DatabaseRow> = old ?? {};
+    const rowPath = key(id, kind, 'row', row.id);
+    fields(store, rowPath, oldProps, props);
+    if (kind === 'database' && (!old || page !== oldPage)) {
+      const contentPath = key(id, 'recordPage', row.id);
+      store.ensureText(contentPath);
+      if (page || oldPage) {
+        // Older replicas stored the whole page in the row field. Seed the text
+        // from its actual backend contents when the page is first edited.
+        writeText(
+          store,
+          contentPath,
+          store.runs(contentPath),
+          page?.content ?? []
+        );
+        if (!oldPage || !page || store.read(rowPath).page !== true)
+          store.field(rowPath, 'page', page ? true : undefined);
+      }
+    }
+    for (const col of new Set([
+      ...Object.keys(cells),
+      ...Object.keys(oldCells),
+    ])) {
+      const c = cells[col],
+        previous = oldCells[col];
+      if (c === previous) continue;
+      const path = key(id, kind, row.id, col);
+      const { text, runs, ...attrs } = c ?? {},
+        { text: ot, runs: or, ...oa } = previous ?? {};
+      fields(store, path, oa, attrs);
+      if (typeof text !== typeof ot)
+        store.field(path, 'hasText', text !== undefined || undefined);
+      if (Boolean(runs) !== Boolean(or))
+        store.field(path, 'hasRuns', runs ? true : undefined);
+      if (!previous || !equal(text, ot) || !equal(runs, or))
+        writeText(
+          store,
+          path,
+          gridText(previous as Fields),
+          gridText(c as Fields)
+        );
+    }
+  }
+}
+function readGrid(store: Backend, blockId: string, kind: string): Grid {
+  const id = gridId(store, blockId, kind);
+  const axis = (name: string) => {
+    const active = store.read(key(id, kind, name, 'active'));
+    return ids(store, key(id, kind, name))
+      .map((e) => e.id)
+      .filter((x) => active[x]);
+  };
+  const columns = axis('columns').map((c) => ({
+    ...store.read(key(id, kind, 'col', c)),
+    id: c,
+  }));
+  const rowIds = axis('rows');
+  store.prepareCells?.(
+    (function* () {
+      for (const r of rowIds)
+        for (const c of columns) yield key(id, kind, r, c.id);
+    })()
+  );
+  const rows = rowIds.map((r) => {
+    const cells: Fields = Object.create(null);
+    for (const c of columns) {
+      const path = key(id, kind, r, c.id),
+        { hasText, hasRuns, ...attrs } = store.read(path);
+      const runs = store.runs(path);
+      if (hasText || hasRuns || runs.length || Object.keys(attrs).length)
+        cells[c.id] = {
+          ...attrs,
+          ...((hasText || runs.length) && { text: plainText(runs) }),
+          ...((hasRuns || runs.some((x) => x.marks)) && { runs }),
+        };
+    }
+    const { page, ...props } = store.read(key(id, kind, 'row', r));
+    const content =
+      kind === 'database' ? store.runs(key(id, 'recordPage', r)) : [];
+    return {
+      ...props,
+      ...(page === true || content.length
+        ? { page: { content } }
+        : page
+          ? { page }
+          : {}),
+      id: r,
+      cells,
+    };
+  });
+  return { ...store.read(key(id, kind)), rows, columns } as Grid;
+}
+type Location = { parent: string | null; clock: number; actor: string };
+export class SharedAdapter implements CollaborationAdapter {
+  #listeners = new Set<(u: RemoteDocUpdate) => void>();
+  #snapshot: Doc;
+  #text: JoinedText;
+  #composition:
+    | {
+        target: CompositionTarget;
+        path: string;
+        history: HistorySelection;
+        start: () => Point | null;
+        selected: { offset: () => Point | null; length: number }[];
+      }
+    | undefined;
+  constructor(
+    protected store: Backend,
+    seed?: Doc,
+    private presence?: PresenceChannel
+  ) {
+    this.#text = new JoinedText(store, []);
+    if (!store.read('doc').id) {
+      if (!seed)
+        throw new Error(
+          'Initialize one shared document before connecting peers'
+        );
+      const empty: Doc = { id: seed.id, version: 1, title: '', blocks: [] };
+      store.transact(() => {
+        store.ensureList(key('children', 'root', ''));
+        store.field('doc', 'id', seed.id);
+        this.#write(seed, diffDocs(empty, seed));
+      });
+      store.clearHistory();
+    }
+    this.#snapshot = this.#read();
+  }
+  getDoc() {
+    return this.#snapshot;
+  }
+  #upgradeText() {
+    if (this.#text.upgradeLegacySplits())
+      this.#text = new JoinedText(
+        this.store,
+        Object.keys(this.store.read('types'))
+      );
+  }
+  #write(doc: Doc, patches: readonly DocPatch[]) {
+    this.#upgradeText();
+    const s = this.store,
+      clock =
+        1 +
+        Math.max(
+          this.#text.clock,
+          ...Object.values(s.read('clocks')).map(Number)
+        );
+    const restored = new Set<string>();
+    const mergedSources = new Set(
+      patches.flatMap((p) =>
+        p.type === 'replaceBlockText' && p.mergedFrom !== undefined
+          ? [p.mergedFrom]
+          : []
+      )
+    );
+    const placements: {
+      blockId: string;
+      parentId: string | null;
+      index: number;
+    }[] = [];
+    for (const p of patches) {
+      if (p.type === 'setTitle') {
+        s.field('doc', 'title', p.title);
+        continue;
+      }
+      if (p.type === 'setIcon') {
+        s.field('doc', 'icon', p.icon);
+        continue;
+      }
+      const id = p.type === 'insertBlock' ? p.block.id : p.blockId;
+      const props = (v: Block['props']) => {
+        const { table, database, ...other } = v;
+        fields(s, key(id, 'props'), s.read(key(id, 'props')), other);
+        if (table || s.read(key(id, 'grids')).table)
+          writeGrid(
+            s,
+            id,
+            'table',
+            s.read(key(id, 'grids')).table
+              ? (readGrid(s, id, 'table') as TableData)
+              : undefined,
+            table,
+            clock
+          );
+        if (database || s.read(key(id, 'grids')).database)
+          writeGrid(
+            s,
+            id,
+            'database',
+            s.read(key(id, 'grids')).database
+              ? (readGrid(s, id, 'database') as DatabaseData)
+              : undefined,
+            database,
+            clock
+          );
+      };
+      switch (p.type) {
+        case 'insertBlock':
+          s.ensureList(key('children', 'block', id));
+          s.field('types', id, p.block.type);
+          props(p.block.props);
+          if (p.split) {
+            const cut = this.#text.at(bodyText(p.split.from), p.split.offset);
+            const opId = JSON.stringify([id, clock, s.actor]);
+            s.field('activeSplits', id, opId);
+            s.field('splitLayout', opId, {
+              blockId: id,
+              marker: true,
+              from: p.split.from,
+              path: cut.path,
+              slice: cut.slice,
+              token: s.insertSplitMarker(cut.path, cut.offset),
+              clock,
+              actor: s.actor,
+            });
+          } else if (this.#text.isStructuralBlock(id)) {
+            restored.add(id);
+            restored.add(this.#text.joinedOwner(id));
+            s.field('joins', id, undefined);
+          } else writeText(s, bodyText(id), s.runs(bodyText(id)), p.block.text);
+          placements.push({ ...p, blockId: id });
+          break;
+        case 'deleteBlock':
+          if (!mergedSources.has(id)) s.field('types', id, undefined);
+          break;
+        case 'moveBlock':
+          placements.push(p);
+          break;
+        case 'replaceBlockText':
+          if (p.mergedFrom !== undefined)
+            s.field('joins', p.mergedFrom, {
+              into: id,
+              clock,
+              actor: s.actor,
+              keepsType: true,
+            });
+          else if (!p.splitSuffix)
+            writeText(this.#text, bodyText(id), p.previous, p.next);
+          break;
+        case 'setBlockType':
+          s.field('types', id, p.blockType);
+          props(p.props);
+          break;
+        case 'updateBlockProps':
+          for (const [k, v] of Object.entries(p.patch))
+            s.field(key(id, 'props'), k, v);
+          break;
+        case 'updateDatabase':
+          writeGrid(s, id, 'database', p.previous, p.next, clock);
+          break;
+        case 'updateTable':
+          writeGrid(s, id, 'table', p.previous, p.next, clock);
+          break;
+      }
+    }
+    if (restored.size) {
+      // Reintroduced IDs can address old slices, including text previously
+      // shown by a join recipient. Reconcile the final logical paragraphs.
+      const layout = new JoinedText(s, Object.keys(s.read('types')));
+      for (const id of restored) {
+        const block = find(doc.blocks, id),
+          path = bodyText(id);
+        if (block) writeText(layout, path, layout.runs(path), block.text);
+      }
+    }
+    if (placements.length) {
+      const parents = new Map<string | null, Block[]>([[null, doc.blocks]]);
+      const visit = (blocks: Block[]) => {
+        for (const b of blocks)
+          if (b.children.length) {
+            parents.set(b.id, b.children);
+            visit(b.children);
+          }
+      };
+      visit(doc.blocks);
+      const lastInsert = new Map<
+        string | null,
+        { id: string; index: number }
+      >();
+      for (const p of placements.sort((a, b) => b.index - a.index)) {
+        const parent = p.parentId,
+          following = parents.get(parent)?.[p.index + 1]?.id;
+        const location: Location = { parent, clock, actor: s.actor };
+        s.field(key('locations', p.blockId), s.actor, location);
+        lastInsert.set(
+          parent,
+          place(
+            s,
+            key('children', parent === null ? 'root' : 'block', parent ?? ''),
+            p.blockId,
+            following,
+            clock,
+            lastInsert.get(parent)
+          )
+        );
+      }
+    }
+    s.field('clocks', s.actor, clock);
+  }
+  #read(): Doc {
+    const s = this.store,
+      meta = s.read('doc'),
+      types = s.read('types');
+    this.#text = new JoinedText(s, Object.keys(types).sort());
+    const live = this.#text.visible;
+    const parents = new Map<string, string | null>();
+    for (const id of live) {
+      const choices = Object.values(s.read(key('locations', id))) as Location[];
+      const win = choices.reduce<Location | undefined>(
+        (a, b) =>
+          !a || b.clock > a.clock || (b.clock === a.clock && b.actor > a.actor)
+            ? b
+            : a,
+        undefined
+      );
+      parents.set(id, win?.parent && live.has(win.parent) ? win.parent : null);
+    }
+    // Concurrent ancestor moves may form a cycle. Detach its lowest ID on every replica.
+    const done = new Set<string>();
+    for (const id of live) {
+      const path = new Set<string>();
+      let node: string | null = id;
+      while (node !== null && !done.has(node)) {
+        if (path.has(node)) {
+          const cycle = [...path].slice([...path].indexOf(node));
+          parents.set(cycle.sort()[0]!, null);
+          break;
+        }
+        path.add(node);
+        node = parents.get(node) ?? null;
+      }
+      for (const n of path) done.add(n);
+    }
+    const groups = new Map<string | null, string[]>();
+    for (const [id, parent] of parents) {
+      const group = groups.get(parent) ?? [];
+      group.push(id);
+      groups.set(parent, group);
+    }
+    const nativeRuns = new Map<string, InlineRun[]>();
+    const children = (parent: string | null): Block[] => {
+      const group = groups.get(parent);
+      if (!group) return [];
+      const missing = new Set(group),
+        ordered = ids(
+          s,
+          key('children', parent === null ? 'root' : 'block', parent ?? '')
+        ).flatMap((e) => (missing.delete(e.id) ? [e.id] : []));
+      return [...ordered, ...missing].map((id) => {
+        const props = s.read(key(id, 'props')),
+          grids = s.read(key(id, 'grids'));
+        for (const kind of Object.keys(grids))
+          props[kind] = readGrid(s, id, kind);
+        return {
+          id,
+          type: types[id] as Block['type'],
+          props,
+          text: this.#text.runs(bodyText(id), nativeRuns),
+          children: children(id),
+        };
+      });
+    };
+    return {
+      version: 1,
+      id: String(meta.id),
+      title: String(meta.title ?? ''),
+      ...(meta.icon !== undefined && { icon: String(meta.icon) }),
+      blocks: children(null),
+    };
+  }
+  #saveSelection(selection: EditorSelection | null) {
+    if (!selection) return () => null;
+    const save = (point: Point) => {
+      const block = find(this.#snapshot.blocks, point.blockId);
+      if (!block) return () => null;
+      const value = plainText(block.text),
+        offset = Math.min(Math.max(point.offset, 0), value.length);
+      const path = bodyText(point.blockId);
+      const gap = this.#text.anchor(path, offset);
+      // An undo may recreate removed characters with new identities. Track
+      // the adjacent characters as well as the gap, so either survivor can
+      // recover the endpoint without retaining a document per history entry.
+      const right =
+        offset < value.length ? this.#text.anchor(path, offset, true) : null;
+      const previous = value.charCodeAt(offset - 1);
+      const width =
+        previous >= 0xdc00 && previous <= 0xdfff && offset >= 2 ? 2 : 1;
+      const left = offset
+        ? this.#text.anchor(path, offset - width, true)
+        : null;
+      const atStart = offset === 0;
+      return () => {
+        const resolve = (anchor: typeof gap, exact: boolean) => {
+          const at = anchor.resolve();
+          if (at === null) return null;
+          const mapped = this.#text.logical(
+            anchor.path,
+            at,
+            point.blockId,
+            false,
+            exact
+          );
+          return mapped && find(this.#snapshot.blocks, mapped.blockId)
+            ? mapped
+            : null;
+        };
+        const next = right && resolve(right, true);
+        if (next) return next;
+        if (right) {
+          const prev = left && resolve(left, true);
+          if (prev) return { ...prev, offset: prev.offset + width };
+          if (atStart && find(this.#snapshot.blocks, point.blockId))
+            return point;
+        }
+        return resolve(gap, false);
+      };
+    };
+    const anchor = save(selection.anchor);
+    const focus =
+      selection.anchor.blockId === selection.focus.blockId &&
+      selection.anchor.offset === selection.focus.offset
+        ? anchor
+        : save(selection.focus);
+    return () => {
+      const a = anchor(),
+        f = focus();
+      return a && f ? { anchor: a, focus: f } : null;
+    };
+  }
+  applyLocalChange(change: DocChange, patches: readonly DocPatch[]) {
+    if (!patches.length) return;
+    const selection: HistorySelection = {};
+    if (change.previousSelection !== undefined)
+      selection.undo = this.#saveSelection(change.previousSelection);
+    this.store.transact(() => this.#write(change.doc, patches), selection);
+    this.#snapshot = this.#read();
+    selection.redo = this.#saveSelection(change.selection);
+  }
+  protected received(
+    history?: RemoteDocUpdate['history'],
+    bookmark?: () => EditorSelection | null
+  ) {
+    const offsets = this.store.offsets,
+      previousText = this.#text;
+    this.#snapshot = this.#read();
+    const doc = this.#snapshot,
+      updatedText = this.#text;
+    const remapGridOffset = (
+      id: string,
+      row: string,
+      col: string | undefined,
+      i: number
+    ) => {
+      const b = find(doc.blocks, id),
+        grid = b?.props.table ?? b?.props.database;
+      if (
+        !grid?.rows.some((r) => r.id === row) ||
+        (col === undefined
+          ? !b?.props.database
+          : !grid.columns.some((c) => c.id === col))
+      )
+        return null;
+      return offsets(
+        gridTextPath(
+          this.store,
+          id,
+          b?.props.table ? 'table' : 'database',
+          row,
+          col
+        ),
+        i
+      );
+    };
+    const update: RemoteDocUpdate = {
+      doc,
+      ...(history && { history }),
+      ...(bookmark && { historySelection: bookmark() }),
+      remapPoint: (p) => {
+        const point = previousText.at(bodyText(p.blockId), p.offset, true);
+        const mapped = updatedText.logical(
+          point.path,
+          offsets(point.path, point.offset),
+          p.blockId,
+          true
+        );
+        return mapped && find(doc.blocks, mapped.blockId) ? mapped : null;
+      },
+      remapCellOffset: remapGridOffset,
+      remapPageOffset: (id, row, i) => remapGridOffset(id, row, undefined, i),
+    };
+    for (const fn of this.#listeners) fn(update);
+  }
+  subscribe(fn: (u: RemoteDocUpdate) => void) {
+    this.#listeners.add(fn);
+    return () => {
+      this.#listeners.delete(fn);
+    };
+  }
+  get canUndo() {
+    return this.store.canUndo;
+  }
+  get canRedo() {
+    return this.store.canRedo;
+  }
+  undo() {
+    const entry = this.store.undo();
+    if (!entry) return false;
+    this.received('undo', typeof entry === 'object' ? entry.undo : undefined);
+    return true;
+  }
+  redo() {
+    const entry = this.store.redo();
+    if (!entry) return false;
+    this.received('redo', typeof entry === 'object' ? entry.redo : undefined);
+    return true;
+  }
+  beginComposition(target: CompositionTarget) {
+    const block = find(this.#snapshot.blocks, target.blockId);
+    const kind = block?.type === 'table' ? 'table' : 'database';
+    const path =
+      target.rowId === undefined
+        ? bodyText(target.blockId)
+        : gridTextPath(
+            this.store,
+            target.blockId,
+            kind,
+            target.rowId,
+            target.columnId
+          );
+    const cursor = (i: number, exact = false) => {
+      if (target.rowId !== undefined) {
+        const resolve = this.store.cursor(path, i, exact);
+        return () => {
+          const at = resolve();
+          return at === null ? null : { blockId: target.blockId, offset: at };
+        };
+      }
+      const anchor = this.#text.anchor(path, i, exact);
+      return () => {
+        const at = anchor.resolve();
+        return at === null
+          ? null
+          : this.#text.logical(anchor.path, at, target.blockId, false, exact);
+      };
+    };
+    let i = target.from;
+    const selected =
+      target.from === target.to
+        ? []
+        : Array.from(
+            plainText(this.#text.runs(path)).slice(target.from, target.to),
+            (ch) => {
+              const offset = cursor(i, true);
+              i += ch.length;
+              return { offset, length: ch.length };
+            }
+          );
+    const history: HistorySelection = {};
+    if (target.rowId === undefined) {
+      const first = { blockId: target.blockId, offset: target.from },
+        last = { blockId: target.blockId, offset: target.to };
+      history.undo = this.#saveSelection(
+        target.backward
+          ? { anchor: last, focus: first }
+          : { anchor: first, focus: last }
+      );
+    }
+    this.#composition = {
+      history,
+      target,
+      path,
+      start: cursor(target.from),
+      selected,
+    };
+  }
+  commitComposition(text: string): RemoteDocUpdate {
+    const comp = this.#composition;
+    this.#composition = undefined;
+    if (!comp) return { doc: this.#snapshot };
+    const point = comp.start();
+    if (!point) return { doc: this.#snapshot };
+    const { blockId: id, offset: start } = point;
+    const path = comp.target.rowId === undefined ? bodyText(id) : comp.path;
+    const block = find(this.#snapshot.blocks, id);
+    if (!block) return { doc: this.#snapshot };
+    if (comp.target.rowId !== undefined) {
+      const grid = block.props.table ?? block.props.database,
+        { rowId, columnId } = comp.target;
+      if (
+        comp.path !==
+          gridTextPath(
+            this.store,
+            id,
+            block.type === 'table' ? 'table' : 'database',
+            rowId,
+            columnId
+          ) ||
+        !grid?.rows.some((r) => r.id === rowId) ||
+        (columnId !== undefined
+          ? !grid.columns.some((c) => c.id === columnId)
+          : !block.props.database)
+      )
+        return { doc: this.#snapshot };
+    }
+    let from = start;
+    const desired = { ...marksAt(this.#text.runs(path), start) };
+    delete desired.mention;
+    delete desired.page;
+    if (comp.target.pendingMarks) {
+      for (const name of BOOLEAN_MARK_KEYS) {
+        if (comp.target.pendingMarks[name]) desired[name] = true;
+        else delete desired[name];
+      }
+    }
+    this.store.transact(() => {
+      this.#upgradeText();
+      // Insert while the original boundary characters still identify the
+      // intended side of a remote split. Then resolve the exact characters
+      // selected at composition start against the updated native texts.
+      this.#text.splice(path, from, 0, text);
+      if (text.length) {
+        const actual = marksAt(this.#text.runs(path), from + text.length);
+        applyMarkChanges(this.#text, path, from, text.length, actual, desired);
+      }
+      const ranges: { path: string; start: number; length: number }[] = [];
+      for (const char of comp.selected) {
+        const current = char.offset();
+        if (
+          !current ||
+          (current.blockId !== id &&
+            !find(this.#snapshot.blocks, current.blockId))
+        )
+          continue;
+        const selectedPath =
+          comp.target.rowId === undefined ? bodyText(current.blockId) : path;
+        const at = current.offset;
+        const last = ranges.at(-1);
+        if (last?.path === selectedPath && last.start + last.length === at)
+          last.length += char.length;
+        else
+          ranges.push({ path: selectedPath, start: at, length: char.length });
+      }
+      for (const range of ranges.sort((a, b) => b.start - a.start)) {
+        this.#text.splice(range.path, range.start, range.length, '');
+        if (range.path === path)
+          from -= Math.max(0, Math.min(range.length, from - range.start));
+      }
+    }, comp.history);
+    this.#snapshot = this.#read();
+    const caret = { blockId: id, offset: from + text.length };
+    if (comp.history.undo)
+      comp.history.redo = this.#saveSelection({ anchor: caret, focus: caret });
+    return { doc: this.#snapshot, remapPoint: () => caret };
+  }
+  cancelComposition(): RemoteDocUpdate {
+    this.#composition = undefined;
+    return { doc: this.#snapshot };
+  }
+  setLocalPresence(p: Omit<PeerPresence, 'clientId'> | null) {
+    this.presence?.publish(
+      p && this.presence.user ? { ...p, user: this.presence.user } : p
+    );
+  }
+  subscribePresence(fn: (peers: readonly PeerPresence[]) => void) {
+    return this.presence?.subscribe(fn) ?? (() => {});
+  }
+  destroy() {
+    this.#listeners.clear();
+    this.#composition = undefined;
+    this.presence?.publish(null);
+  }
+}
+function find(blocks: Block[], id: string): Block | undefined {
+  for (const b of blocks) {
+    if (b.id === id) return b;
+    const child = find(b.children, id);
+    if (child) return child;
+  }
+}

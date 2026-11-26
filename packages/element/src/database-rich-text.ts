@@ -1,5 +1,6 @@
 import {
   applyMarkPatch,
+  BOOLEAN_MARK_KEYS,
   deleteTextRange,
   insertTextAt,
   markStateInRange,
@@ -186,23 +187,21 @@ export class DatabaseRichTextController {
     richText = false
   ): void {
     let pendingOnStart: { offset: number; marks: InlineMark } | null = null;
+    const takePending = () => {
+      const pending = this.#pendingMarks;
+      if (!richText || pending?.target !== target) return null;
+      this.#pendingMarks = null;
+      return pending;
+    };
+    if (richText) target.addEventListener('nb-composition-marks', event => {
+      const pending = takePending();
+      if (pending) (event as CustomEvent).detail(pending.offset, pending.marks);
+    }, { signal });
     target.addEventListener(
       'compositionstart',
       () => {
         this.composingTargets.add(target);
-        if (
-          richText &&
-          this.#pendingMarks &&
-          this.#pendingMarks.target === target
-        ) {
-          pendingOnStart = {
-            offset: this.#pendingMarks.offset,
-            marks: this.#pendingMarks.marks,
-          };
-          this.#pendingMarks = null;
-        } else {
-          pendingOnStart = null;
-        }
+        pendingOnStart = takePending();
       },
       { signal }
     );
@@ -217,13 +216,8 @@ export class DatabaseRichTextController {
           const endOffset = offsets ? offsets.end : offset;
           if (endOffset > offset) {
             const runs = readRichTextRuns(target);
-            const patch: MarkPatch = {
-              bold: marks.bold === true,
-              italic: marks.italic === true,
-              underline: marks.underline === true,
-              strike: marks.strike === true,
-              code: marks.code === true,
-            };
+            const patch: MarkPatch = {};
+            for (const key of BOOLEAN_MARK_KEYS) patch[key] = marks[key] === true;
             const nextRuns = applyMarkPatch(runs, offset, endOffset, patch);
             renderRichTextRuns(target, nextRuns, this.#ctx.resolvePage);
             setSelectionOffsets(target, endOffset, endOffset);
