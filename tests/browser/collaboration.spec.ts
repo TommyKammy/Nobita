@@ -470,34 +470,56 @@ for (const key of ['Backspace', 'Delete']) {
   );
 }
 
-test('Enter keeps offline typing and its caret in the split suffix', async ({
-  page,
-}) => {
-  await openFixture(page);
-  const network = await page.evaluateHandle(async () => {
-    const path = '/peers.ts',
-      network = await (await import(path)).setupPeers(),
-      editor = window.__editor!;
-    const block = editor.doc.blocks[0]!;
-    editor.setDoc({
-      ...editor.doc,
-      blocks: [{ ...block, text: [{ text: 'abcd' }] }],
-    });
-    network.pause();
-    editor.focus(block.id, 2);
-    return network;
-  });
-  await page.keyboard.press('Enter');
-  await expect(page.locator('#editor .nb-text')).toHaveText(['ab', 'cd']);
-  await page.evaluate(() =>
-    (document.querySelector('#peer') as typeof window.__host).editor!.focus(
-      'p',
-      3
-    )
+for (const composing of [false, true]) {
+  test(
+    (composing ? 'IME commit' : 'Typing') +
+      ' keeps its caret in the remotely split suffix',
+    async ({ page }) => {
+      await openFixture(page);
+      const network = await page.evaluateHandle(async () => {
+        const path = '/peers.ts',
+          network = await (await import(path)).setupPeers(),
+          editor = window.__editor!;
+        const block = editor.doc.blocks[0]!;
+        editor.setDoc({
+          ...editor.doc,
+          blocks: [{ ...block, text: [{ text: 'abcd' }] }],
+        });
+        network.pause();
+        editor.focus(block.id, 2);
+        return network;
+      });
+      await page.keyboard.press('Enter');
+      await expect(page.locator('#editor .nb-text')).toHaveText(['ab', 'cd']);
+      await page.evaluate(() =>
+        (document.querySelector('#peer') as typeof window.__host).editor!.focus(
+          'p',
+          3
+        )
+      );
+      const text = composing ? '日' : 'X';
+      if (composing) {
+        const cdp = await page.context().newCDPSession(page);
+        await cdp.send('Input.imeSetComposition', {
+          text: 'に',
+          selectionStart: 1,
+          selectionEnd: 1,
+        });
+        await network.evaluate((n) => n.resume());
+        await cdp.send('Input.insertText', { text });
+      } else {
+        await page.keyboard.type(text);
+        await network.evaluate((n) => n.resume());
+      }
+      await expect(page.locator('#peer .nb-text')).toHaveText([
+        'ab',
+        'c' + text + 'd',
+      ]);
+      await page.keyboard.type('Y');
+      await expect(page.locator('#editor .nb-text')).toHaveText([
+        'ab',
+        'c' + text + 'Yd',
+      ]);
+    }
   );
-  await page.keyboard.type('X');
-  await network.evaluate((n) => n.resume());
-  await expect(page.locator('#peer .nb-text')).toHaveText(['ab', 'cXd']);
-  await page.keyboard.type('Y');
-  await expect(page.locator('#editor .nb-text')).toHaveText(['ab', 'cXYd']);
-});
+}

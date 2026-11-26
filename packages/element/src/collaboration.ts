@@ -182,10 +182,10 @@ export function connect(
         offset: target.from,
       });
       store.applyRemote(update.doc);
-      const text = original?.isConnected
-        ? original
-        : target.rowId === undefined
-          ? bodyText(target.blockId)
+      const text = target.rowId === undefined
+        ? bodyText(point?.blockId ?? target.blockId)
+        : original?.isConnected
+          ? original
           : target.columnId !== undefined
             ? cellText(target.blockId, target.rowId, target.columnId)
             : null;
