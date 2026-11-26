@@ -2,6 +2,8 @@
 
 Analysis date: 2026-11-23 · AFFiNE 0.27.5 (source) / app.affine.pro 0.27.4 (live bundle)
 
+The observations below describe that AFFiNE release. The Nobita comparison was checked against the implementation on 2026-11-27. See the [command comparison](command-comparison.md) for individual actions and shortcuts.
+
 ## Evidence collected
 
 | What | How | Evidence |
@@ -14,7 +16,7 @@ Analysis date: 2026-11-23 · AFFiNE 0.27.5 (source) / app.affine.pro 0.27.4 (liv
 
 Own-words summary; no AFFiNE code is copied into Nobita.
 
-## What the live app actually renders
+## What the AFFiNE app rendered on 2026-11-23
 
 - Each block is a custom element (`affine-paragraph`, `affine-list`, `affine-note`, …) with `data-block-id`.
 - The page is a `affine-page-root` → `affine-note` (content column). Note width measured **752 px** at a 1440 px viewport, block row height **24 px** (16 px text) and **~10 px** block gap.
@@ -22,22 +24,22 @@ Own-words summary; no AFFiNE code is copied into Nobita.
 - Editing is **per-block contenteditable** with a shared rich-text engine, not one giant contenteditable.
 - First-run workspace is local (IndexedDB + `nbstore` shared worker) and fully usable without an account.
 
-## Architectural takeaways
+## Architectural takeaways from AFFiNE
 
-1. **Block tree + schema registry.** A block is `{ id, flavour, props, children }`; text is a CRDT (`Y.Text`) serialized as a delta. Schemas declare allowed parents and a version. → Nobita keeps a tree with typed props and a pluggable block registry, but stores plain JSON runs (no CRDT dependency in core).
+1. **Block tree + schema registry.** A block is `{ id, flavour, props, children }`; text is a CRDT (`Y.Text`) serialized as a delta. Schemas declare allowed parents and a version.
 2. **Delta text model.** Rich text is `DeltaInsert[]` (`{ insert, attributes }`), rendered to spans; native `Range` is converted to text offsets and back. Marks are a small object (`bold/italic/underline/strike/code/link/color`).
 3. **Per-block editable, cross-block selection.** Each block owns a contenteditable root; the editor layer maps multi-block native selections to block+offset pairs for delete/format/copy.
 4. **Controlled input.** `beforeinput` is intercepted for text, split, delete, paste and markdown; composition is left to the browser and reconciled from the DOM afterwards.
 5. **Commands, not mutations.** Slash menu, hotkeys, drag-handle menu and markdown rules all dispatch the same conversion commands (`updateBlockType`, `indent/dedent`, `move`, `format`).
 6. **Widgets are overlays.** Slash menu, block hub, format bar and drag handle are positioned portals driven by selection/geometry, so block rendering stays cheap.
 
-## Interaction inventory worth matching (MVP)
+## Document editor interactions
 
-| Area | AFFiNE behaviour | Nobita MVP |
+| Area | AFFiNE behaviour | Nobita |
 | --- | --- | --- |
-| Block types | text, h1–h6, bulleted/numbered/todo, quote, code, divider, callout, image, bookmark, embed, database, table, latex | text, h1–h6, bulleted/numbered/todo, quote, code, divider, callout, image, table/database |
+| Block types | text, h1–h6, bulleted/numbered/todo, quote, code, divider, callout, image, bookmark, embed, database, table, latex | text, h1–h6, bulleted/numbered/todo, quote, code, divider, callout, image, page cards, simple tables and databases |
 | Slash menu | grouped, searchable, aliases, submenu for h4–h6 | grouped + fuzzy search + aliases |
-| Hotkeys | `Mod-Alt-0..9`, `Mod-Alt-c/d`, `Mod-Enter`, `Mod-Alt-ArrowUp/Down`, `Mod-a` | same core set + Notion muscle memory |
+| Hotkeys | `Mod-Alt-0..9`, `Mod-Alt-c/d`, `Mod-Enter`, `Mod-Alt-ArrowUp/Down`, `Mod-a` | `Mod-Alt-0..6`, `8`, `9` and `C` convert blocks. Use `/` for a divider. `Mod-Enter` inserts a paragraph, `Mod-Alt-Up/Down` moves a block, and staged `Mod-A` selects block text then all top-level blocks |
 | Markdown input | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `---` | same + inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~` |
 | Drag handle | hover gutter, click menu, drag reorder, drop indicator | same |
 | Toolbar | selection format bar + link editor | same, compact |
@@ -48,10 +50,10 @@ Own-words summary; no AFFiNE code is copied into Nobita.
 Nobita is not a BlockSuite port. It targets **embeddability and payload size**:
 
 - Zero runtime dependencies; no Lit, signals, RxJS or Yjs in the default build.
-- Direct DOM rendering with per-block views and immutable path-copy updates; no virtual DOM.
-- Plain JSON document format (`application/x-nobita+json`) that any host app can persist or sync.
+- Direct DOM rendering uses per-block views and immutable path-copy updates. Long documents render a window of blocks while the full document remains in the model.
+- Hosts persist the plain JSON `Doc`. The editor uses the private MIME type `application/x-nobita+json` on the clipboard to preserve structured selections.
 - Shadow-DOM web component so host CSS cannot leak in; themeable through CSS custom properties.
-- Collaboration is an explicit adapter boundary rather than a built-in CRDT, keeping the base editor small.
+- Optional Yjs and Automerge adapters handle collaborative edits, offline merges and local undo/redo. The host supplies transport and persists CRDT history.
 
 ## Source-level findings (AFFiNE 0.27.5 checkout)
 
@@ -133,28 +135,22 @@ the same block schemas on a surface.
 | --- | --- |
 | Schema-declared blocks | TypeScript union + typed props, explicit defaults and conversion functions |
 | Delta rich text | Plain `InlineRun[]` with a small mark set |
-| Per-block inline editors | One editing host per shadow root, per-block views |
-| Yjs text | Plain JSON; collaboration is an explicit adapter boundary |
-| Command layer | Pure `core/doc.ts` + `core/commands.ts` functions |
+| Per-block inline editors | Document text blocks share one editable body for cross-block selections. The title and table cells have their own editing controls |
+| Yjs text | Plain JSON runs in core, with optional collaboration adapters |
+| Command layer | Pure document and command functions in `packages/core/src` |
 | Slash menu config list | One `MenuItem[]` builder per menu surface |
 | Lit/web components | Zero-dependency DOM and a `<nobita-editor>` custom element |
 
 ### Data views
 
-AFFiNE treats "Table" as a **database view**, not a separate primitive:
+The AFFiNE checkout has a simple table block under `blocksuite/affine/blocks/table/`. Its database block stores properties, rows and views. The table view of a database is one of the presets under `blocksuite/affine/data-view/`.
 
-- `blocksuite/affine/blocks/database/src/database-model.ts` stores a database
-  block with properties, rows and one or more views.
-- `blocksuite/affine/data-view/` implements the view framework (table and other
-  presets), column/property renderers, filtering, grouping and row actions.
-- Rows can carry their own page content, which is a large subsystem in its own
-  right.
+Nobita also has two distinct blocks:
 
-Nobita keeps the useful core and drops the page-per-row framework: one
-`database` block, typed columns (`text`, `number`, `select`, `date`, `checkbox`,
-`url`), plain row cells, a table renderer, sorting, and Markdown/HTML table
-round-trips. Channeling every cell edit through the same store keeps undo,
-serialization and readonly behavior consistent with the rest of the editor.
+- A `table` is an editable grid with rich-text cells, row and column operations, and rectangular cell merging and splitting. HTML preserves merged spans. Markdown and TSV keep the text in the anchor cell and leave covered positions empty.
+- A `database` stores typed properties, rows and named table or board views. Views support nested filters, sorting and grouping. Properties include formulas and bidirectional relations. A record can have its own rich-text body in `row.page.content` and opens in a detail panel.
+
+Both blocks use the editor’s document store for editing and undo. For the supported property types and examples, see [Data views in the README](../README.md#data-views).
 
 ## What Nobita deliberately does not copy
 
@@ -163,7 +159,5 @@ serialization and readonly behavior consistent with the rest of the editor.
 - **Per-block contenteditable inside shadow DOM.** Chromium clamps cross-block
   ranges in that setup, so Nobita uses a single editable body while keeping
   block-level selection and rendering.
-- **Database blocks, edgeless mode, AI panels.** These are large subsystems; the
-  demo instead ships a page sidebar and a focused document editor with a
-  compact table/database view.
-- **Hosted sync.** The document is plain JSON; sync belongs to the host app.
+- **Edgeless mode and AI panels.** Nobita focuses on the document editor. Its demo provides a page tree, search, backlinks and trash.
+- **Hosted sync.** Hosts choose their storage and, for collaborative sessions, the transport between replicas.
