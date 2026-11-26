@@ -15,8 +15,8 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **105.9 KB gzipped** (`398.8 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core, rich-text tables, data views, block selection, and context menus.
-- **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
+- **113.9 kB gzipped** standalone ESM editor, including the document model, rich-text tables, database views and virtualized rendering.
+- **Zero external runtime dependencies** for the core and standalone editor. React, Yjs and Automerge integrations are optional packages.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
 - **Framework agnostic** — vanilla API, `<nobita-editor>`, and a thin React wrapper.
@@ -29,24 +29,24 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, simple table, database, page links |
 | Inline | Bold, italic, underline, strikethrough, inline code, links, mentions, `[[` inline page chips, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo, block selection (`Escape`, gutter `Shift`/`Cmd`-click, staged `Cmd/Ctrl+A`, `Shift+Arrow`, batch delete / duplicate / copy / paste / drag across text & non-text blocks) |
-| Tables | Separate `table` block with AFFiNE-style hover handles, row/column drag reorder, rich-text cells (`cell.runs`), drag cell selection (copy/cut/paste/clear), hover add controls, row/column background colors, cell & handle right-click context menus, and HTML/Markdown table import |
-| Data views | Multiple named table and board views per database, AFFiNE-style view settings (`⋯`), per-view column order/widths/visibility, nested AND/OR filters, multi-sort, container-aware expandable search (auto-hidden below `560px`), footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state; rich-text cells (`B`/`I`/`U`/`S`/code toolbar & shortcuts, highlight/color rendering, IME & plain-text paste safe), editable record pages (`row.page.content`), board card covers (`coverColumnId`), board card add/open/drag-reorder/group actions (preserving multi-select tags), right-click menus on rows/columns/board cards, drag cell selection & fill, TSV copy/paste, readonly view switching & record-page viewing; 11 typed columns (`text`, `number`, `progress`, `select`, `multi-select`, `date`, `checkbox`, `url`, `image`, `files`, `people`) |
+| Tables | Separate `table` block with AFFiNE-style hover handles, row/column drag reorder, cell merging and splitting, rich-text cells (`cell.runs`), drag cell selection (copy/cut/paste/clear), hover add controls, row/column background colors, cell & handle right-click context menus, and HTML/Markdown table import |
+| Data views | Multiple named table and board views per database, AFFiNE-style view settings (`⋯`), per-view column order/widths/visibility, nested AND/OR filters, multi-sort, container-aware expandable search (auto-hidden below `560px`), footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state; rich-text cells (`B`/`I`/`U`/`S`/code toolbar & shortcuts, highlight/color rendering, IME & plain-text paste safe), editable record pages (`row.page.content`), board card covers (`coverColumnId`), board card add/open/drag-reorder/group actions (preserving multi-select tags), right-click menus on rows/columns/board cards, drag cell selection & fill, TSV copy/paste, readonly view switching & record-page viewing; 13 column types including formulas and bidirectional relations |
 | Menus | Slash menu with fuzzy search and block/page actions (move/copy/link/new page), block handle & Notion-style right-click context menus (single/multi-block, simple tables, database rows/columns/board cards; `Shift+Right-click` preserves native menu), selection toolbar with Turn into / Align / format / Color, link popover, `@` mention picker, `[[` page link picker |
 | Workspace | Pure DOM-free `@nobita/core` primitives for backlinks, cycle-safe page trees, breadcrumbs, reparenting, full-text search, and soft-delete Trash; wired into `apps/demo` with drag-and-drop sidebar tree, collapsible backlinks panel, Trash view (search, read-only preview banner, Undo toast, restore & permanent delete), and sidebar right-click menus |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
 | Clipboard | Rich HTML, Markdown, plain text, a private `application/x-nobita+json` format, and image paste through an upload adapter |
+| Long documents | Windowed rendering, selection across unmounted blocks, IME input, nested-block navigation and full-document printing |
+| Collaboration | Optional Yjs and Automerge adapters for concurrent edits, offline merging, local Undo/Redo and remote selections |
 | Persistence | JSON in / JSON out, `onChange`, `setDoc`, readonly mode (read-only view switching and record pages in databases), theming; optional `@nobita/storage` adapters for localStorage, SQLite/D1 and HTTP |
 | A11y | Keyboard menus and row/card actions (`Mod+Enter` opens record pages), record-page modal focus trap & focus restoration, `:focus-visible` outlines, `aria-pressed` / `data-active` formatting toolbars, `@media (hover: none)` touch controls |
-
-Not in the box: synced blocks, comments, math, embeds, collaboration, a managed image host, and virtualization for very large documents. Image uploads are supported through a host adapter. See [Roadmap](#roadmap).
 
 ## Quick start
 
 ```bash
 pnpm install
 pnpm dev          # demo at http://127.0.0.1:5173
-pnpm test         # core + storage unit tests
+pnpm test         # core, storage, and collaboration adapter tests
 pnpm typecheck    # TypeScript 7 project build
 pnpm build        # packages + bundled editor + demo
 ```
@@ -94,7 +94,6 @@ editor.insertMarkdown('## Pasted markdown\n\n- becomes\n- blocks');
 
 Documents with at least 300 top-level blocks render the visible window plus 800 px of overscan on each side. Pass `virtualize: { threshold, overscanPx }` to `createEditor` to tune the window, or `virtualize: false` to render every block. Search the document model and use `editor.scrollToBlock(id)` to reveal a result.
 
-
 ### React
 
 ```tsx
@@ -118,9 +117,31 @@ export function Document() {
 
 The React wrapper only manages the host element; React never renders a block. That keeps typing off the React render path.
 
+### Collaborative editing
+
+Install either `@nobita/collab-yjs` with `yjs`, or `@nobita/collab-automerge` with `@automerge/automerge`. Initialize the document once and share its CRDT history with subsequent replicas. The host provides the transport. Use the same adapter version on all connected clients. This version reads older paragraph splits and upgrades their boundaries on the first local edit.
+
+```ts
+import * as Y from 'yjs';
+import { YjsCollaborationAdapter } from '@nobita/collab-yjs';
+
+const shared = new Y.Doc();
+const adapter = new YjsCollaborationAdapter(shared, editor.doc);
+await editor.setCollaboration(adapter);
+// Send Yjs updates through your provider. Peers open the synchronized Y.Doc.
+await editor.setCollaboration(null);
+adapter.destroy();
+```
+
+For Automerge, construct the first `AutomergeCollaborationAdapter` with a Nobita document. Pass its `save()` bytes to the constructor on another client. Deliver subsequent snapshots to `receive(bytes)` to merge offline edits. Both adapters support local Undo/Redo. Connecting and disconnecting start a fresh editor history. While connected, replacing the current document with the same document ID synchronizes the replacement. Disconnect before opening a different document ID.
+
+The editor options, custom element, and React wrapper accept a `collaboration` property. Await `editor.collaborationReady` before issuing programmatic edits after a property change. For standalone deployments, serve `dist/collaboration.js` alongside `nobita.js` or `nobita.global.js`. Collaboration loads this module on demand.
+
+For remote selections, pass `awarenessPresence(awareness, user)` to the Yjs adapter or provide a presence channel with `publish`, `subscribe`, and an optional local `user` to either adapter. The host owns the adapter and can reuse it after detaching the editor.
+
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 105.9 KB gzipped bundle is unchanged.
+Hosts can read and write plain JSON documents through the editor API. Persistence adapters are packaged separately.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -256,7 +277,7 @@ For targets outside the document, provide `databaseProvider(query)` for discover
 }
 ```
 
-Column types are `text`, `number`, `progress`, `select`, `multi-select`, `date`, `checkbox`, `url`, `image`, `files`, and `people`. Text cells store optional rich-text `runs` alongside the plain `text` projection (used for search, filtering, sorting, statistics and TSV/Markdown export), `progress` renders an interactive 0–100% bar, `image` supports validated URLs or the host `uploadImage` adapter with Board card covers (`view.coverColumnId`), and empty cells are omitted so documents stay compact. Rows can also carry an optional rich-text `page.content` body edited inside the record page panel, and rows, column headers, and board cards support right-click context menus. Each view stores its own column layout (order, width, visibility and footer stat), nested `filter` tree, `sorts`, `groupBy` and `groupProperties` (group order, hidden/collapsed state and `manuallyCardSort`). Markdown/HTML tables import as simple tables; TSV paste fills database cells. Legacy documents with a single `view`, `sort`, flat `filters` or `hiddenColumns` still load and migrate on the next edit.
+Column types are `text`, `number`, `progress`, `select`, `multi-select`, `date`, `checkbox`, `url`, `image`, `files`, `people`, `relation` and `formula`. Text cells store optional rich-text `runs` alongside the plain `text` projection (used for search, filtering, sorting, statistics and TSV/Markdown export), `progress` renders an interactive 0–100% bar, `image` supports validated URLs or the host `uploadImage` adapter with Board card covers (`view.coverColumnId`), and empty cells are omitted so documents stay compact. Rows can also carry an optional rich-text `page.content` body edited inside the record page panel, and rows, column headers, and board cards support right-click context menus. Each view stores its own column layout (order, width, visibility and footer stat), nested `filter` tree, `sorts`, `groupBy` and `groupProperties` (group order, hidden/collapsed state and `manuallyCardSort`). Markdown/HTML tables import as simple tables; TSV paste fills database cells. Legacy documents with a single `view`, `sort`, flat `filters` or `hiddenColumns` still load and migrate on the next edit.
 
 Simple tables support merged cells. Select a rectangular range by dragging or Shift-clicking, then choose **Merge cells** from the context menu. Use **Split cell** to restore the cells. From the keyboard, extend the range with Shift+Arrow at a cell boundary and open the menu with Shift+F10. HTML preserves spans. Markdown and TSV keep the anchor text and leave covered positions empty. The combined text, including the newline between nonempty cells, must fit within 10,000 UTF-16 code units.
 
@@ -278,6 +299,8 @@ See [docs/public-api.md](docs/public-api.md) for the stable import surface, edit
 | `selectBlocks(ids)` / `clearBlockSelection()` | Programmatically set or clear block selection |
 | `focus(blockId?, offset?)` | Focus the editor or a block, mounting it if needed |
 | `scrollToBlock(blockId)` | Reveal a block without moving the caret. Returns whether it was found |
+| `setCollaboration(adapter)` / `setCollaboration(null)` | Connect or disconnect a collaboration adapter asynchronously |
+| `refreshDatabases()` | Refresh local views after a host-provided database snapshot changes |
 | `focusTitle()` / `blur()` | Focus control |
 | `undo()` / `redo()` | History |
 | `setReadonly(value)` / `setTheme(theme)` / `setPlaceholder(value)` | Runtime configuration |
@@ -291,7 +314,7 @@ See [docs/public-api.md](docs/public-api.md) for the stable import surface, edit
 | `setUploadImage(handler)` | Replace the image upload adapter at runtime |
 | `destroy()` | Remove listeners and DOM |
 
-Options: `doc`, `readonly`, `theme` (`light` / `dark` / `auto`), `placeholder`, `autofocus`, `spellcheck`, `historyLimit`, `onChange(doc, { source })`, `onSelectionChange(selection)`, `mentionProvider`, `pageProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
+Options include `virtualize`, `collaboration`, `databaseProvider`, `resolveDatabase`, `onRelationSync`, `doc`, `readonly`, `theme` (`light` / `dark` / `auto`), `placeholder`, `autofocus`, `spellcheck`, `historyLimit`, `onChange(doc, { source })`, `onSelectionChange(selection)`, `mentionProvider`, `pageProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
 
 ### Mentions, links and images
 
@@ -344,7 +367,7 @@ The placeholder behaves like AFFiNE: it appears only on the **focused empty para
 ### `<nobita-editor>`
 
 Attributes: `readonly`, `theme`, `placeholder`, `min-height`, `doc` (JSON string).
-Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `pageProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
+Properties: `collaboration`, `databaseProvider`, `resolveDatabase`, `onRelationSync`, `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `pageProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
 Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`, `getSelectedBlockIds()`, `selectBlocks()`, `clearBlockSelection()`, `insertPageLink()`, `insertInlinePageLink()`, `refreshPageLinks()`, `setReadonly()`, `setTheme()`.
 Events: `nobita-change` (`{ doc, source }`), `nobita-selection` (`{ selection }`), `nobita-page-open` (`{ pageId }`), `nobita-ready`.
 
@@ -381,52 +404,51 @@ Dark mode is built in (`theme="dark"` or `auto`). The shadow root uses `color-sc
 
 ## Testing
 
-Unit tests (`@nobita/core` + `@nobita/storage`, 152 tests), TypeScript + public API checks, and Playwright browser regression tests (229 tests), plus size and performance baselines, are documented in [docs/testing.md](docs/testing.md).
+The suite covers 164 core tests, 16 storage tests, 110 collaboration tests and 288 Playwright browser tests as of the virtual rendering update. CI also checks TypeScript, the public API, bundle sizes and browser performance. [Verified CI run](https://github.com/TommyKammy/Nobita/actions/runs/45904113492)
 
 ```bash
 pnpm typecheck
 pnpm test
+pnpm build
 pnpm test:browser
-pnpm size
-pnpm bench
+pnpm size --strict
+pnpm bench --strict
 ```
 
 ## Performance
 
-Measured in headless Chromium via `pnpm bench` (`setDoc` + full render, median of 5 runs, production build):
+In a headless Chromium CI run with the production bundle, setting a document and rendering its initial viewport took the following times (median of five runs). Documents below the default 300-block threshold render in full. [Benchmark run](https://github.com/TommyKammy/Nobita/actions/runs/45904113492)
 
-| Blocks | `setDoc` + render (median) |
-| --- | ---: |
-| 200 | 2.4 ms |
-| 1,000 | 12.6 ms |
-| 3,000 | 43.9 ms |
+| Top-level blocks | 200 | 1,000 | 3,000 | 10,000 |
+| --- | ---: | ---: | ---: | ---: |
+| Initial render | 0.8 ms | 2.1 ms | 2.4 ms | 4.5 ms |
 
-Data-view cell edits update cells in-place by reference identity without rebuilding the grid, memoize per-state view queries, apply differential selection updates, and delegate table header/body events.
+Editing a single paragraph reuses the block index and cumulative heights when the layout structure stays the same. Line wrapping updates measured heights through `ResizeObserver`. In a local Chromium comparison with 50,000 paragraphs, median input time fell from 5.2 ms to 2.1 ms for edits in the middle of the document. [Virtual rendering measurements](https://github.com/TommyKammy/Nobita/pull/26)
 
-Bundle sizes (`pnpm size`):
+Grouped database searches reuse filtered and sorted rows. Bidirectional relations copy the target row array on the first write and build a row index for repeated lookups. Adding 4,000 links between two 4,000-row databases took 1.26 ms in a local Node benchmark, down from 75.16 ms for the same operation. These timings cover the model update. [Database measurements](https://github.com/TommyKammy/Nobita/pull/25)
 
-| Artifact | Raw | Gzip |
+The following sizes are in bytes, measured with `pnpm size` on Node.js 22.23.5. The core measurement bundles its public ESM entry and its imports. The standalone editor already includes the core code it uses. The collaboration module loads on demand and its size excludes the host's chosen CRDT adapter and library. [Bundle size report](https://github.com/TommyKammy/Nobita/actions/runs/45904113492)
+
+| Artifact | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 398.8 KB | **105.9 KB** |
-| Editor IIFE (`nobita.global.js`) | 398.7 KB | **105.9 KB** |
-| Demo app (editor + UI + seed data) | 462.0 KB | 126.1 KB |
-
-The optional `@nobita/storage` package and `@nobita/core` workspace/Trash helpers are tree-shaken out of the editor bundle; they are only included when a host imports them.
-
-Why it stays small: immutable path-copy updates mean undo is a pointer swap; per-block DOM views are patched by reference; CSS is minified at bundle time; no framework runtime ships; the renderer never re-renders unchanged blocks. See [architecture](docs/architecture.md).
-
-The numbers are directional, not a guarantee: timing varies by hardware and browser version.
+| Core public entry (bundled ESM) | 145,422 | 38,067 |
+| Editor ESM (`nobita.js`) | 419,593 | 113,926 |
+| Editor IIFE (`nobita.global.js`) | 419,913 | 114,100 |
+| On-demand editor collaboration module | 8,362 | 3,314 |
+| Demo app main JavaScript bundle | 477,337 | 131,905 |
 
 ## Repository layout
 
 ```
-packages/core      Document model, commands, markdown, JSON validation, history — no DOM
-packages/element   Editor engine, block views, modular database views, selection, menus, toolbar, web component, CSS bundler
-packages/react     Thin React host wrapper
-packages/storage   Optional persistence port and adapters (localStorage, SQLite/D1, HTTP)
-apps/demo          Notion-like demo: drag-and-drop page tree, [[ links, backlinks, full-text search, Trash, right-click menus, export, embed dialog
-examples/          Optional integrations, including the Cloudflare D1 Worker
-docs/              AFFiNE analysis, architecture, public API, command comparison, testing and storage notes
+packages/core              Document model, commands, markdown, JSON validation, history — no DOM
+packages/element           Editor engine, block views, modular database views, selection, menus, toolbar, web component, CSS bundler
+packages/collab-yjs        Optional Yjs adapter and awareness integration
+packages/collab-automerge  Optional Automerge adapter
+packages/react             Thin React host wrapper
+packages/storage           Optional persistence port and adapters (localStorage, SQLite/D1, HTTP)
+apps/demo                  Notion-like demo: drag-and-drop page tree, [[ links, backlinks, full-text search, Trash, right-click menus, export, embed dialog
+examples/                  Optional integrations, including the Cloudflare D1 Worker
+docs/                      AFFiNE analysis, architecture, public API, command comparison, testing and storage notes
 ```
 
 ## Design notes
@@ -441,33 +463,9 @@ A command-by-command comparison with AFFiNE is in [docs/command-comparison.md](d
 
 ## Roadmap
 
-- Collaboration adapter (Yjs/Automerge) behind an explicit interface.
-- Virtualized rendering for 10k+ block documents.
 - Vue/Svelte wrappers (the web component already works in both).
 - Published packages and CDN builds.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-### Collaborative editing
-
-Install either `@nobita/collab-yjs` with `yjs`, or `@nobita/collab-automerge` with `@automerge/automerge`. Initialize the document once and share its CRDT history with subsequent replicas. The host provides the transport. Use the same adapter version on all connected clients. This version reads older paragraph splits and upgrades their boundaries on the first local edit.
-
-```ts
-import * as Y from 'yjs';
-import { YjsCollaborationAdapter } from '@nobita/collab-yjs';
-
-const shared = new Y.Doc();
-const adapter = new YjsCollaborationAdapter(shared, editor.doc);
-await editor.setCollaboration(adapter);
-// Send Yjs updates through your provider. Peers open the synchronized Y.Doc.
-await editor.setCollaboration(null);
-adapter.destroy();
-```
-
-For Automerge, construct the first `AutomergeCollaborationAdapter` with a Nobita document. Pass its `save()` bytes to the constructor on another client. Deliver subsequent snapshots to `receive(bytes)` to merge offline edits. Both adapters support local Undo/Redo. Connecting and disconnecting start a fresh editor history. While connected, replacing the current document with the same document ID synchronizes the replacement. Disconnect before opening a different document ID.
-
-The editor options, custom element, and React wrapper accept a `collaboration` property. Await `editor.collaborationReady` before issuing programmatic edits after a property change. For standalone deployments, serve `dist/collaboration.js` alongside `nobita.js` or `nobita.global.js`. Collaboration loads this module on demand.
-
-For remote selections, pass `awarenessPresence(awareness, user)` to the Yjs adapter or provide a presence channel with `publish`, `subscribe`, and an optional local `user` to either adapter. The host owns the adapter and can reuse it after detaching the editor.
