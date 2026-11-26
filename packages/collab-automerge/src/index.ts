@@ -4,6 +4,7 @@ import { normalizeRuns, type Doc, type InlineRun } from '@nobita/core';
 import {
   SharedAdapter,
   type Backend,
+  type HistorySelection,
   type OffsetMap,
   type PresenceChannel,
 } from '@nobita/core/collab-runtime';
@@ -14,6 +15,10 @@ type State = {
   texts: Record<string, string>;
 };
 type Action = () => void;
+type HistoryEntry = {
+  actions: Action[];
+  selection: HistorySelection | undefined;
+};
 
 // New writes include a unique identity, including deletions. Older snapshots contain bare JSON.
 function payload(value: string | undefined) {
@@ -64,8 +69,8 @@ class AutomergeBackend implements Backend {
   }
   private draft?: State;
   private recording: Action[] = [];
-  private past: Action[][] = [];
-  private future: Action[][] = [];
+  private past: HistoryEntry[] = [];
+  private future: HistoryEntry[] = [];
   constructor(bytes?: Uint8Array) {
     this.doc = bytes
       ? A.load<State>(bytes)
@@ -347,10 +352,10 @@ class AutomergeBackend implements Backend {
     }
     return actions;
   }
-  transact(fn: Action) {
+  transact(fn: Action, selection?: HistorySelection) {
     const actions = this.change(fn);
     if (actions.length) {
-      this.past.push(actions);
+      this.past.push({ actions, selection });
       this.future = [];
     }
   }
@@ -360,15 +365,14 @@ class AutomergeBackend implements Backend {
   get canRedo() {
     return !!this.future.length;
   }
-  private replay(from: Action[][], to: Action[][]) {
-    const a = from.pop();
-    if (!a) return false;
-    to.push(
-      this.change(() => {
-        for (const fn of a.reverse()) fn();
-      })
-    );
-    return true;
+  private replay(from: HistoryEntry[], to: HistoryEntry[]) {
+    const entry = from.pop();
+    if (!entry) return false;
+    const actions = this.change(() => {
+      for (const fn of entry.actions.reverse()) fn();
+    });
+    to.push({ actions, selection: entry.selection });
+    return entry.selection ?? true;
   }
   undo() {
     return this.replay(this.past, this.future);

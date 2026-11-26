@@ -4,10 +4,12 @@ import type { Doc, InlineRun, PeerPresence } from '@nobita/core';
 import {
   SharedAdapter,
   type Backend,
+  type HistorySelection,
   type OffsetMap,
   type PresenceChannel,
 } from '@nobita/core/collab-runtime';
 
+const selectionKey = Symbol();
 class YBackend implements Backend {
   readonly diffText = diffText;
   offsets: OffsetMap = (_, i) => i;
@@ -138,8 +140,12 @@ class YBackend implements Backend {
       return at;
     };
   }
-  transact(fn: () => void) {
+  transact(fn: () => void, selection?: HistorySelection) {
+    const previous = this.history.undoStack.at(-1);
     this.doc.transact(fn, this.origin);
+    const entry = this.history.undoStack.at(-1);
+    if (selection && entry && entry !== previous)
+      entry.meta.set(selectionKey, selection);
   }
   get canUndo() {
     return this.history.canUndo();
@@ -147,11 +153,22 @@ class YBackend implements Backend {
   get canRedo() {
     return this.history.canRedo();
   }
+  private replay(direction: 'undo' | 'redo') {
+    const entry = this.history[direction]();
+    if (!entry) return false;
+    const selection = entry.meta.get(selectionKey) as
+      HistorySelection | undefined;
+    const inverse = (
+      direction === 'undo' ? this.history.redoStack : this.history.undoStack
+    ).at(-1);
+    if (selection && inverse) inverse.meta.set(selectionKey, selection);
+    return selection ?? true;
+  }
   undo() {
-    return !!this.history.undo();
+    return this.replay('undo');
   }
   redo() {
-    return !!this.history.redo();
+    return this.replay('redo');
   }
   clearHistory() {
     this.history.clear();

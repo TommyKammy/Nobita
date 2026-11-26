@@ -49,6 +49,7 @@ export function connect(
     remapCellOffset,
     remapPageOffset,
     history,
+    historySelection,
   }: RemoteDocUpdate) => {
     if (composing) return;
     const active = root.activeElement?.classList.contains('nb-body');
@@ -100,7 +101,7 @@ export function connect(
         );
       };
     }
-    store.applyRemote(doc, remapPoint, history);
+    store.applyRemote(doc, remapPoint, history, historySelection);
     restoreCell?.();
     if (active) restore();
   };
@@ -140,7 +141,12 @@ export function connect(
         !(row && (col || text.matches('.nb-db-page-text')))
       )
         return;
-      const base = { blockId: id, from: Math.min(a, b), to: Math.max(a, b) };
+      const base = {
+        ...(a > b && { backward: true }),
+        blockId: id,
+        from: Math.min(a, b),
+        to: Math.max(a, b),
+      };
       composing = row
         ? { ...base, rowId: row, ...(col && { columnId: col }) }
         : base;

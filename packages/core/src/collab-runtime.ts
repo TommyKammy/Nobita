@@ -16,6 +16,7 @@ import type {
   DatabaseRow,
   Doc,
   DocChange,
+  EditorSelection,
   InlineMark,
   InlineRun,
   Point,
@@ -24,6 +25,10 @@ import type {
 
 export type Fields = Record<string, unknown>;
 export type OffsetMap = (key: string, offset: number) => number;
+export interface HistorySelection {
+  undo?: () => EditorSelection | null;
+  redo?: () => EditorSelection | null;
+}
 export interface Backend {
   offsets: OffsetMap;
   diffText(
@@ -51,9 +56,9 @@ export interface Backend {
   insertSplitMarker(key: string, index: number): string;
   resolveBoundary(key: string, token: string): number;
   cursor(key: string, index: number, exact?: boolean): () => number | null;
-  transact(fn: () => void): void;
-  undo(): boolean;
-  redo(): boolean;
+  transact(fn: () => void, selection?: HistorySelection): void;
+  undo(): boolean | HistorySelection;
+  redo(): boolean | HistorySelection;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
   clearHistory(): void;
@@ -385,6 +390,7 @@ export class SharedAdapter implements CollaborationAdapter {
     | {
         target: CompositionTarget;
         path: string;
+        history: HistorySelection;
         start: () => Point | null;
         selected: { offset: () => Point | null; length: number }[];
       }
@@ -652,12 +658,78 @@ export class SharedAdapter implements CollaborationAdapter {
       blocks: children(null),
     };
   }
-  applyLocalChange(change: DocChange, patches: readonly DocPatch[]) {
-    if (patches.length)
-      this.store.transact(() => this.#write(change.doc, patches));
-    this.#snapshot = this.#read();
+  #saveSelection(selection: EditorSelection | null) {
+    if (!selection) return () => null;
+    const save = (point: Point) => {
+      const block = find(this.#snapshot.blocks, point.blockId);
+      if (!block) return () => null;
+      const value = plainText(block.text),
+        offset = Math.min(Math.max(point.offset, 0), value.length);
+      const path = bodyText(point.blockId);
+      const gap = this.#text.anchor(path, offset);
+      // An undo may recreate removed characters with new identities. Track
+      // the adjacent characters as well as the gap, so either survivor can
+      // recover the endpoint without retaining a document per history entry.
+      const right =
+        offset < value.length ? this.#text.anchor(path, offset, true) : null;
+      const previous = value.charCodeAt(offset - 1);
+      const width =
+        previous >= 0xdc00 && previous <= 0xdfff && offset >= 2 ? 2 : 1;
+      const left = offset
+        ? this.#text.anchor(path, offset - width, true)
+        : null;
+      const atStart = offset === 0;
+      return () => {
+        const resolve = (anchor: typeof gap, exact: boolean) => {
+          const at = anchor.resolve();
+          if (at === null) return null;
+          const mapped = this.#text.logical(
+            anchor.path,
+            at,
+            point.blockId,
+            false,
+            exact
+          );
+          return mapped && find(this.#snapshot.blocks, mapped.blockId)
+            ? mapped
+            : null;
+        };
+        const next = right && resolve(right, true);
+        if (next) return next;
+        if (right) {
+          const prev = left && resolve(left, true);
+          if (prev) return { ...prev, offset: prev.offset + width };
+          if (atStart && find(this.#snapshot.blocks, point.blockId))
+            return point;
+        }
+        return resolve(gap, false);
+      };
+    };
+    const anchor = save(selection.anchor);
+    const focus =
+      selection.anchor.blockId === selection.focus.blockId &&
+      selection.anchor.offset === selection.focus.offset
+        ? anchor
+        : save(selection.focus);
+    return () => {
+      const a = anchor(),
+        f = focus();
+      return a && f ? { anchor: a, focus: f } : null;
+    };
   }
-  protected received(history?: RemoteDocUpdate['history']) {
+  applyLocalChange(change: DocChange, patches: readonly DocPatch[]) {
+    if (!patches.length) return;
+    const selection: HistorySelection = {};
+    if (change.previousSelection !== undefined)
+      selection.undo = this.#saveSelection(change.previousSelection);
+    this.store.transact(() => this.#write(change.doc, patches), selection);
+    this.#snapshot = this.#read();
+    selection.redo = this.#saveSelection(change.selection);
+  }
+  protected received(
+    history?: RemoteDocUpdate['history'],
+    bookmark?: () => EditorSelection | null
+  ) {
     const offsets = this.store.offsets,
       previousText = this.#text;
     this.#snapshot = this.#read();
@@ -692,6 +764,7 @@ export class SharedAdapter implements CollaborationAdapter {
     const update: RemoteDocUpdate = {
       doc,
       ...(history && { history }),
+      ...(bookmark && { historySelection: bookmark() }),
       remapPoint: (p) => {
         const point = previousText.at(bodyText(p.blockId), p.offset, true);
         const mapped = updatedText.logical(
@@ -720,13 +793,15 @@ export class SharedAdapter implements CollaborationAdapter {
     return this.store.canRedo;
   }
   undo() {
-    if (!this.store.undo()) return false;
-    this.received('undo');
+    const entry = this.store.undo();
+    if (!entry) return false;
+    this.received('undo', typeof entry === 'object' ? entry.undo : undefined);
     return true;
   }
   redo() {
-    if (!this.store.redo()) return false;
-    this.received('redo');
+    const entry = this.store.redo();
+    if (!entry) return false;
+    this.received('redo', typeof entry === 'object' ? entry.redo : undefined);
     return true;
   }
   beginComposition(target: CompositionTarget) {
@@ -770,7 +845,18 @@ export class SharedAdapter implements CollaborationAdapter {
               return { offset, length: ch.length };
             }
           );
+    const history: HistorySelection = {};
+    if (target.rowId === undefined) {
+      const first = { blockId: target.blockId, offset: target.from },
+        last = { blockId: target.blockId, offset: target.to };
+      history.undo = this.#saveSelection(
+        target.backward
+          ? { anchor: last, focus: first }
+          : { anchor: first, focus: last }
+      );
+    }
     this.#composition = {
+      history,
       target,
       path,
       start: cursor(target.from),
@@ -849,15 +935,12 @@ export class SharedAdapter implements CollaborationAdapter {
         if (range.path === path)
           from -= Math.max(0, Math.min(range.length, from - range.start));
       }
-    });
+    }, comp.history);
     this.#snapshot = this.#read();
-    return {
-      doc: this.#snapshot,
-      remapPoint: () => ({
-        blockId: id,
-        offset: from + text.length,
-      }),
-    };
+    const caret = { blockId: id, offset: from + text.length };
+    if (comp.history.undo)
+      comp.history.redo = this.#saveSelection({ anchor: caret, focus: caret });
+    return { doc: this.#snapshot, remapPoint: () => caret };
   }
   cancelComposition(): RemoteDocUpdate {
     this.#composition = undefined;

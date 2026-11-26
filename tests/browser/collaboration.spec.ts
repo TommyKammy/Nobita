@@ -557,3 +557,36 @@ test('typing before a cleared split stays in the first paragraph on both editors
   await expect(peer.nth(0)).toHaveText('a');
   await expect(peer.nth(1)).toHaveText('b');
 });
+
+test('Undo after Enter at paragraph end restores the caret through peer typing', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await page.evaluate(async () => {
+    const path = '/peers.ts';
+    await (await import(path)).setupPeers();
+    window.__editor!.focus('p', 2);
+  });
+  await page.keyboard.press('Enter');
+  await page.evaluate(() => {
+    const peer = (document.querySelector('#peer') as typeof window.__host)
+      .editor!;
+    peer.store.update((d) => {
+      const next = structuredClone(d);
+      next.blocks[0]!.text = [{ text: 'Xab' }];
+      return next;
+    });
+  });
+  const point = { blockId: 'p', offset: 3 };
+  const selection = await page.evaluate(() => {
+    const editor = window.__editor!;
+    editor.focus(editor.doc.blocks[1]!.id, 0);
+    editor.undo();
+    return editor.store.selection;
+  });
+  expect(selection).toEqual({ anchor: point, focus: point });
+  await page.keyboard.type('!');
+  await expect(page.locator('#peer [data-block-id="p"] .nb-text')).toHaveText(
+    'Xab!'
+  );
+});

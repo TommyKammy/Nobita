@@ -72,9 +72,14 @@ export class EditorStore {
     this.#lastEntry = null;
   }
 
-  applyRemote(doc: Doc, remap?: RemoteDocUpdate['remapPoint'], source: 'remote' | 'undo' | 'redo' = 'remote'): void {
-    let selection = this.selection;
-    if (selection && remap) {
+  applyRemote(
+    doc: Doc,
+    remap?: RemoteDocUpdate['remapPoint'],
+    source: 'remote' | 'undo' | 'redo' = 'remote',
+    historySelection?: EditorSelection | null
+  ): void {
+    let selection = historySelection === undefined ? this.selection : historySelection;
+    if (historySelection === undefined && selection && remap) {
       const anchor = remap(selection.anchor), focus = remap(selection.focus);
       selection = anchor && focus ? { anchor, focus } : null;
     }
@@ -112,6 +117,7 @@ export class EditorStore {
     if (doc === this.#doc) return;
     if (this.#historyAdapter && this.#doc.id !== doc.id) throw new Error('Disconnect collaboration before changing document IDs');
     const previous = this.#doc;
+    const previousSelection = this.#selection;
     this.#doc = doc;
     this.#selection = null;
     this.#lastEntry = null;
@@ -129,7 +135,7 @@ export class EditorStore {
       this.#undo = [];
       this.#redo = [];
     }
-    this.#emit({ doc, previous, selection: null, source: 'replace' });
+    this.#emit({ doc, previous, previousSelection, selection: null, source: 'replace' });
   }
 
   update(mutator: (doc: Doc) => Doc, options: UpdateOptions = {}): Doc {
@@ -179,6 +185,7 @@ export class EditorStore {
     this.#emit({
       doc: next,
       previous,
+      previousSelection: selectionBefore,
       selection: this.#selection,
       source: options.source ?? 'update',
     });

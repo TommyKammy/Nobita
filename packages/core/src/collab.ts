@@ -61,6 +61,7 @@ export type DocPatch =
 export interface RemoteDocUpdate {
   /** Set only for a history operation initiated by this replica. */
   history?: 'undo' | 'redo';
+  historySelection?: EditorSelection | null;
   doc: Doc;
   remapPageOffset?: (
     blockId: string,
@@ -83,6 +84,7 @@ export interface PeerPresence {
 }
 /** A row without a column addresses the database record page body. */
 export type CompositionTarget = {
+  backward?: boolean;
   pendingMarks?: InlineMark;
   blockId: string;
   from: number;

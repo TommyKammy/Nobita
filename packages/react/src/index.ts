@@ -69,7 +69,13 @@ export const NobitaEditor = forwardRef<NobitaReactHandle, NobitaEditorProps>(
     }, [props.doc]);
 
     useLayoutEffect(() => {
-      if(hostRef.current)hostRef.current.collaboration=props.collaboration;
+      const element = hostRef.current;
+      if (!element) return;
+      element.collaboration = props.collaboration;
+      // Layout cleanups run before the next document prop is applied.
+      return () => {
+        element.collaboration = null;
+      };
     }, [props.collaboration]);
 
     useLayoutEffect(() => {
