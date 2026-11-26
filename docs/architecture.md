@@ -11,7 +11,9 @@ This document explains how the editor works, why it is split into packages, and 
                   toolbar, drag & drop, <nobita-editor> web component
 @nobita/storage   optional persistence adapters: memory, Web Storage, HTTP,
                   portable SQL (local SQLite / Cloudflare D1)
-@nobita/react     host wrapper only; React never renders editor content
+@nobita/react     React host wrapper
+@nobita/collab-yjs        optional Yjs adapter and awareness integration
+@nobita/collab-automerge  optional Automerge adapter
 apps/demo         Notion-like shell: pages, search, favorites, export, embed dialog
 examples/         optional integrations, including the Cloudflare D1 Worker
 ```
@@ -38,7 +40,7 @@ Invariants:
   makes rendering and history cheap.
 
 Inline marks are five boolean flags (`bold`, `italic`, `underline`, `strike`,
-`code`) plus three value marks: `link` (a URL string), `highlight` (background)
+`code`) plus atomic mention and page references and three formatting values: `link` (a URL string), `highlight` (background)
 and `color` (foreground). Highlight and text color share the same eight named
 palette tokens. They are stored as palette names, not CSS strings, so documents
 stay small and HTML import can whitelist values. `parseDoc` drops unknown colors.
@@ -72,6 +74,12 @@ store.update(doc => someCommand(doc), {
 The store emits one synchronous `change` event. The DOM engine renders before
 `store.update` returns, so a caller can restore the caret immediately after.
 
+## Collaborative editing
+
+A host connects a `CollaborationAdapter` through `editor.setCollaboration(adapter)`. The editor loads its collaboration bridge on demand. The bridge sends local document patches to the adapter and applies remote snapshots to the store, remapping selections as edits arrive. It coordinates IME composition with remote updates. The host supplies transport and, optionally, peer presence.
+
+Yjs peers synchronize a shared Y.Doc. Automerge peers start from the same saved document history and merge subsequent snapshots with `receive(bytes)`. While connected, the store delegates Undo/Redo to the adapter so local undo preserves peer edits. Attaching or detaching starts a fresh history. Disconnect before switching document IDs. [Adapter entry points and lifecycle](public-api.md#collaboration-adapters)
+
 ## Persistence
 
 Persistence is deliberately outside the editor. `Doc` is plain JSON and the
@@ -90,7 +98,7 @@ implementations:
 Documents are stored as one JSON row with a monotonic `version`. A save may pass
 the version it read; a stale version changes nothing and throws
 `DocumentConflictError`. This gives multi-tab and multi-user hosts a safe
-read-modify-write cycle without putting collaboration state into the editor.
+read-modify-write cycle. In the SQL adapter, version zero is create-only, a positive version guards the update, and an unconditional upsert returns the version and timestamp from its own write.
 
 Cloudflare D1 deployment, the SQL schema and its row-size limits are documented
 in [storage.md](storage.md). The Worker example is in
@@ -104,7 +112,7 @@ avoids turning page navigation into a second document tree.
 
 ## Rendering
 
-Each block has a `BlockView` with a stable root element and child views in a
+Each mounted block has a `BlockView` with a stable root element and child views in a
 `Map<blockId, BlockView>`. On a change, `NobitaEditor.#syncBody` walks the block
 list and reuses views by id:
 
@@ -112,10 +120,11 @@ list and reuses views by id:
   the view is skipped.
 - If the text array changed, only that block's runs are rebuilt.
 - If the children array changed, child views are reconciled recursively.
-- Moving a block moves its existing DOM subtree; it is not rebuilt.
+- Reordering mounted siblings moves their existing elements within the container.
 
-There is no virtual DOM and no diff of the document. Reference identity is the
-diff.
+At 300 top-level blocks the default renderer switches to a viewport window with 800 px of overscan on each side. Spacer elements represent omitted ranges. The virtualizer maps descendant IDs to their top-level block and uses cumulative heights to locate the viewport. It pins active selections, IME composition, dragging and open record panels. Printing temporarily mounts the full document.
+
+Text edits copy the path to the changed block. If one path changed and its IDs, child layout and top-level type still match, the virtualizer reuses its index and cumulative heights. Bulk replacements rebuild the index directly. A ResizeObserver updates measured heights when content wraps or changes size. Model-based navigation can reveal an unmounted block with `scrollToBlock(id)`.
 
 Numbered lists need the ordinal of the previous numbered sibling; the editor
 passes a precomputed `number` in the render context instead of the sibling
@@ -150,7 +159,7 @@ Consequences:
   `contenteditable="false"` so they never become text.
 - Image captions are a nested editing host; body handlers ignore events from
   captions and inputs.
-- Readonly mode flips one attribute on the body instead of touching every block.
+- Readonly mode disables the body editing host and updates the mounted views and their nested controls.
 
 ## Selection mapping
 
@@ -243,7 +252,9 @@ placeholder disappears as soon as the block has any text. The editor updates
 this state from the live selection, focus changes, composition events and store
 changes rather than from a document-wide "is empty" flag.
 
-## Menus, toolbar and drag- The slash menu is a positioned overlay inside the shadow root. The `/` and
+## Menus, toolbar and drag
+
+- The slash menu is a positioned overlay inside the shadow root. The `/` and
   query stay in the block text until an item is chosen; the query is then
   removed in a non-history transaction before the action commits.
 - Menu keyboard handling is installed as a capture listener on the shadow root,
@@ -267,7 +278,7 @@ A `table` block stores a plain grid:
 ```ts
 interface TableData {
   columns: { id; width?; backgroundColor? }[];
-  rows: { id; backgroundColor?; cells: Record<columnId, { text }> }[];
+  rows: { id; backgroundColor?; cells: Record<columnId, { text; runs?: InlineRun[]; rowspan?; colspan? }> }[];
 }
 ```
 
@@ -278,7 +289,7 @@ interface DatabaseData {
   variant: 'database' | 'table'; // 'table' is legacy-only
   title?: string;
   titleColumnId?: string;
-  columns: { id; name; type; options?; data?; width? }[];
+  columns: { id; name; type; options?; data?; width?; formula?; relation? }[];
   rows: {
     id;
     cells: Record<columnId, {
@@ -286,24 +297,27 @@ interface DatabaseData {
       values?: string[];
       files?: { name; url }[];
       people?: { id; label }[];
+      relations?: DatabaseRelationRef[];
     }>;
     page?: { content: InlineRun[] };
   }[];
-  views: DatabaseView[];
+  views?: DatabaseView[];
   activeViewId?: string;
-  view?: DatabaseView; // legacy single view
+  view?: DatabaseView | null; // legacy single view
 }
 
 interface DatabaseView {
   id?; name?;
   type: 'table' | 'board';
-  filter: { type: 'group'; op: 'and' | 'or'; conditions: FilterNode[] };
-  columns: { id; width?; hide?; stat? }[];
+  filters: DatabaseFilter[];
+  filter?: { type: 'group'; op: 'and' | 'or'; conditions: FilterNode[] };
+  columns?: { id; width?; hide?; stat? }[];
   groupBy?: columnId;
   groupProperties?: { key; hide?; collapsed?; manuallyCardSort? }[];
   hideEmptyGroups?: boolean;
   sorts?: { columnId; direction }[];
   header?: { titleColumnId?; iconColumnId? };
+  coverColumnId?: string | null;
 }
 
 type FilterNode =
@@ -312,11 +326,13 @@ type FilterNode =
 ```
 
 - `table` defaults to a 3×3 plain-text grid; `database` defaults to Name / Status / Due / Done.
-- Column types are text, number, select, multi-select, date, checkbox, URL, files and people.
+- Database columns support text, number, progress, select, multi-select, date, checkbox, URL, image, files, people, relation and formula. Board views can use an image property for card covers.
+- A formula stores its expression with column IDs. `DatabaseEvalContext` projects calculated cells for display, queries and export. `storedDatabase` removes transient calculated values before commit. Relations store target row IDs and can pair with a reverse column. Same-document reverse updates belong to the same history entry. Hosts resolve external databases and receive paired changes through `onRelationSync`.
+- A paired update copies the target row array on its first write and builds a row-ID index on repeated lookup. Grouped searches reuse the filtered and sorted rows for the current view.
 - Text cells can carry rich `runs`; `text` remains the plain projection used by filters, search, statistics, TSV and exports. Row pages store a rich-text `page.content` body.
 - Empty cells are omitted, so row data stays compact. `parseDoc` normalizes table grids, database columns, rich runs, row pages, view ids/names, nested filters, view columns, group settings and title columns.
 - Legacy `filters` / `filterMode` / `hiddenColumns` / `stats` fields are accepted and converted to the v2 view shape. Writers keep `filters` and `filterMode` as compatibility aliases for flat roots.
-- `duplicateBlockTree` remaps every row, column, filter and view id, so duplicated pages and pasted blocks never share database identity.
+- Database duplication generates new row, column and view IDs. It remaps filter and formula references and redirects self-relations to the copied database.
 - The table consumes view columns in their saved order and width; the title column is explicit (`titleColumnId`) but falls back to the first column for older documents.
 
 Rendering lives in `SimpleTableView` (`packages/element/src/table-view.ts`) for simple grids and `DatabaseView` (`packages/element/src/database-view.ts`) for typed data. Both cards are `contenteditable="false"`; their cells opt back in as nested editing hosts. The body-level editor ignores events from `.nb-table` and `.nb-db`, exactly as it ignores image captions and image URL inputs. This is the same pattern as the single-editing-host design, scoped one level deeper:
@@ -336,7 +352,7 @@ Rendering lives in `SimpleTableView` (`packages/element/src/table-view.ts`) for 
 - Footer statistics stay hidden until the footer is hovered or focused; calculated statistics remain visible.
 - The add-column header stays pinned right and the New Record label stays pinned left while the table scrolls horizontally. Row actions overlay the title cell instead of reserving width.
 - Cell edits commit through `updateDatabase`/`updateTable` without restoring the body selection, which would steal focus from the cell. Text commits use a `mergeKey`, so one typing burst is one undo step.
-- A cell write does not rebuild the grid. Both views compare a structural key (title column, columns, view columns, filters, groups, sorts, readonly). Values are synced in place; structure changes re-render and restore focus to the active cell when possible.
+- A database edit updates visible cells in place when grid structure and displayed row order still match. A change to filtering, sorting or grouping can require a new layout.
 - Sorting, filtering, search and grouping are derived at render time (`filteredDatabaseRows`, `searchDatabaseRows`, `groupedDatabaseRows`), so the underlying row order is never mutated.
 - A database can hold multiple named views. Each view owns its table/board mode, nested filters, sort keys, grouping, view columns, hidden columns and footer statistics. Board cards can be dragged between select, multi-select and checkbox groups and reordered within a group.
 - Select/multi-select/files/people cells open pickers. Copy/paste uses TSV and can import spreadsheet ranges.
@@ -344,11 +360,9 @@ Rendering lives in `SimpleTableView` (`packages/element/src/table-view.ts`) for 
 
 Exports are part of the core, not the UI:
 
-- Simple tables emit Markdown pipe tables, HTML `<table>` and TSV; Markdown/HTML table paste creates a simple `table` block.
+- Simple tables support rich-text cells, axis reordering and rectangular merges. The anchor cell stores the spans. HTML preserves merged geometry, while Markdown and TSV emit the anchor text and empty covered positions. Markdown/HTML table paste creates a simple `table` block.
 - Database exports still render a pipe/HTML table from typed rows and preserve the database JSON.
 - `blocksToPlainText` and `countWords` include simple-table cells, database rows and cells.
-
-The data view intentionally uses no grid library. 100 rows × 6 columns render in about 12 ms in the benchmark environment; the browser is the layout engine.
 
 ## Theming and isolation
 
@@ -360,15 +374,11 @@ HTML strings, except for trusted static icon markup.
 
 ## Performance characteristics
 
-- Initial render is O(n) block views and one DOM append per block.
-- Typing is O(path to block + changed block + view loop). The view loop skips
-  unchanged blocks by reference.
-- Data-view cell edits do not rebuild the grid; only structure changes do.
-- Undo is O(1) document swap plus a render pass that reuses views.
-- Drag moves existing subtrees.
-- The main scaling limit is the number of DOM nodes. At 3,000 blocks the editor
-  is still responsive (see README benchmarks); 10k+ blocks would benefit from
-  windowing, which is on the roadmap.
+- Initial window construction indexes the document tree and estimates top-level heights. DOM work scales with mounted blocks and their children. The document model stays in memory.
+- A single-block edit still compares sibling references. It usually avoids rebuilding the index, allocating a height array and rendering offscreen views.
+- Local history restores immutable document snapshots. Collaborative history uses adapter operations.
+
+See the [measured editing times and bundle sizes](../README.md#performance) and [CI performance limits](testing.md#performance-benchmark).
 
 ## Extension points
 
@@ -386,18 +396,8 @@ changing the document format.
 
 ## Known limitations
 
-- No collaboration/CRDT in the base build; the JSON boundary is the intended
-  integration point.
-- The optional D1 adapter stores the whole document as one JSON row. D1 caps a
-  row at 2 MB, so images belong in R2 and very large documents need splitting or
-  a different backend.
-- Data views support multiple named table/board views, nested per-view filters, multi-sort, search, per-view column order/widths/visibility, footer statistics and table grouping with persisted group order/collapse. Text cells store rich runs plus a plain text projection, and a floating B/I/U/S/code toolbar and keyboard shortcuts edit marks. Row pages persist a rich-text body below the property fields. Board cards can be added, opened, reordered and deleted from group menus, with manual order saved per group. Calendar view, formulas/relations, progress/image properties and AFFiNE card covers remain out of scope. Date cells store ISO strings and are edited with a date input.
-- Simple tables follow AFFiNE's interaction model: hover row/column handles are overlaid on the first row/column cells, dragging across cells selects a range for copy/cut/paste/clear, handles open AFFiNE-style row/column menus, hover plus controls add rows/columns (including drag-to-add), and row/column background colors are stored on the grid and adapt to the dark theme. Cell text keeps Shift+Enter line breaks, and Markdown export/import round-trips multiline and literal `<br>` text. Text cells, column resize and Markdown/HTML/TSV import are implemented; rich-text cells, merged cells and drag reorder are not yet implemented.
-- No synced blocks, comments, math or embeds. Mentions are represented as inline marks with a host-provided provider.
-- Page links are references to host-owned documents; there is no page registry, backlink index, page tree or in-editor router.
-- Row pages are an embedded rich-text body in the record panel. Nested block documents and host-page routing for individual records remain future work.
-- Images support URL insertion plus a host-provided `uploadImage` adapter for pasted/dropped files; Nobita does not host storage.
-- Code language and callout tone are editable from the block UI.
-- Very large documents need virtualized rendering.
-- The title is a separate editing host, so text selection cannot span from the
-  title into the body (same browser constraint described above).
+- Windowing applies to top-level blocks. An individual large table or database still renders its own view.
+- The D1 adapter stores each document as a single JSON row. Database row-size limits apply to that payload. [Storage details](storage.md)
+- Database views support table and board layouts. Record pages store a rich-text body. Page navigation, document loading, collaboration transport and image storage belong to the host. Core supplies backlink, page-tree, search and Trash helpers.
+- The title and body are separate editing hosts, so a native text selection cannot span both.
+- Synced blocks, comments, math and embeds remain outside the current block model.
