@@ -1,13 +1,8 @@
 # AFFiNE → Nobita command comparison
 
-Comparison date: 2026-11-24  
-AFFiNE: source `0.27.5` (`e866985`, local clone) and live app `0.27.4`  
-Nobita: `0.1.0` (`packages/*`), editor bundle **91.1 KB gzip**
+AFFiNE reference (2026-11-24): source `0.27.5` (`e866985`, local clone) and live app `0.27.4`.
 
-> P0 pass applied 2026-11-24: alignment, date slash commands, Heading 4–6 and
-> `Mod-Backspace` are now implemented. A follow-up pass added Move Up / Move
-> Down, standard block Copy, the eight-color highlight palette and the
-> eight-color text-color palette. Statuses below reflect those passes.
+Nobita implementation checked on 2026-11-27. See the [README performance section](../README.md#performance) for bundle measurements.
 
 Scope: the **document editor** and its Table / Database surfaces. AFFiNE's
 edgeless canvas, cloud account, sync, AI and admin features are listed only as
@@ -34,26 +29,14 @@ AFFiNE command sources checked:
 
 ## Executive summary
 
-Nobita already covers the writing path well: block insertion, text conversion,
-markdown rules, indentation, block move, clipboard, undo/redo and a compact
-typed data view.
+Nobita supports block selection and batch actions across text, images, tables,
+databases and page cards. Simple tables support merged cells. Databases have
+named table and board views, nested filters, multi-sort, formulas and relations.
+The editor and demo also support linked pages and backlinks.
 
-Against AFFiNE, the remaining gaps are not "missing block types" but
-**convenience commands around selection, formatting and data-view querying**.
-The P0/P1 passes have already closed alignment, dates, Heading 4–6,
-`Mod-Backspace`, move/copy, highlight colors and text colors; the current gaps are:
-
-1. **Inline equation** is absent and needs a math renderer.
-2. **Block selection** (Escape, Shift+Arrow, Cmd+A stages) is absent. Nobita can
-   select text across blocks, but non-text blocks (image, database, divider, page)
-   cannot be selected as blocks.
-3. **Database search**, nested typed filters, multi-sort, multiple views, per-view columns, footer statistics, rich-text cells and row pages are implemented; calendar view remains intentionally out of scope.
-4. **Database drag selection**, drag fill, row selection/deletion and TSV copy/paste are implemented.
-5. **Page workspace / `[[` / comments** are app-level features that should
-   not be pulled into the editor core casually. Mentions and page references
-   are generic primitives; routing, backlinks and page trees stay in the host.
-
-Recommended order is in [Priorities](#priorities).
+Remaining command gaps include divider and conversion shortcut aliases, bracket
+auto-pairing, inline equations and converting selected blocks into database
+rows. See [Priorities](#9-priorities).
 
 ## 1. Slash menu (`/`) commands
 
@@ -122,9 +105,10 @@ in Nobita's toolbar or block menu.
 | Text colors | Toolbar dropdown | ✅ | Combined Color / Background menu; 8 colors; HTML round-trip; Markdown drops color |
 | Inline equation | Toolbar | ❌ | Needs a math renderer |
 | Auto-pair brackets | Type `(`, `[`, `{`, quotes | ❌ | Does not insert closing pair |
-| Backtick wraps selection in code | Select text + `` ` `` | ❌ | Inline code shortcut supports markdown only |
+| Backtick wraps selection in code | Select text + `` ` `` | ❌ | Use `Mod-E` to format a selection |
 | `[[` linked doc conversion | `[[` picker & `[[Title]]` | ✅ | Inline page link picker (`pageProvider`), create-on-the-fly, and exact-title `]]` auto-convert |
 | Markdown input rules | `# `, `- `, `1. `, `[] `, `> `, fences, divider | ✅ | Also inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, links |
+
 ## 3. Block editing and navigation hotkeys
 
 | Command | AFFiNE | Nobita | Notes |
@@ -137,12 +121,12 @@ in Nobita's toolbar or block menu.
 | Indent / dedent | `Tab`, `Shift-Tab` | ✅ | Code block Tab inserts spaces |
 | Dedent to root | `Mod-Backspace` | ✅ | Dedents the focused block to the document root |
 | Move block up/down | `Mod-Alt-Arrow`, `Mod-Shift-Arrow` | ✅ | Both aliases supported |
-| Move line up/down via `/` | — | ❌ | Hotkeys and block menu already exist |
-| Select all | `Mod-A` (text → block → all blocks) | 🟡 | First block text, then all text; no block-selection stage |
-| Escape block selection | `Escape` | ❌ | Escape only closes menus |
-| Shift+Arrow block selection | `Shift-ArrowUp/Down` | ❌ | Text Shift+Arrow works |
-| Arrow across non-text blocks | Arrow keys | 🟡 | Text blocks only; image/DB not selectable as blocks |
-| Block selection + Enter | Enter | ❌ | AFFiNE inserts a paragraph after block selection |
+| Move line up/down via `/` | — | ✅ | Move Up and Move Down slash actions |
+| Select all | `Mod-A` (text → block → all blocks) | 🟡 | First selects the current block’s text, then all top-level blocks |
+| Escape block selection | `Escape` | ✅ | Dismisses open overlays first, then toggles block selection |
+| Shift+Arrow block selection | `Shift-ArrowUp/Down` | ✅ | Extends the selection in block selection mode |
+| Arrow across non-text blocks | Arrow keys | ✅ | Up/Down moves block selection across visible blocks, including images and databases |
+| Block selection + Enter | Enter | ✅ | Inserts a paragraph after the selection |
 | Create linked doc from selection | `Mod-Shift-L` | ❌ | Conflicts with align hotkey; selection type disambiguates |
 | Code bracket auto-pair | type brackets | ❌ | — |
 | Code block add paragraph after | `Mod-Enter` | ✅ | Generic add-after works |
@@ -202,14 +186,17 @@ table/board views.
 | --- | --- | --- |
 | Title / page | 🟡 | Record page side panel with title, properties and rich-text body (`row.page.content`); rows are not standalone workspace pages |
 | Text / rich text | ✅ | Rich-text cells (`cell.runs`) with bold/italic/underline/strike/code toolbar and shortcuts; `cell.text` kept in sync |
-| Number | ✅ | Native number input |
+| Number | ✅ | Editable numeric value with per-column display formatting |
 | Select | ✅ | Single-select with options |
-| Multi-select | ✅ | Comma-separated option editing |
+| Multi-select | ✅ | Multi-select option picker |
 | Checkbox | ✅ | — |
-| Date | 🟡 | ISO text input; no native picker/calendar |
+| Date | 🟡 | YYYY-MM-DD text in the grid, native date input in the record panel |
 | Progress | ✅ | Interactive 0–100% progress bar (pointer scrub, keyboard arrows, range slider in record page), numeric sort/filter and `%` stats |
 | Image | ✅ | Validated image URL or host `uploadImage` adapter with thumbnail cells, preview popover, and Board card covers (`view.coverColumnId`) |
 | Link | 🟡 | URL column behaves as text |
+| Files / people | ✅ | File and person references use cell pickers |
+| Relation | ✅ | Links rows by ID and optionally synchronizes a reverse property |
+| Formula | ✅ | Calculated values support rollups over related rows |
 | Created time | ❌ | — |
 | Property colors / tags | 🟡 | Select dots colored; no custom tag colors |
 | Rename / change type / delete / insert / resize column | ✅ | Column popover and drag handle |
@@ -218,11 +205,11 @@ table/board views.
 | Row detail / open as page | ✅ | Row expand button, `Mod+Enter`, and board card click open record page side panel with rich-text body |
 | Row/area selection | 🟡 | Drag/Shift-click cell range selection and row checkbox selection |
 | Delete selected rows (keyboard) | ✅ | `Delete`/`Backspace` deletes selected rows or clears selected cell ranges |
-| Cell background color / merge | ❌ | Simple table block supports cell/row/column background colors; no cell merge |
+| Cell background color / merge | — | Database cells follow the column schema. Simple tables support background colors, merge and split |
 | Copy/paste cell ranges | ✅ | TSV copy/paste; files/people use pickers |
 | Undo / redo | ✅ | Cell edits merge into typing steps |
 | Readonly | ✅ | Edits disabled and write actions hidden; view switching and record page viewing remain available |
-| JSON / Markdown / HTML table round-trip | ✅ | JSON full; Markdown/HTML values and table structure |
+| JSON / Markdown / HTML table round-trip | 🟡 | JSON preserves views and properties. Markdown/HTML export tabular values and import as a simple table |
 
 ### 5.3 AFFiNE simple-table-only commands
 
@@ -239,8 +226,7 @@ Nobita's separate `table` block covers rich-text cells (`cell.runs`),
 row/column drag reorder and insert/move/duplicate/delete, clear row/column
 contents, cell range clear/copy/paste and cell/row/column background colors,
 while `database` covers row insert/duplicate/delete, column
-insert/move/duplicate/hide/delete, and board card reorder. Merged cells in the
-simple `table` block remain unimplemented.
+insert/move/duplicate/hide/delete, and board card reorder. In simple tables, select a rectangle and choose **Merge cells**, or choose **Split cell** on a merged cell. HTML preserves spans. Markdown and TSV leave covered positions empty.
 
 ## 6. Clipboard, import and export
 
@@ -248,7 +234,7 @@ simple `table` block remain unimplemented.
 | --- | --- | --- |
 | Rich copy/cut/paste | ✅ | ✅ |
 | Cross-block selection copy | ✅ | ✅ |
-| HTML paste | ✅ | ✅ incl. `<table>` → database |
+| HTML paste | ✅ | ✅ incl. `<table>` → simple table |
 | Markdown paste/export | ✅ | ✅ incl. pipe tables |
 | Notion HTML import | ✅ | ❌ |
 | Block slice copy | ✅ | 🟡 custom JSON + Markdown/HTML |
@@ -279,7 +265,7 @@ implements a small subset deliberately.
 | Templates | ❌ |
 | Journals | ❌ |
 | Tags / collections | ❌ |
-| Backlinks / outline / references | ❌ |
+| Document outline | ❌ |
 | Comments / history | ❌ |
 | Share / sync / permissions | ❌ |
 | Import from Notion | ❌ |
@@ -291,13 +277,12 @@ the editor core just for parity:
 
 - **Edgeless canvas:** frame, mind map, shape, connector, group, surface refs.
 - **Cloud/product:** sync, sharing, permissions, history, notifications, telemetry.
-- **Collaboration:** comments, presence, CRDT.
+- **Collaboration services:** hosted transport and comments. Optional Yjs and Automerge adapters support concurrent editing and remote selections.
 - **Media platform:** attachments, PDF viewer, managed image hosting, bookmark previews,
   YouTube/GitHub/Figma/Loom/iframe embeds.
 - **Math:** LaTeX rendering and inline equations.
-- **Navigation graph:** linked docs, backlinks, synced docs.
-- **Full data-view framework:** calendar view, progress/image properties and
-  formulas/relations (rich-text cells and row pages are implemented).
+- **Navigation graph:** synced document embeds. The demo already supports linked pages and backlinks.
+- **Additional data views:** calendar and cross-document block queries.
 - **AI features.**
 
 ## 9. Priorities
@@ -322,6 +307,7 @@ the editor core just for parity:
   `Enter` to insert after, `Backspace`/`Delete` batch delete, `Mod+D` batch
   duplicate, batch `copy`/`cut`/`paste`, multi-block drag, and non-text block
   selection for `divider`/`image`/`table`/`database`/`page`).
+- ✅ **Page workspace primitives (`[[` links, backlinks, page tree)**: `PageProvider`, `[[` inline page picker with create-on-the-fly and `[[Title]]` conversion, `/page` and `/new-page` slash commands, atomic inline page chips (`marks.page`) with live `resolvePage` refresh, plus DOM-free `@nobita/core` backlink index, cycle-safe page tree, breadcrumbs, reparent validation and full-text search wired into the demo workspace.
 
 ### P0 — remaining small wins
 
@@ -331,36 +317,27 @@ the editor core just for parity:
 
 ### P1 — remaining
 
-1. **Database calendar view.**
-   - Rich-text cells, editable row pages and board add/reorder/group actions are now implemented. Calendar remains intentionally out of scope.
-2. **Create Table from selected blocks** (toolbar/block selection).
+1. **Create Table from selected blocks** (toolbar/block selection).
    - Convert selected blocks into database rows (builds on the block selection model).
    - Est. 2–3 KB.
-3. **Bracket auto-pair and backtick-wrap-selection.**
+2. **Bracket auto-pair and backtick-wrap-selection.**
    - Text-only, small but edge-case heavy.
    - Est. 1–2 KB.
 
 ### P2 — large or scope expansion
 
 - Calendar database view (intentionally out of scope).
-- Database formulas and relations (progress/image properties and Board card covers are implemented).
-- ✅ **Page workspace primitives (`[[` links, backlinks, page tree)**: `PageProvider`, `[[` inline page picker with create-on-the-fly and `[[Title]]` conversion, `/page` and `/new-page` slash commands, atomic inline page chips (`marks.page`) with live `resolvePage` refresh, plus DOM-free `@nobita/core` backlink index, cycle-safe page tree, breadcrumbs, reparent validation and full-text search wired into the demo workspace.
-- Comments and collaboration.
+- Comments and hosted collaboration services.
 - Attachments/PDF, managed image hosting, bookmark previews, embeds.
 - LaTeX/equation blocks.
-- Simple table merged cells (rich-text cells and row/column drag reorder are implemented).
 - Edgeless, AI, cloud import/sync.
 
 ## 10. What to avoid for Nobita's identity
 
 - Do not add a grid/spreadsheet library for the current table view.
-- Do not make rows pages until linked docs and a page registry exist.
+- Keep record pages scoped to their database and workspace routing in the host.
 - Do not add network previews (bookmarks/embeds) to the core bundle; treat them
   as host-provided blocks/adapters.
 - Do not chase AFFiNE's edgeless or AI surfaces.
 - Prefer commands that reuse the existing block tree, inline runs and immutable
   store over new document primitives.
-
-The current editor is 91.1 KB gzip. Phase 1 data views added about 7.5 KB gzip,
-Phase 2 references/input added about 2.4 KB, page links about 1.3 KB, table/database P1 about 27.0 KB and the
-database UI alignment/hover/toolbar pass about 0.6 KB and the P2 rich-text/row-page/board pass about 4.4 KB; remaining items are incremental on top of the existing view model.

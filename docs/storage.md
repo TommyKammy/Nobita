@@ -4,7 +4,7 @@ Nobita's default contract is still plain JSON:
 
 ```ts
 const editor = createEditor(host, {
-  doc,
+  doc: initialDoc,
   onChange(doc) {
     // Persist with whatever adapter the host chooses.
   },
@@ -14,7 +14,7 @@ const doc = editor.getDoc();          // Doc
 editor.setDoc(doc);                   // replace
 ```
 
-No storage library is imported by `@nobita/element`. The 91.1 KB editor bundle is unchanged whether a host persists to localStorage, IndexedDB, a file, an API, SQLite or Cloudflare D1.
+No storage library is imported by `@nobita/element`. Hosts can persist the same JSON to localStorage, IndexedDB, a file, an API, SQLite or Cloudflare D1.
 
 `@nobita/storage` is an **optional** package for hosts that want a ready-made persistence port and adapters.
 
@@ -35,13 +35,15 @@ interface StoredDoc {
 }
 ```
 
+`DocSummary` contains `id`, `title`, `version` and `updatedAt`. The port lists summaries most recently updated first.
+
 Version rules:
 
 - `version: 0` creates a document and fails if it already exists.
 - `version: N` updates only when the stored version is still `N`.
 - Omitting `version` is a last-write-wins save for simple single-writer hosts.
 
-`load()` returns the version so a browser tab can do a safe read-modify-write cycle. A stale save throws `DocumentConflictError`; the host can reload, merge or ask the user.
+`load()` returns the version to pass to the next conditional save. A stale save throws `DocumentConflictError`; the host can reload, merge or ask the user.
 
 ## Adapters
 
@@ -60,13 +62,18 @@ IndexedDB and file adapters are intentionally not bundled. Both are small `Docum
 import { LocalStorageDocumentStore } from '@nobita/storage';
 
 const store = new LocalStorageDocumentStore();
-const stored = await store.load('page-123');
-await store.save(editor.getDoc(), {
-  version: stored?.version ?? 0,
-});
+const stored = await store.load(initialDoc.id);
+editor.setDoc(stored?.doc ?? initialDoc);
+let version = stored?.version ?? 0;
+
+// After each edit, await the previous save before issuing the next one.
+async function persist() {
+  const saved = await store.save(editor.getDoc(), { version });
+  version = saved.version;
+}
 ```
 
-Each document is stored under `nobita:doc:<id>` as `{ doc, version, updatedAt }`. The prefix is configurable. This keeps the "inspect the JSON in DevTools" property of the original demo.
+Each document is stored under `nobita:doc:<id>` as `{ doc, version, updatedAt }`. The prefix is configurable. Web Storage checks the version and writes the entry in separate operations. Concurrent tabs can both read the same version before either writes. The SQL adapter enforces the version condition atomically.
 
 ### SQLite and Cloudflare D1
 
@@ -82,7 +89,7 @@ interface SqlDriver {
 The schema is one row per document:
 
 ```sql
-CREATE TABLE nobita_docs (
+CREATE TABLE IF NOT EXISTS nobita_docs (
   workspace_id TEXT NOT NULL,
   id TEXT NOT NULL,
   title TEXT NOT NULL DEFAULT '',
@@ -125,18 +132,18 @@ A D1 driver is the same shape:
 
 ```ts
 const driver: SqlDriver = {
-  async all(sql, params = []) {
-    const result = await env.DB.prepare(sql).bind(...params).all();
+  async all<T>(sql: string, params: readonly (string | number | null)[] = []) {
+    const result = await env.DB.prepare(sql).bind(...params).all<T>();
     return result.results ?? [];
   },
   async run(sql, params = []) {
     const result = await env.DB.prepare(sql).bind(...params).run();
-    return { changes: result.meta.changes ?? 0 };
+    return { changes: result.meta?.changes ?? 0 };
   },
 };
 ```
 
-A versioned save is a single `INSERT ... ON CONFLICT DO NOTHING` (create) or `UPDATE ... WHERE version = ?` (update), so a conflict changes nothing and returns `changes: 0`. It does not need an interactive transaction.
+A versioned save is a single `INSERT ... ON CONFLICT DO NOTHING` (create) or `UPDATE ... WHERE version = ?` (update), using `driver.run()`. Zero changed rows cause `save()` to throw `DocumentConflictError`. Success returns the expected version plus one and the timestamp of that write. An unconditional save uses `driver.all()` for a single UPSERT with `RETURNING version, updated_at`, so even overlapping saves receive their own write metadata.
 
 ## Cloudflare D1
 
@@ -156,8 +163,10 @@ The Worker exposes:
 | --- | --- | --- | --- |
 | `GET` | `/docs` | — | `{ docs: DocSummary[] }` |
 | `GET` | `/docs/:id` | — | `{ doc, version, updatedAt }` or 404 |
-| `PUT` | `/docs/:id` | `{ doc }`, `If-Match: <version>` | `{ version, updatedAt }` |
+| `PUT` | `/docs/:id` | `{ doc }`, optional `If-Match: <version>` | `{ version, updatedAt }` |
 | `DELETE` | `/docs/:id` | — | 204 or 404 |
+
+A successful GET of a document or PUT returns the version as a quoted ETag. On PUT, a stale version returns 409 and an invalid version header returns 400. An omitted header or `*` requests an unconditional save.
 
 The browser never connects to D1 directly. It sends an authenticated request to the Worker; the Worker binds `env.DB` and scopes every query with `workspace_id`.
 
@@ -185,18 +194,9 @@ npx wrangler deploy
 
 Replace the example bearer-token check with Cloudflare Access, a signed session cookie, or your identity provider. Derive `workspace_id` from the authenticated session, never from a client-controlled header.
 
-### D1 limits that affect the schema
+### Request size and listing
 
-| Limit | Consequence |
-| --- | --- |
-| Row/string/BLOB max **2 MB** | A whole-document JSON row must stay under it. The example rejects documents over 1.8 MB. |
-| 100 bound parameters per query | The store uses 6–7. |
-| 100 KB SQL statement | The JSON is bound, not interpolated. |
-| Query result max **50 MB** | `list()` selects summaries, not full documents. |
-| 30 s query duration | Keep writes small; do not rewrite thousands of rows per request. |
-| One D1 database is single-threaded | Debounce saves; do not write on every keystroke. |
-| No interactive transactions | The store needs only one statement per save. Use `batch()` when adding projection tables. |
-| Read replication is eventually consistent | If enabled, use `withSession()` / bookmarks for read-your-writes. |
+The example Worker limits the entire UTF-8 PUT body, including the `{ doc }` wrapper, to 1,800,000 bytes. Larger requests return 413. The SQL adapter binds the JSON as a parameter. Listing documents selects only summary columns for the configured workspace.
 
 Practical rules:
 
@@ -207,9 +207,11 @@ Practical rules:
 
 ## Standard usage stays standard
 
-The demo still persists a single JSON state blob in localStorage. The editor still accepts and returns `Doc` objects. `@nobita/storage` is only imported by hosts that choose it, so the default path remains:
+The demo stores its workspace state under `nobita.demo.v2` in localStorage. The editor still accepts and returns `Doc` objects. `@nobita/storage` is only imported by hosts that choose it, so the default path remains:
 
 > Plain JSON documents — persist to localStorage, IndexedDB, your API, or a file.
+
+A `StoredDoc` contains a plain JSON snapshot. To resume a collaborative session with its edit history, the host also persists the Yjs state or Automerge snapshot. See [Collaborative editing](../README.md#collaborative-editing).
 
 ## Tests
 
