@@ -452,7 +452,7 @@ MIT. See [LICENSE](LICENSE).
 
 ### Collaborative editing
 
-Install either `@nobita/collab-yjs` with `yjs`, or `@nobita/collab-automerge` with `@automerge/automerge`. Initialize the document once and share its CRDT history with subsequent replicas. The host provides the transport.
+Install either `@nobita/collab-yjs` with `yjs`, or `@nobita/collab-automerge` with `@automerge/automerge`. Initialize the document once and share its CRDT history with subsequent replicas. The host provides the transport. Use the same adapter version on all connected clients. This version reads older paragraph splits and upgrades their boundaries on the first local edit.
 
 ```ts
 import * as Y from 'yjs';

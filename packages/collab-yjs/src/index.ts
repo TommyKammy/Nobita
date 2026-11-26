@@ -40,9 +40,19 @@ class YBackend implements Backend {
   readonly origin = {};
   readonly history: Y.UndoManager;
   constructor(readonly doc: Y.Doc) {
+    const layout = this.map('splitLayout'),
+      upgrades = this.map('splitUpgrades');
     this.history = new Y.UndoManager(doc, {
       trackedOrigins: new Set([this.origin]),
       captureTimeout: 0,
+      deleteFilter: (item) =>
+        item.parent !== layout &&
+        item.parent !== upgrades &&
+        !(
+          item.content instanceof Y.ContentEmbed &&
+          (item.content.embed as { nobitaSplit?: boolean } | null)
+            ?.nobitaSplit === true
+        ),
     });
   }
   get actor() {
@@ -76,11 +86,14 @@ class YBackend implements Backend {
   ensureText(k: string) {
     this.text(k);
   }
+  textLength(k: string) {
+    return this.text(k).length;
+  }
   runs(k: string): InlineRun[] {
     return this.text(k)
       .toDelta()
       .map((d: { insert: string; attributes?: InlineRun['marks'] }) => ({
-        text: d.insert,
+        text: typeof d.insert === 'string' ? d.insert : '\uFFFC',
         ...(d.attributes && { marks: d.attributes }),
       }));
   }
@@ -92,7 +105,8 @@ class YBackend implements Backend {
   format(k: string, i: number, n: number, name: string, v: unknown) {
     this.text(k).format(i, n, { [name]: v ?? null });
   }
-  boundary(k: string, i: number) {
+  insertSplitMarker(k: string, i: number) {
+    this.text(k).insertEmbed(i, { nobitaSplit: true });
     return JSON.stringify(
       Y.createRelativePositionFromTypeIndex(this.text(k), i)
     );

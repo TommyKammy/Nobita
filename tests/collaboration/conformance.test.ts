@@ -1,6 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import * as Y from 'yjs';
-import { YjsCollaborationAdapter } from '../../packages/collab-yjs/src/index';
 import { AutomergeCollaborationAdapter } from '../../packages/collab-automerge/src/index';
 import {
   diffDocs,
@@ -10,87 +8,10 @@ import {
   mergeBlockWithPrevious,
   mergeBlockWithNext,
   type InlineMark,
-  type Block,
   type Doc,
   type CollaborationAdapter,
 } from '../../packages/core/src/index';
-const block = (id: string, text = ''): Block => ({
-  id,
-  type: 'paragraph',
-  props: {},
-  children: [],
-  text: text ? [{ text }] : [],
-});
-const seed: Doc = {
-  id: 'doc',
-  version: 1,
-  title: 'Seed',
-  blocks: [block('a', 'ab'), block('b'), block('c'), block('d')],
-};
-function pair(engine: string, initial: Doc) {
-  if (engine === 'automerge') {
-    const a = new AutomergeCollaborationAdapter(initial),
-      b = new AutomergeCollaborationAdapter(a.save());
-    return {
-      a,
-      b,
-      observe: (reverse: boolean) => {
-        const changes = [a.save(), b.save()];
-        if (reverse) changes.reverse();
-        const observer = new AutomergeCollaborationAdapter(changes[0]!);
-        observer.receive(changes[1]!);
-        return observer.getDoc();
-      },
-      send: (reverse = false) => {
-        const x = a.save(),
-          y = b.save();
-        if (reverse) {
-          a.receive(y);
-          b.receive(x);
-        } else {
-          b.receive(x);
-          a.receive(y);
-        }
-      },
-    };
-  }
-  const x = new Y.Doc(),
-    y = new Y.Doc(),
-    a = new YjsCollaborationAdapter(x, initial);
-  Y.applyUpdate(y, Y.encodeStateAsUpdate(x));
-  const b = new YjsCollaborationAdapter(y);
-  return {
-    a,
-    b,
-    observe: (reverse: boolean) => {
-      const doc = new Y.Doc(),
-        updates = [Y.encodeStateAsUpdate(x), Y.encodeStateAsUpdate(y)];
-      if (reverse) updates.reverse();
-      for (const u of updates) Y.applyUpdate(doc, u);
-      return new YjsCollaborationAdapter(doc).getDoc();
-    },
-    send: (reverse = false) => {
-      const u = Y.encodeStateAsUpdate(x),
-        v = Y.encodeStateAsUpdate(y);
-      if (reverse) {
-        Y.applyUpdate(x, v);
-        Y.applyUpdate(y, u);
-      } else {
-        Y.applyUpdate(y, u);
-        Y.applyUpdate(x, v);
-      }
-    },
-  };
-}
-function edit(adapter: CollaborationAdapter, fn: (doc: Doc) => void) {
-  const previous = adapter.getDoc(),
-    doc = structuredClone(previous);
-  fn(doc);
-  adapter.applyLocalChange(
-    { doc, previous, source: 'input', selection: null },
-    diffDocs(previous, doc)
-  );
-}
+import { block, seed, pair, edit } from './peers';
 for (const engine of ['automerge', 'yjs'])
   describe(engine, () => {
     it.each([true, false])(

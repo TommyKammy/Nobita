@@ -94,7 +94,7 @@ class AutomergeBackend implements Backend {
     if (payload(previous) === value) return;
     const token = `@${this.actor}:${++this.sequence}`;
     this.state.fields[path] = token + '|' + (value ?? '');
-    if (k !== 'clocks')
+    if (k !== 'clocks' && k !== 'splitLayout' && k !== 'splitUpgrades')
       this.recording.push(() => this.toggleUndo('!' + token, previous ?? ''));
   }
 
@@ -210,6 +210,9 @@ class AutomergeBackend implements Backend {
   ensureText(k: string) {
     if (this.state.texts[k] === undefined) this.state.texts[k] = '';
   }
+  textLength(k: string) {
+    return this.state.texts[k]?.length ?? 0;
+  }
   runs(k: string): InlineRun[] {
     if (!this.state.texts[k]) return [];
     const runs: InlineRun[] = [];
@@ -244,7 +247,10 @@ class AutomergeBackend implements Backend {
     }
     return normalizeRuns(runs);
   }
-  boundary(k: string, i: number) {
+  insertSplitMarker(k: string, i: number) {
+    // Its cursor identifies the marker, so user-entered U+FFFC remains text.
+    // The logical split is undoable; the marker retains its native position.
+    A.splice(this.state, ['texts', k], i, 0, '\uFFFC');
     return A.getCursor(this.state, ['texts', k], i);
   }
   resolveBoundary(k: string, token: string) {

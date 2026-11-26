@@ -532,3 +532,28 @@ for (const composing of [false, true]) {
     }
   );
 }
+
+test('typing before a cleared split stays in the first paragraph on both editors', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await page.evaluate(async () => {
+    const path = '/peers.ts';
+    await (await import(path)).setupPeers();
+    window.__editor!.focus('p', 1);
+  });
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Delete');
+  await page.evaluate(() => window.__editor!.focus('p', 1));
+  await page.keyboard.type('X');
+  for (const host of ['#editor', '#peer']) {
+    const paragraphs = page.locator(host + ' .nb-text');
+    await expect(paragraphs.nth(0)).toHaveText('aX');
+    await expect(paragraphs.nth(1)).toHaveText('');
+  }
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.keyboard.press('ControlOrMeta+z');
+  const peer = page.locator('#peer .nb-text');
+  await expect(peer.nth(0)).toHaveText('a');
+  await expect(peer.nth(1)).toHaveText('b');
+});

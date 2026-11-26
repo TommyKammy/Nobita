@@ -1,23 +1,24 @@
 // Paragraph splits and joins retain the original native CRDT text.
 // The editor addresses the resulting sequence using one logical UTF-16 offset.
 import type { Backend } from './collab-runtime.js';
-import { normalizeRuns, runsLength, sliceRuns } from './text.js';
+import {
+  readJoins,
+  readSplits,
+  upgradeSplits,
+  type Split,
+  type Join,
+} from './paragraph-layout.js';
+import type { InlineRun } from './types.js';
+import { normalizeRuns, sliceRuns } from './text.js';
 
+const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 export const bodyText = (id: string) => JSON.stringify([id, 'text']);
-type Join = { into: string; clock: number; actor: string };
-type Split = {
-  from: string;
-  path: string;
-  token: string;
-  slice?: string | null;
-  clock: number;
-  actor: string;
-};
 // A native cursor bounds a slice even when another replica edits its text.
 type Part = {
   path: string;
   slice: string | null;
   from?: string;
+  afterMarker?: boolean;
   to?: string;
   start: number;
   end: number;
@@ -35,6 +36,11 @@ export type TextBackend = Pick<
 
 export class JoinedText implements TextBackend {
   private groups = new Map<string, Part[]>();
+  private legacy: [string, Split][] = [];
+  readonly clock: number;
+  readonly visible: Set<string>;
+  private involved = new Set<string>();
+  private joins: Record<string, Join>;
   private owners = new Map<string, Set<string>>();
   readonly diffText: Backend['diffText'];
   constructor(
@@ -42,12 +48,18 @@ export class JoinedText implements TextBackend {
     live: readonly string[]
   ) {
     this.diffText = store.diffText;
-    const joins = Object.entries(store.read('joins') as Record<string, Join>);
-    const splits = Object.entries(
-      store.read('splits') as Record<string, Split>
+    const visible = (this.visible = new Set(live));
+    this.joins = readJoins(store, visible);
+    const joins = Object.entries(this.joins);
+    const { splits, redundant, isActive } = readSplits(store);
+    this.legacy = splits.filter(([, op]) => !op.marker);
+    const operations = [...joins, ...splits].sort(
+      ([ai, a], [bi, b]) =>
+        a.clock - b.clock || compare(a.actor, b.actor) || compare(ai, bi)
     );
-    if (!joins.length && !splits.length) return;
-    const visible = new Set(live);
+    this.clock = operations.at(-1)?.[1].clock ?? 0;
+    if (!operations.length) return;
+
     const layout = new Map<string, Part[]>();
     // Each end marker travels with its paragraph when it is joined. This
     // retains the insertion point for a concurrent join into that paragraph.
@@ -65,42 +77,41 @@ export class JoinedText implements TextBackend {
     };
     // Replay structural operations in causal order. A later split can cut a
     // paragraph assembled from several joins, or a slice from an earlier split.
-    const operations = [...joins, ...splits].sort(
-      ([ai, a], [bi, b]) =>
-        a.clock - b.clock ||
-        (a.actor < b.actor
-          ? -1
-          : a.actor > b.actor
-            ? 1
-            : ai < bi
-              ? -1
-              : ai > bi
-                ? 1
-                : 0)
-    );
+    // A cut into a previously joined block must still resolve if a peer undoes
+    // the join. Its native owner may no longer be the named source.
+    for (const [, split] of splits) group(JSON.parse(split.path)[0] as string);
     const parents = new Map<string, string | null>();
-    for (const [id, op] of operations) {
+    for (const [opId, op] of operations) {
+      const id = ('blockId' in op && op.blockId) || opId;
+      this.involved.add(id);
       if ('into' in op) {
-        if (!visible.has(id) && id !== op.into) {
-          const dest = group(op.into),
-            end = ends.get(op.into)!;
-          const target = dest.includes(end)
-            ? dest
-            : Array.from(layout.values()).find((parts) => parts.includes(end));
-          const source = group(id);
-          if (target && target !== source) {
-            target.splice(target.indexOf(end), 0, ...source);
-            layout.set(id, []);
-          }
+        this.involved.add(op.into);
+        const dest = group(op.into),
+          end = ends.get(op.into)!;
+        let target = dest.includes(end)
+          ? dest
+          : Array.from(layout.values()).find((parts) => parts.includes(end));
+        const source = group(id);
+        let at = target?.indexOf(end) ?? -1;
+        if (target === source) {
+          // The target end moved inside the source during a concurrent
+          // split. Attach to the surviving recipient of the join chain.
+          target = group(this.joinedOwner(op.into));
+          at = target.length - 1;
+        }
+        if (target && at >= 0 && target !== source) {
+          target.splice(at, 0, ...source);
+          layout.set(id, []);
         }
         continue;
       }
+      this.involved.add(op.from);
       const cut = store.resolveBoundary(op.path, op.token);
       const contains = (part: Part) =>
         !markers.has(part) &&
         part.path === op.path &&
         cut >= this.start(part) &&
-        cut <= this.end(part);
+        (op.marker ? cut < this.end(part) : cut <= this.end(part));
       const original = group(op.from);
       const locate = (matches: (part: Part) => boolean) => {
         const search = (source: Part[]) => {
@@ -117,12 +128,16 @@ export class JoinedText implements TextBackend {
           if (moved) return moved;
         }
       };
-      // The left slice keeps its identity; the right slice is named after the
-      // split that created it. Native offsets alone can match both ends of a join.
+      // A permanent marker occupies one native character and belongs to a
+      // unique half-open interval. Legacy zero-width cuts also need their
+      // slice identity, since two reordered ends can share an offset.
       let match = locate(
-        (part) => op.slice === undefined || part.slice === op.slice
+        (part) =>
+          op.marker === true ||
+          op.slice === undefined ||
+          part.slice === op.slice
       );
-      if (!match && op.slice !== undefined) {
+      if (!match && !op.marker && op.slice !== undefined) {
         // A concurrent split may already have moved the cut into a descendant.
         match = locate((part) => {
           let ancestor = part.slice;
@@ -136,20 +151,55 @@ export class JoinedText implements TextBackend {
       if (!match) continue;
       const { source, index } = match,
         part = source[index]!;
-      parents.set(id, part.slice);
-      const following = source.splice(index + 1, source.length - index - 2);
-      const destination = group(id);
-      destination.splice(
-        destination.length - 1,
-        0,
-        { ...part, slice: id, from: op.token },
-        ...following
-      );
+      parents.set(opId, part.slice);
+      // A concurrent join may have embedded the source inside another
+      // paragraph. Keep its own end marker in place for later joins.
+      const namedEnd = source.indexOf(ends.get(op.from)!, index + 1);
+      const endIndex = namedEnd < 0 ? source.length - 1 : namedEnd;
+      const following = source.splice(index + 1, endIndex - index - 1);
+      const right = {
+        ...part,
+        slice: opId,
+        from: op.token,
+        afterMarker: !!op.marker,
+      };
       part.to = op.token;
+      if (isActive(id, opId, op)) {
+        const destination = group(id);
+        // Old snapshots used a native text on the right for boundary input.
+        // A hard marker allows a new split to write directly into its slice.
+        if (op.blockId) destination.shift();
+        destination.splice(destination.length - 1, 0, right, ...following);
+      } else {
+        // Undo reunites the slices without dropping remote text or exposing
+        // the permanent marker. A later split may reuse the same block ID.
+        const prefix = op.blockId ? [] : [partFor(id)];
+        source.splice(index + 1, 0, ...prefix, right, ...following);
+      }
     }
     for (const [id, parts] of layout) {
       if (!visible.has(id)) continue;
-      const textParts = parts.filter((part) => !markers.has(part));
+      const textParts = parts
+        .filter((part) => !markers.has(part))
+        .flatMap((part) => {
+          const holes = redundant.get(part.path);
+          if (!holes) return part;
+          const lo = this.start(part),
+            hi = this.end(part);
+          const cuts = holes
+            .map((token) => ({
+              token,
+              at: store.resolveBoundary(part.path, token),
+            }))
+            .filter(({ at }) => lo <= at && at < hi)
+            .sort((a, b) => a.at - b.at);
+          const pieces: Part[] = [];
+          for (const { token } of cuts) {
+            pieces.push({ ...part, to: token });
+            part = { ...part, from: token, afterMarker: true };
+          }
+          return [...pieces, part];
+        });
       this.groups.set(bodyText(id), textParts);
       for (const part of textParts) {
         part.start = this.start(part);
@@ -160,14 +210,24 @@ export class JoinedText implements TextBackend {
       }
     }
   }
+  isStructuralBlock(id: string) {
+    return this.involved.has(id);
+  }
+  joinedOwner(id: string) {
+    while (Object.hasOwn(this.joins, id)) id = this.joins[id]!.into;
+    return id;
+  }
+  upgradeLegacySplits() {
+    return upgradeSplits(this.store, this.legacy);
+  }
   private start(p: Part) {
     return p.from === undefined
       ? 0
-      : this.store.resolveBoundary(p.path, p.from);
+      : this.store.resolveBoundary(p.path, p.from) + (p.afterMarker ? 1 : 0);
   }
   private end(p: Part) {
     return p.to === undefined
-      ? runsLength(this.store.runs(p.path))
+      ? this.store.textLength(p.path)
       : this.store.resolveBoundary(p.path, p.to);
   }
   logical(
@@ -198,12 +258,16 @@ export class JoinedText implements TextBackend {
   ensureText(path: string) {
     this.store.ensureText(path);
   }
-  runs(path: string) {
+  runs(path: string, cache?: Map<string, InlineRun[]>) {
     const parts = this.groups.get(path);
     return parts
       ? normalizeRuns(
           parts.flatMap((p) => {
-            const runs = this.store.runs(p.path);
+            let runs = cache?.get(p.path);
+            if (!runs) {
+              runs = this.store.runs(p.path);
+              cache?.set(p.path, runs);
+            }
             return p.from === undefined && p.to === undefined
               ? runs
               : sliceRuns(

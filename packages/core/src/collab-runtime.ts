@@ -38,6 +38,7 @@ export interface Backend {
   insert(key: string, index: number, value: string): void;
   ensureText(key: string): void;
   prepareCells?(keys: Iterable<string>): void;
+  textLength(key: string): number;
   runs(key: string): InlineRun[];
   splice(key: string, index: number, count: number, text: string): void;
   format(
@@ -47,7 +48,7 @@ export interface Backend {
     name: string,
     value: unknown
   ): void;
-  boundary(key: string, index: number): string;
+  insertSplitMarker(key: string, index: number): string;
   resolveBoundary(key: string, token: string): number;
   cursor(key: string, index: number, exact?: boolean): () => number | null;
   transact(fn: () => void): void;
@@ -412,9 +413,30 @@ export class SharedAdapter implements CollaborationAdapter {
   getDoc() {
     return this.#snapshot;
   }
+  #upgradeText() {
+    if (this.#text.upgradeLegacySplits())
+      this.#text = new JoinedText(
+        this.store,
+        Object.keys(this.store.read('types'))
+      );
+  }
   #write(doc: Doc, patches: readonly DocPatch[]) {
+    this.#upgradeText();
     const s = this.store,
-      clock = 1 + Math.max(0, ...Object.values(s.read('clocks')).map(Number));
+      clock =
+        1 +
+        Math.max(
+          this.#text.clock,
+          ...Object.values(s.read('clocks')).map(Number)
+        );
+    const restored = new Set<string>();
+    const mergedSources = new Set(
+      patches.flatMap((p) =>
+        p.type === 'replaceBlockText' && p.mergedFrom !== undefined
+          ? [p.mergedFrom]
+          : []
+      )
+    );
     const placements: {
       blockId: string;
       parentId: string | null;
@@ -462,28 +484,40 @@ export class SharedAdapter implements CollaborationAdapter {
           s.field('types', id, p.block.type);
           props(p.block.props);
           if (p.split) {
-            s.ensureText(bodyText(id));
             const cut = this.#text.at(bodyText(p.split.from), p.split.offset);
-            s.field('splits', id, {
+            const opId = JSON.stringify([id, clock, s.actor]);
+            s.field('activeSplits', id, opId);
+            s.field('splitLayout', opId, {
+              blockId: id,
+              marker: true,
               from: p.split.from,
               path: cut.path,
               slice: cut.slice,
-              token: s.boundary(cut.path, cut.offset),
+              token: s.insertSplitMarker(cut.path, cut.offset),
               clock,
               actor: s.actor,
             });
+          } else if (this.#text.isStructuralBlock(id)) {
+            restored.add(id);
+            restored.add(this.#text.joinedOwner(id));
+            s.field('joins', id, undefined);
           } else writeText(s, bodyText(id), s.runs(bodyText(id)), p.block.text);
           placements.push({ ...p, blockId: id });
           break;
         case 'deleteBlock':
-          s.field('types', id, undefined);
+          if (!mergedSources.has(id)) s.field('types', id, undefined);
           break;
         case 'moveBlock':
           placements.push(p);
           break;
         case 'replaceBlockText':
           if (p.mergedFrom !== undefined)
-            s.field('joins', p.mergedFrom, { into: id, clock, actor: s.actor });
+            s.field('joins', p.mergedFrom, {
+              into: id,
+              clock,
+              actor: s.actor,
+              keepsType: true,
+            });
           else if (!p.splitSuffix)
             writeText(this.#text, bodyText(id), p.previous, p.next);
           break;
@@ -501,6 +535,16 @@ export class SharedAdapter implements CollaborationAdapter {
         case 'updateTable':
           writeGrid(s, id, 'table', p.previous, p.next, clock);
           break;
+      }
+    }
+    if (restored.size) {
+      // Reintroduced IDs can address old slices, including text previously
+      // shown by a join recipient. Reconcile the final logical paragraphs.
+      const layout = new JoinedText(s, Object.keys(s.read('types')));
+      for (const id of restored) {
+        const block = find(doc.blocks, id),
+          path = bodyText(id);
+        if (block) writeText(layout, path, layout.runs(path), block.text);
       }
     }
     if (placements.length) {
@@ -541,9 +585,9 @@ export class SharedAdapter implements CollaborationAdapter {
     const s = this.store,
       meta = s.read('doc'),
       types = s.read('types');
-    const live = Object.keys(types).sort(),
-      parents = new Map<string, string | null>();
-    this.#text = new JoinedText(s, live);
+    this.#text = new JoinedText(s, Object.keys(types).sort());
+    const live = this.#text.visible;
+    const parents = new Map<string, string | null>();
     for (const id of live) {
       const choices = Object.values(s.read(key('locations', id))) as Location[];
       const win = choices.reduce<Location | undefined>(
@@ -553,10 +597,7 @@ export class SharedAdapter implements CollaborationAdapter {
             : a,
         undefined
       );
-      parents.set(
-        id,
-        win?.parent && Object.hasOwn(types, win.parent) ? win.parent : null
-      );
+      parents.set(id, win?.parent && live.has(win.parent) ? win.parent : null);
     }
     // Concurrent ancestor moves may form a cycle. Detach its lowest ID on every replica.
     const done = new Set<string>();
@@ -580,6 +621,7 @@ export class SharedAdapter implements CollaborationAdapter {
       group.push(id);
       groups.set(parent, group);
     }
+    const nativeRuns = new Map<string, InlineRun[]>();
     const children = (parent: string | null): Block[] => {
       const group = groups.get(parent);
       if (!group) return [];
@@ -597,7 +639,7 @@ export class SharedAdapter implements CollaborationAdapter {
           id,
           type: types[id] as Block['type'],
           props,
-          text: this.#text.runs(bodyText(id)),
+          text: this.#text.runs(bodyText(id), nativeRuns),
           children: children(id),
         };
       });
@@ -775,6 +817,7 @@ export class SharedAdapter implements CollaborationAdapter {
       }
     }
     this.store.transact(() => {
+      this.#upgradeText();
       // Insert while the original boundary characters still identify the
       // intended side of a remote split. Then resolve the exact characters
       // selected at composition start against the updated native texts.
