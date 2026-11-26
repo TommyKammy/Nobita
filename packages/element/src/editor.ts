@@ -493,14 +493,14 @@ export class NobitaEditor implements BlockHost {
 
   getMarkdown(): string {
     return blocksToMarkdown(this.store.doc, {
-      resolveDatabase: this.resolveDatabase.bind(this),
+      resolveDatabase: this.#resolveDatabase,
     });
   }
 
   getHTML(): string {
     return blocksToHtml(
       this.store.doc.blocks,
-      new DatabaseEvalContext(this.resolveDatabase.bind(this))
+      new DatabaseEvalContext(this.#resolveDatabase)
     );
   }
 
@@ -1056,7 +1056,7 @@ export class NobitaEditor implements BlockHost {
     const blocks = selectionBlocks(this.store.doc.blocks, selection);
     if (blocks.length === 0) return;
     event.preventDefault();
-    const serialized = serializeBlocksForClipboard(blocks);
+    const serialized = serializeBlocksForClipboard(blocks, this.#resolveDatabase);
     event.clipboardData?.setData('text/plain', serialized.text);
     event.clipboardData?.setData('text/html', serialized.html);
     event.clipboardData?.setData('application/x-nobita+json', serialized.json);
@@ -1080,6 +1080,7 @@ export class NobitaEditor implements BlockHost {
     }
     return this.#databaseIndex;
   }
+  #resolveDatabase = this.resolveDatabase.bind(this);
   resolveDatabase(id: string, pageId?: string) {
     return (
       (!pageId ? this.#localDatabases().get(id) : undefined) ??
@@ -1257,6 +1258,7 @@ export class NobitaEditor implements BlockHost {
       commit: (next, caret) => this.#commit(next, caret),
       focusBlock: (id, offset) => this.#focusBlock(id, offset),
       copyBlock: offset => this.#copyBlockToClipboard(blockId, offset),
+      copyMarkdown: () => this.#copyMarkdown([block]),
       copyLink: () => this.#copyBlockLink(blockId),
       deleteBlock: () => this.#deleteBlock(blockId),
     });
@@ -1276,16 +1278,8 @@ export class NobitaEditor implements BlockHost {
     if (blocks.length === 0) return;
     const items = buildMultiBlockMenuItems({
       count: blocks.length,
-      copyBlocks: () => {
-        void this.#writeBlocksToClipboard(blocks.map(duplicateBlockTree));
-      },
-      copyMarkdown: () => {
-        const markdown = blocksToMarkdown(
-          { version: 1, id: 'clipboard', title: '', blocks: blocks.map(duplicateBlockTree) },
-          { title: false }
-        );
-        void this.#writePlainTextToClipboard(markdown);
-      },
+      copyBlocks: () => this.#writeBlocksToClipboard(blocks),
+      copyMarkdown: () => this.#copyMarkdown(blocks),
       duplicateBlocks: () => this.#duplicateSelectedBlocks(),
       deleteBlocks: () => this.#deleteSelectedBlocks(),
     });
@@ -1832,8 +1826,7 @@ export class NobitaEditor implements BlockHost {
         for (const delta of relationChanges(id, before.get(id), after.get(id)))
           if (
             delta.target.pageId ||
-            (!after.has(delta.target.databaseId) &&
-              this.#options.resolveDatabase?.(delta.target.databaseId))
+            (!before.has(delta.target.databaseId) && !after.has(delta.target.databaseId))
           )
             sync(delta);
       }
@@ -2430,16 +2423,22 @@ export class NobitaEditor implements BlockHost {
   #copyBlockToClipboard(blockId: string, offset: number): void {
     const block = findBlock(this.store.doc.blocks, blockId);
     if (!block) return;
-    const copy = duplicateBlockTree(block);
-    void this.#writeBlocksToClipboard([copy])
+    void this.#writeBlocksToClipboard([block])
       .catch(() => undefined)
       .finally(() => {
         this.#focusBlock(blockId, offset);
       });
   }
 
+  #copyMarkdown(blocks: Block[]) {
+    return this.#writePlainTextToClipboard(blocksToMarkdown(
+      { ...this.doc, blocks },
+      { title: false, resolveDatabase: this.#resolveDatabase }
+    ));
+  }
+
   async #writeBlocksToClipboard(blocks: Block[]): Promise<void> {
-    const payload = serializeBlocksForClipboard(blocks);
+    const payload = serializeBlocksForClipboard(blocks, this.#resolveDatabase, blocks.map(duplicateBlockTree));
     if (await this.#writeModernClipboard(payload, true)) return;
     if (this.#writeLegacyClipboard(payload)) return;
     if (await this.#writeModernClipboard(payload, false)) return;
@@ -2791,7 +2790,7 @@ export class NobitaEditor implements BlockHost {
     event.preventDefault();
     const blocks = selectedTopLevelBlocks(this.store.doc.blocks, this.#selectedBlockIds);
     if (blocks.length === 0) return;
-    const serialized = serializeBlocksForClipboard(blocks);
+    const serialized = serializeBlocksForClipboard(blocks, this.#resolveDatabase);
     event.clipboardData?.setData('text/plain', serialized.text);
     event.clipboardData?.setData('text/html', serialized.html);
     event.clipboardData?.setData('application/x-nobita+json', serialized.json);

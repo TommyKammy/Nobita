@@ -247,56 +247,60 @@ test('edit a formula, configure paired properties, link a row and undo both ends
   ).toHaveText('B');
 });
 
-test('notifies the external host of paired edits and undo', async ({
-  page,
-}) => {
-  await openFixture(page);
-  const changes = await page.evaluate(
-    ({ tasks, projects }) => {
-      const host = document.querySelector(
-        'nobita-editor'
-      ) as NobitaEditorElement;
-      host.setTheme('light');
-      const observed: string[] = [];
-      host.onRelationSync = (change) => observed.push('first:' + change.linked);
-      host.resolveDatabase = () => tasks;
-      projects.columns[1]!.relation = {
-        databaseId: 'tasks',
-        pageId: 'remote',
-        syncedColumnId: 'back',
-      };
-      host.doc = {
-        ...host.doc,
-        blocks: [
-          {
-            id: 'projects',
-            type: 'database',
-            props: { database: projects },
-            text: [],
-            children: [],
-          },
-        ],
-      };
-      const editor = host.editor!;
-      const data = editor.resolveDatabase('projects')!;
-      editor.updateDatabase('projects', {
-        ...data,
-        rows: data.rows.map((r, i) =>
-          i ? r : { ...r, cells: { ...r.cells, tasks: { relations: [] } } }
-        ),
-      });
-      editor.setTheme('dark');
-      host.onRelationSync = (change) =>
-        observed.push('second:' + change.linked);
-      editor.undoDatabase();
-      host.onRelationSync = undefined;
-      editor.redoDatabase();
-      return observed;
-    },
-    { tasks, projects }
+for (const offline of [false, true])
+  test(
+    'notifies paired edits and undo for ' +
+      (offline ? 'an unavailable unscoped target' : 'a resolved page target'),
+    async ({ page }) => {
+      await openFixture(page);
+      const changes = await page.evaluate(
+        ({ tasks, projects, offline }) => {
+          const host = document.querySelector(
+            'nobita-editor'
+          ) as NobitaEditorElement;
+          host.setTheme('light');
+          const observed: string[] = [];
+          host.onRelationSync = (change) =>
+            observed.push('first:' + change.linked);
+          host.resolveDatabase = () => (offline ? null : tasks);
+          projects.columns[1]!.relation = {
+            databaseId: 'tasks',
+            ...(offline ? {} : { pageId: 'remote' }),
+            syncedColumnId: 'back',
+          };
+          host.doc = {
+            ...host.doc,
+            blocks: [
+              {
+                id: 'projects',
+                type: 'database',
+                props: { database: projects },
+                text: [],
+                children: [],
+              },
+            ],
+          };
+          const editor = host.editor!;
+          const data = editor.resolveDatabase('projects')!;
+          editor.updateDatabase('projects', {
+            ...data,
+            rows: data.rows.map((r, i) =>
+              i ? r : { ...r, cells: { ...r.cells, tasks: { relations: [] } } }
+            ),
+          });
+          editor.setTheme('dark');
+          host.onRelationSync = (change) =>
+            observed.push('second:' + change.linked);
+          editor.undoDatabase();
+          host.onRelationSync = undefined;
+          editor.redoDatabase();
+          return observed;
+        },
+        { tasks, projects, offline }
+      );
+      expect(changes).toEqual(['first:false', 'second:true']);
+    }
   );
-  expect(changes).toEqual(['first:false', 'second:true']);
-});
 
 for (const external of [false, true]) {
   test(
@@ -357,6 +361,87 @@ for (const external of [false, true]) {
               ?.relations
         )
       ).toEqual([{ rowId: 't0', label: 'Task 3' }]);
+    }
+  );
+}
+
+for (const external of [false, true]) {
+  test(
+    'copies rollups from ' +
+      (external ? 'an external' : 'an unselected local') +
+      ' database',
+    async ({ page, context }) => {
+      await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+      await openFixture(page);
+      const copied = await page.evaluate(
+        ({ tasks, projects, external }) => {
+          const host = document.querySelector(
+            'nobita-editor'
+          ) as NobitaEditorElement;
+          delete projects.view;
+          if (external) {
+            projects.columns[1]!.relation!.pageId = 'remote';
+            host.resolveDatabase = (id, pageId) =>
+              id === 'tasks' && pageId === 'remote' ? tasks : null;
+          }
+          host.doc = {
+            ...host.doc,
+            blocks: [
+              {
+                id: 'intro',
+                type: 'paragraph',
+                props: {},
+                children: [],
+                text: [{ text: 'Intro' }],
+              },
+              ...(external ? [projects] : [projects, tasks]).map(
+                (database) => ({
+                  id: database.title!.toLowerCase(),
+                  type: 'database' as const,
+                  props: { database },
+                  children: [],
+                  text: [],
+                })
+              ),
+            ],
+          };
+          host.selectBlocks(['projects']);
+          const data = new DataTransfer();
+          host.shadowRoot!.querySelector('.nb-body')!.dispatchEvent(
+            new ClipboardEvent('copy', {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: data,
+            })
+          );
+          return {
+            text: data.getData('text/plain'),
+            html: data.getData('text/html'),
+          };
+        },
+        { tasks, projects, external }
+      );
+      expect(copied.text).toContain('A | Task 0 | 3');
+      expect(copied.html).toMatch(/>Task 0<.*?>3</s);
+      await page.evaluate((multi) => {
+        const host = document.querySelector(
+          'nobita-editor'
+        ) as NobitaEditorElement;
+        if (multi) {
+          host.selectBlocks(['intro', 'projects']);
+          host
+            .shadowRoot!.querySelector('[data-block-id="intro"]')!
+            .dispatchEvent(
+              new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+            );
+        } else {
+          host.editor!.openBlockMenu('projects', host);
+        }
+      }, external);
+      await page.getByText('Copy as Markdown', { exact: true }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toContain('| A | Task 0 | 3 |');
     }
   );
 }

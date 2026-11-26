@@ -1,5 +1,4 @@
 import {
-  blocksToMarkdown,
   createDatabaseData,
   dedentBlock,
   duplicateBlockTree,
@@ -38,6 +37,7 @@ export interface BlockMenuContext {
   focusBlock(blockId: string, offset: number): void;
   copyBlock(offset: number): void;
   copyLink(): void;
+  copyMarkdown(): void;
   deleteBlock(): void;
 }
 
@@ -371,13 +371,7 @@ export function buildBlockMenuItems(context: BlockMenuContext): MenuItem[] {
       label: 'Copy as Markdown',
       icon: icon.copy,
       group: 'Actions',
-      action: () => {
-        const markdown = blocksToMarkdown(
-          { version: 1, id: 'clipboard', title: '', blocks: [duplicateBlockTree(block)] },
-          { title: false }
-        );
-        void navigator.clipboard?.writeText(markdown);
-      },
+      action: () => context.copyMarkdown(),
     },
     {
       id: 'indent',

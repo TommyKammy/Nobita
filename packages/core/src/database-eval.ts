@@ -146,7 +146,7 @@ function scalar(
   if (column.type === 'multi-select') return cell?.values ?? [];
   if (column.type === 'people') return cell?.people?.map((p) => p.label) ?? [];
   if (column.type === 'files') return cell?.files?.map((f) => f.name) ?? [];
-  const text = databaseCellText(cell, 'text');
+  const text = databaseCellText(cell, column.type === 'progress' ? 'progress' : 'text');
   if (column.type === 'number' || column.type === 'progress')
     return text && Number.isFinite(Number(text)) ? Number(text) : null;
   return text;

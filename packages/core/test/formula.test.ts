@@ -463,3 +463,41 @@ it('reads run-only text in unnormalized host snapshots for relation labels and r
   expect(cells.rel?.text).toBe('Task one');
   expect(cells.f?.text).toBe('Task one');
 });
+
+it('uses displayed progress values in rollups over unnormalized snapshots', () => {
+  const target = normalizeDatabaseData({
+    columns: [{ id: 'pct', name: 'Progress', type: 'progress' }],
+  });
+  target.rows = ['75%', '32.6%', '120%', '-3%', ''].map((text, i) => ({
+    id: String(i),
+    cells: { pct: { text } },
+  }));
+  const source = normalizeDatabaseData({
+    columns: [
+      {
+        id: 'rel',
+        name: 'Tasks',
+        type: 'relation',
+        relation: { databaseId: 'tasks' },
+      },
+      {
+        id: 'total',
+        name: 'Total',
+        type: 'formula',
+        formula: { expression: 'sum(pluck(prop("rel"),"pct"))' },
+      },
+    ],
+    rows: [
+      {
+        id: 'p',
+        cells: {
+          rel: { relations: target.rows.map((r) => ({ rowId: r.id })) },
+        },
+      },
+    ],
+  });
+  expect(
+    new DatabaseEvalContext(() => target).project(source).rows[0]!.cells.total
+      ?.text
+  ).toBe('208');
+});

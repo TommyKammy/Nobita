@@ -1,6 +1,6 @@
 import {
   blocksToHtml,
-  blocksToMarkdown,
+  DatabaseEvalContext,
   blocksToPlainText,
   createBlock,
   createTableColumn,
@@ -16,6 +16,7 @@ import {
 } from '@nobita/core';
 import type {
   Block,
+  DatabaseResolver,
   HighlightColor,
   InlineMark,
   InlineRun,
@@ -563,15 +564,18 @@ export function readClipboardPayload(event: ClipboardEvent): ClipboardPayload | 
 export interface SerializedSelection {
   html: string;
   text: string;
-  markdown: string;
   json: string;
 }
 
-export function serializeBlocksForClipboard(blocks: Block[]): SerializedSelection {
+export function serializeBlocksForClipboard(
+  blocks: Block[],
+  resolve: DatabaseResolver,
+  jsonBlocks = blocks
+): SerializedSelection {
+  const context = new DatabaseEvalContext(resolve);
   return {
-    html: blocksToHtml(blocks),
-    text: blocksToPlainText(blocks),
-    markdown: blocksToMarkdown({ version: 1, id: 'clipboard', title: '', blocks }),
-    json: JSON.stringify({ version: 1, blocks }),
+    html: blocksToHtml(blocks, context),
+    text: blocksToPlainText(blocks, 0, context),
+    json: JSON.stringify({ version: 1, blocks: jsonBlocks }),
   };
 }
