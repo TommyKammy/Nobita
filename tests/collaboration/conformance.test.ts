@@ -149,7 +149,13 @@ for (const engine of ['automerge', 'yjs'])
           blockId: 'a',
           from: 1,
           to: 1,
-          ...(kind === 'body' ? {} : { rowId: 'row', columnId: 'col' }),
+          ...(kind === 'body'
+            ? {}
+            : {
+                rowId: 'row',
+                columnId: 'col',
+                pendingMarks: { bold: true as const },
+              }),
         });
         edit(b, (d) => {
           if (kind === 'body') d.blocks[0]!.text = [{ text: 'Bab' }];
@@ -158,6 +164,11 @@ for (const engine of ['automerge', 'yjs'])
         send();
         const u = a.commitComposition('日');
         expect(value(u.doc)).toBe('Ba日b');
+        if (kind !== 'body')
+          expect(cell(u.doc)?.runs).toContainEqual({
+            text: '日',
+            marks: { bold: true },
+          });
         expect(u.remapPoint?.({ blockId: 'a', offset: 1 })?.offset).toBe(3);
         send();
         expect(a.getDoc()).toEqual(b.getDoc());
@@ -300,3 +311,56 @@ it('keeps a third concurrent Automerge check through two independent undos', () 
   sync();
   expect(c.getDoc().blocks[0]!.props.checked).toBe(true);
 });
+
+for (const engine of ['automerge', 'yjs']) {
+  it.each([true, false])(
+    engine + ' merges concurrent record-page edits (existing page=%s)',
+    (existing) => {
+      const initial = structuredClone(seed),
+        row = {
+          id: 'r',
+          cells: {},
+          ...(existing && { page: { content: [{ text: 'ab' }] } }),
+        };
+      initial.blocks[0]!.type = 'database';
+      initial.blocks[0]!.props = {
+        database: { variant: 'database', columns: [], rows: [row] },
+      };
+      const { a, b, send } = pair(engine, initial);
+      const record = (d: Doc) => d.blocks[0]!.props.database!.rows[0]!;
+      edit(a, (d) => {
+        record(d).page = {
+          content: [
+            { text: 'A', marks: { bold: true } },
+            ...(existing ? [{ text: 'ab' }] : []),
+          ],
+        };
+      });
+      edit(b, (d) => {
+        record(d).page = {
+          content: [
+            ...(existing ? [{ text: 'ab' }] : []),
+            { text: 'B', marks: { italic: true } },
+          ],
+        };
+      });
+      send();
+      expect(a.getDoc()).toEqual(b.getDoc());
+      const content = record(b.getDoc()).page!.content;
+      expect(content.find((run) => run.text.includes('A'))?.marks?.bold).toBe(
+        true
+      );
+      expect(content.find((run) => run.text.includes('B'))?.marks?.italic).toBe(
+        true
+      );
+      if (existing) expect(content.map((r) => r.text).join('')).toBe('AabB');
+      a.undo();
+      send();
+      expect(
+        record(b.getDoc())
+          .page?.content.map((r) => r.text)
+          .join('')
+      ).toBe(existing ? 'abB' : 'B');
+    }
+  );
+}

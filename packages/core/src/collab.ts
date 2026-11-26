@@ -6,6 +6,7 @@ import type {
   Doc,
   DocChange,
   EditorSelection,
+  InlineMark,
   InlineRun,
   Point,
   TableData,
@@ -70,6 +71,7 @@ export interface PeerPresence {
   focusedBlockId?: string | null;
 }
 export type CompositionTarget = {
+  pendingMarks?: InlineMark;
   blockId: string;
   from: number;
   to: number;

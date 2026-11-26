@@ -199,3 +199,82 @@ test('document replacements stay in sync with the peer', async ({ page }) => {
   ).rejects.toThrow(/Disconnect collaboration/);
   await expect(page.locator('#editor .nb-text').first()).toHaveText('aXb');
 });
+
+test('peers receive the caret after typing, deletion and splitting a paragraph', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await page.evaluate(async () => {
+    const path = '/peers.ts';
+    await (await import(path)).setupPeers();
+    window.__editor!.focus('p', 1);
+  });
+  for (const key of ['X', 'Backspace', 'Enter']) {
+    await page.keyboard.press(key);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const selection = window.__editor!.getSelection(),
+            root = (document.querySelector('#peer') as typeof window.__host)
+              .shadowRoot!;
+          if (!selection) return false;
+          const el = root.querySelector(
+            '[data-block-id="' + selection.focus.blockId + '"] .nb-text'
+          );
+          const marker = root.querySelector('.nb-peer-selection');
+          if (!el || !marker) return false;
+          const r = document.createRange(),
+            walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          let n = walker.nextNode(),
+            i = selection.focus.offset;
+          while (n && i > (n.textContent ?? '').length) {
+            i -= n.textContent!.length;
+            n = walker.nextNode();
+          }
+          if (!n) return false;
+          r.setStart(n, i);
+          r.collapse(true);
+          const expected = r.getBoundingClientRect(),
+            actual = marker.getBoundingClientRect();
+          return (
+            Math.abs(expected.left - actual.left) < 1 &&
+            Math.abs(expected.top - actual.top) < 1
+          );
+        })
+      )
+      .toBe(true);
+  }
+});
+
+for (const selector of ['.nb-table-cell', '.nb-db-rich-text']) {
+  test(
+    selector + ' keeps pending bold on a collaborative IME commit',
+    async ({ page }) => {
+      await openFixture(page);
+      await page.evaluate(async () => {
+        const path = '/peers.ts';
+        await (await import(path)).setupPeers();
+      });
+      const cell = page.locator('#editor ' + selector).first();
+      await cell.click();
+      await cell.evaluate((el) =>
+        (el.getRootNode() as ShadowRoot & { getSelection(): Selection })
+          .getSelection()
+          .collapse(el.firstChild, 1)
+      );
+      await page.keyboard.press('ControlOrMeta+b');
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Input.imeSetComposition', {
+        text: 'に',
+        selectionStart: 1,
+        selectionEnd: 1,
+      });
+      await cdp.send('Input.insertText', { text: '日' });
+      const peer = page.locator('#peer ' + selector).first();
+      await expect(peer).toHaveText('a日b');
+      await expect(peer.locator('.nb-m-bold')).toHaveText('日');
+      await cell.press('ControlOrMeta+z');
+      await expect(peer).toHaveText('ab');
+    }
+  );
+}

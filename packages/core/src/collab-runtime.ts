@@ -7,10 +7,12 @@ import {
   type PeerPresence,
   type RemoteDocUpdate,
 } from './collab.js';
+import { BOOLEAN_MARK_KEYS } from './types.js';
 import { plainText } from './text.js';
 import type {
   Block,
   DatabaseData,
+  DatabaseRow,
   Doc,
   DocChange,
   InlineMark,
@@ -152,7 +154,8 @@ function writeGrid(
   clock: number
 ) {
   const base = key(id, kind);
-  store.field(key(id, 'grids'), kind, next ? true : undefined);
+  if (!!before !== !!next)
+    store.field(key(id, 'grids'), kind, next ? true : undefined);
   if (!next) return;
   const { rows, columns, ...meta } = next;
   if (!before) {
@@ -228,9 +231,30 @@ function writeGrid(
   for (const row of rows) {
     const old = oldById.get(row.id);
     if (row === old) continue;
-    const { cells, ...props } = row,
-      { cells: oldCells = {}, ...oldProps } = old ?? {};
-    fields(store, key(id, kind, 'row', row.id), oldProps, props);
+    const { cells, page, ...props }: DatabaseRow = row;
+    const {
+      cells: oldCells = {},
+      page: oldPage,
+      ...oldProps
+    }: Partial<DatabaseRow> = old ?? {};
+    const rowPath = key(id, kind, 'row', row.id);
+    fields(store, rowPath, oldProps, props);
+    if (kind === 'database' && (!old || page !== oldPage)) {
+      const contentPath = key(id, 'recordPage', row.id);
+      store.ensureText(contentPath);
+      if (page || oldPage) {
+        // Older replicas stored the whole page in the row field. Seed the text
+        // from its actual backend contents when the page is first edited.
+        writeText(
+          store,
+          contentPath,
+          store.runs(contentPath),
+          page?.content ?? []
+        );
+        if (!oldPage || !page || store.read(rowPath).page !== true)
+          store.field(rowPath, 'page', page ? true : undefined);
+      }
+    }
     for (const col of new Set([
       ...Object.keys(cells),
       ...Object.keys(oldCells),
@@ -280,7 +304,19 @@ function readGrid(store: Backend, id: string, kind: string): Grid {
           ...((hasRuns || runs.some((x) => x.marks)) && { runs }),
         };
     }
-    return { ...store.read(key(id, kind, 'row', r)), id: r, cells };
+    const { page, ...props } = store.read(key(id, kind, 'row', r));
+    const content =
+      kind === 'database' ? store.runs(key(id, 'recordPage', r)) : [];
+    return {
+      ...props,
+      ...(page === true || content.length
+        ? { page: { content } }
+        : page
+          ? { page }
+          : {}),
+      id: r,
+      cells,
+    };
   });
   return { ...store.read(key(id, kind)), rows, columns } as Grid;
 }
@@ -591,9 +627,18 @@ export class SharedAdapter implements CollaborationAdapter {
       )
         return { doc: this.#snapshot };
     }
-    this.store.transact(() =>
-      this.store.splice(comp.path, from, Math.max(0, to - from), text)
-    );
+    this.store.transact(() => {
+      this.store.splice(comp.path, from, Math.max(0, to - from), text);
+      if (comp.target.pendingMarks && text.length)
+        for (const name of BOOLEAN_MARK_KEYS)
+          this.store.format(
+            comp.path,
+            from,
+            text.length,
+            name,
+            comp.target.pendingMarks[name]
+          );
+    });
     this.#snapshot = this.#read();
     return {
       doc: this.#snapshot,

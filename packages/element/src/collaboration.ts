@@ -1,5 +1,8 @@
 import {
   diffDocs,
+  sameSelection,
+  type EditorSelection,
+  type InlineMark,
   type CollaborationAdapter,
   type EditorStore,
   type PeerPresence,
@@ -117,6 +120,16 @@ export function connect(
         cell?.rowId && cell.columnId
           ? { ...base, rowId: cell.rowId, columnId: cell.columnId }
           : base;
+      if (cell && a === b) {
+        const target = composing;
+        text.dispatchEvent(
+          new CustomEvent('nb-composition-marks', {
+            detail: (offset: number, marks: InlineMark) => {
+              if (offset === a) target.pendingMarks = marks;
+            },
+          })
+        );
+      }
       adapter.beginComposition(composing);
       event.stopPropagation();
     },
@@ -199,21 +212,28 @@ export function connect(
     peers = p;
     draw();
   });
-  const selection = store.subscribeSelection((s) =>
+  let advertised: EditorSelection | null = null;
+  const publish = (s: EditorSelection | null) => {
+    if (sameSelection(s, advertised)) return;
+    advertised = s;
     adapter.setLocalPresence?.({
       user: { name: '', color: '#597ad4' },
       selection: s,
       focusedBlockId: s?.focus.blockId ?? null,
-    })
-  );
-  const refresh = store.subscribe(() => {
+    });
+  };
+  const selection = store.subscribeSelection(publish);
+  const refresh = store.subscribe((change) => {
+    if (root.activeElement) publish(change.selection);
     if (peers.length) draw();
   });
   root.addEventListener(
     'focusout',
     (e) => {
-      if (!root.contains((e as FocusEvent).relatedTarget as Node | null))
+      if (!root.contains((e as FocusEvent).relatedTarget as Node | null)) {
+        advertised = null;
         adapter.setLocalPresence?.(null);
+      }
     },
     capture
   );
