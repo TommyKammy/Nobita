@@ -237,22 +237,53 @@ export function setTableCellText(
   columnId: string,
   text: string
 ): TableData {
-  const value = text.replace(/\r\n?/gu, '\n').slice(0, MAX_CELL_TEXT_LENGTH);
-  const row = data.rows.find(item => item.id === rowId);
-  if (!row) return data;
-  const current = row.cells[columnId];
-  const currentText = current?.text ?? '';
-  if (currentText === value && !current?.runs) return data;
-  return {
-    ...data,
-    rows: data.rows.map(item => {
-      if (item.id !== rowId) return item;
-      const cells = { ...item.cells };
-      if (value) cells[columnId] = { text: value };
-      else delete cells[columnId];
-      return { ...item, cells };
-    }),
-  };
+  const rowIndex = data.rows.findIndex(row => row.id === rowId);
+  if (rowIndex < 0) return data;
+  const row = data.rows[rowIndex]!;
+  const cells = updatePlainCell(row.cells, row.cells, columnId, text);
+  if (cells === row.cells) return data;
+  const rows = data.rows.slice();
+  rows[rowIndex] = { ...row, cells };
+  return { ...data, rows };
+}
+
+function updatePlainCell(
+  original: TableRow['cells'],
+  cells: TableRow['cells'],
+  columnId: string,
+  text: string
+): TableRow['cells'] {
+  const value = asString(text);
+  const current = cells[columnId];
+  if ((current?.text ?? '') === value && !current?.runs) return cells;
+  if (cells === original) cells = { ...cells };
+  if (value) cells[columnId] = { text: value };
+  else delete cells[columnId];
+  return cells;
+}
+
+/** Write a rectangular or ragged grid into existing cells with one copy per changed row. */
+export function setTableRangeText(
+  data: TableData,
+  rowStart: number,
+  columnStart: number,
+  grid: readonly (readonly string[])[]
+): TableData {
+  let rows = data.rows;
+  for (const [offset, values] of grid.entries()) {
+    const index = rowStart + offset;
+    const row = rows[index];
+    if (!row) continue;
+    let cells = row.cells;
+    for (const [columnOffset, value] of values.entries()) {
+      const column = data.columns[columnStart + columnOffset];
+      if (column) cells = updatePlainCell(row.cells, cells, column.id, value);
+    }
+    if (cells === row.cells) continue;
+    if (rows === data.rows) rows = rows.slice();
+    rows[index] = { ...row, cells };
+  }
+  return rows === data.rows ? data : { ...data, rows };
 }
 
 /** Set rich-text runs on a cell, maintaining `text` projection and omitting `runs` when plain. */
@@ -357,11 +388,16 @@ export function setTableColumnWidth(data: TableData, columnId: string, width: nu
   };
 }
 
+export function tsvCell(value: string): string {
+  if (value === '') return '""';
+  return /[\t\n\r"]/u.test(value) ? `"${value.replace(/"/gu, '""')}"` : value;
+}
+
 export function tableToTsv(data: TableData): string {
   const rows = data.rows.map(row =>
     data.columns
       .map(column => tableCellText(row, column.id))
-      .map(value => (/[\t\n\r"]/u.test(value) ? `"${value.replace(/"/gu, '""')}"` : value))
+      .map(tsvCell)
       .join('\t')
   );
   return rows.join('\n');

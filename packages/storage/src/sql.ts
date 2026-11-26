@@ -156,23 +156,13 @@ export class SqlDocumentStore implements DocumentStore {
       };
     }
 
-    await this.#driver.run(UPSERT, [
-      this.#workspaceId,
-      doc.id,
-      doc.title,
-      serialized,
-      now,
-      now,
-    ]);
     const rows = await this.#driver.all<VersionRow>(
-      `SELECT version, updated_at
-         FROM nobita_docs
-        WHERE workspace_id = ? AND id = ?`,
-      [this.#workspaceId, doc.id]
+      UPSERT + ' RETURNING version, updated_at',
+      [this.#workspaceId, doc.id, doc.title, serialized, now, now]
     );
     const row = rows[0];
     if (!row) {
-      throw new DocumentStoreError(`Document ${doc.id} disappeared after saving`);
+      throw new DocumentStoreError(`Document ${doc.id} returned no metadata after saving`);
     }
     return {
       id: doc.id,

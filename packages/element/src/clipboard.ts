@@ -5,6 +5,7 @@ import {
   createBlock,
   createTableColumn,
   createTableRow,
+  hasRichMarks,
   isHighlightColor,
   isTextColor,
   markdownToBlocks,
@@ -248,7 +249,7 @@ function pushRun(runs: InlineRun[], text: string, marks: InlineMark | undefined)
   runs.push(marks ? { text, marks: { ...marks } } : { text });
 }
 
-function inlineRuns(root: Node, inherited: InlineMark | undefined = undefined, skipLists = true): InlineRun[] {
+function inlineRuns(root: Node, preserveWhitespace = false): InlineRun[] {
   const runs: InlineRun[] = [];
   const visit = (node: Node, marks: InlineMark | undefined): void => {
     if (node.nodeType === Node.TEXT_NODE) {
@@ -258,7 +259,7 @@ function inlineRuns(root: Node, inherited: InlineMark | undefined = undefined, s
     }
     if (!isElement(node)) return;
     const name = tag(node);
-    if (skipLists && (name === 'UL' || name === 'OL')) return;
+    if (name === 'UL' || name === 'OL') return;
     if (name === 'BR') {
       pushRun(runs, '\n', marks);
       return;
@@ -268,8 +269,8 @@ function inlineRuns(root: Node, inherited: InlineMark | undefined = undefined, s
     const next = marksForElement(node, marks);
     for (const child of Array.from(node.childNodes)) visit(child, next);
   };
-  for (const child of Array.from(root.childNodes)) visit(child, inherited);
-  return cleanRuns(runs);
+  for (const child of Array.from(root.childNodes)) visit(child, undefined);
+  return preserveWhitespace ? normalizeRuns(runs) : cleanRuns(runs);
 }
 
 function cleanRuns(runs: InlineRun[]): InlineRun[] {
@@ -325,44 +326,25 @@ function languageOf(pre: Element): string {
   return match?.[1] ?? 'text';
 }
 
-function trimCellRuns(runs: readonly InlineRun[]): InlineRun[] {
-  const copy = normalizeRuns(runs);
-  while (copy.length > 0) {
-    const first = copy[0]!;
-    first.text = first.text.replace(/^\s+/u, '');
-    if (first.text.length > 0) break;
-    copy.shift();
-  }
-  while (copy.length > 0) {
-    const last = copy[copy.length - 1]!;
-    last.text = last.text.replace(/\s+$/u, '');
-    if (last.text.length > 0) break;
-    copy.pop();
-  }
-  return normalizeRuns(copy);
-}
-
-function tableToSimpleTable(table: Element): TableData | null {
-  const allRows = Array.from(table.querySelectorAll('tr'));
+function tableToSimpleTable(table: HTMLTableElement): TableData | null {
+  const allRows = Array.from(table.rows);
   if (allRows.length === 0) return null;
-  const width = Math.max(0, ...allRows.map(row => row.querySelectorAll('th,td').length));
+  const width = allRows.reduce((max, row) => Math.max(max, row.cells.length), 0);
   if (width === 0) return null;
   const columns = Array.from({ length: width }, () => createTableColumn());
   const rows = allRows.map(row => {
-    const cells = Array.from(row.querySelectorAll('th,td'));
+    const cells = row.cells;
     const tableRow = createTableRow();
     columns.forEach((column, index) => {
       const cell = cells[index];
       if (!cell) return;
-      const runs = trimCellRuns(inlineRuns(cell));
+      const runs = inlineRuns(cell, true);
       const text = plainText(runs);
       if (!text) return;
-      const hasMarks = runs.some(run => Boolean(run.marks && Object.keys(run.marks).length > 0));
-      tableRow.cells[column.id] = hasMarks ? { text, runs } : { text };
+      tableRow.cells[column.id] = hasRichMarks(runs) ? { text, runs } : { text };
     });
     return tableRow;
   });
-  if (rows.length === 0) rows.push(createTableRow());
   return { columns, rows };
 }
 
@@ -423,7 +405,7 @@ function convertElement(element: Element, out: Block[]): void {
       return;
     }
     case 'TABLE': {
-      const tableData = tableToSimpleTable(element);
+      const tableData = element instanceof HTMLTableElement ? tableToSimpleTable(element) : null;
       if (tableData) {
         out.push(createBlock('table', { props: { table: tableData } }));
         return;

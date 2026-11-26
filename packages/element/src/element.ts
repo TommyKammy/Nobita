@@ -133,6 +133,8 @@ export class NobitaEditorElement extends Base {
   }
 
   set doc(value: Doc | string) {
+    // Controlled hosts can pass the exact document from nobita-change back to us.
+    if (this.#editor && value === this.#editor.doc) return;
     if (this.#editor) this.#editor.setDoc(value);
     else this.#pendingDoc = typeof value === 'string' ? parseDoc(value) : value;
   }
