@@ -467,6 +467,7 @@ export class SharedAdapter implements CollaborationAdapter {
             s.field('splits', id, {
               from: p.split.from,
               path: cut.path,
+              slice: cut.slice,
               token: s.boundary(cut.path, cut.offset),
               clock,
               actor: s.actor,

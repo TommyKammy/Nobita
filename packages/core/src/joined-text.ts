@@ -9,12 +9,14 @@ type Split = {
   from: string;
   path: string;
   token: string;
+  slice?: string | null;
   clock: number;
   actor: string;
 };
 // A native cursor bounds a slice even when another replica edits its text.
 type Part = {
   path: string;
+  slice: string | null;
   from?: string;
   to?: string;
   start: number;
@@ -22,6 +24,7 @@ type Part = {
 };
 const partFor = (id: string): Part => ({
   path: bodyText(id),
+  slice: null,
   start: 0,
   end: 0,
 });
@@ -75,6 +78,7 @@ export class JoinedText implements TextBackend {
                 ? 1
                 : 0)
     );
+    const parents = new Map<string, string | null>();
     for (const [id, op] of operations) {
       if ('into' in op) {
         if (!visible.has(id) && id !== op.into) {
@@ -97,23 +101,48 @@ export class JoinedText implements TextBackend {
         part.path === op.path &&
         cut >= this.start(part) &&
         cut <= this.end(part);
-      let source = group(op.from);
-      if (!source.some(contains)) {
-        // Concurrent splits may have moved the cut into a sibling already.
-        const moved = Array.from(layout.values()).find((parts) =>
-          parts.some(contains)
-        );
-        if (!moved) continue;
-        source = moved;
+      const original = group(op.from);
+      const locate = (matches: (part: Part) => boolean) => {
+        const search = (source: Part[]) => {
+          const index = source.findIndex(
+            (part) => matches(part) && contains(part)
+          );
+          return index < 0 ? undefined : { source, index };
+        };
+        const local = search(original);
+        if (local) return local;
+        for (const parts of layout.values()) {
+          if (parts === original) continue;
+          const moved = search(parts);
+          if (moved) return moved;
+        }
+      };
+      // The left slice keeps its identity; the right slice is named after the
+      // split that created it. Native offsets alone can match both ends of a join.
+      let match = locate(
+        (part) => op.slice === undefined || part.slice === op.slice
+      );
+      if (!match && op.slice !== undefined) {
+        // A concurrent split may already have moved the cut into a descendant.
+        match = locate((part) => {
+          let ancestor = part.slice;
+          while (ancestor !== null) {
+            ancestor = parents.get(ancestor) ?? null;
+            if (ancestor === op.slice) return true;
+          }
+          return false;
+        });
       }
-      const index = source.findIndex(contains),
+      if (!match) continue;
+      const { source, index } = match,
         part = source[index]!;
+      parents.set(id, part.slice);
       const following = source.splice(index + 1, source.length - index - 2);
       const destination = group(id);
       destination.splice(
         destination.length - 1,
         0,
-        { ...part, from: op.token },
+        { ...part, slice: id, from: op.token },
         ...following
       );
       part.to = op.token;
@@ -193,10 +222,10 @@ export class JoinedText implements TextBackend {
         const start = snapshot ? part.start : this.start(part),
           size = (snapshot ? part.end : this.end(part)) - start;
         if (offset <= size || part === parts.at(-1))
-          return { path: part.path, offset: start + offset };
+          return { path: part.path, offset: start + offset, slice: part.slice };
         offset -= size;
       }
-    return { path, offset };
+    return { path, offset, slice: null };
   }
   private ranges(path: string, i: number, length: number) {
     const parts = this.groups.get(path);

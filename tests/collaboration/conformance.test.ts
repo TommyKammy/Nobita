@@ -702,6 +702,84 @@ for (const engine of ['automerge', 'yjs']) {
       expect(a.getDoc()).toEqual(b.getDoc());
     }
   );
+  it(
+    engine +
+      ' splits at the intended occurrence of a reordered native boundary',
+    () => {
+      const { a, b, send, observe } = pair(engine, {
+        ...seed,
+        blocks: [block('a', 'abcd'), block('x', 'X')],
+      });
+      const apply = (change: (doc: Doc) => Doc) => {
+        const previous = a.getDoc(),
+          doc = change(previous);
+        a.applyLocalChange(
+          { previous, doc, source: 'input', selection: null },
+          diffDocs(previous, doc)
+        );
+        expect(a.getDoc()).toEqual(doc);
+        return doc;
+      };
+      apply((doc) => splitBlock(doc, 'a', 2, 'suffix').doc);
+      apply((doc) => moveBlock(doc, 'suffix', 'a', 'before'));
+      apply((doc) => mergeBlockWithNext(doc, 'suffix')!);
+      const joined = apply((doc) => mergeBlockWithNext(doc, 'suffix')!);
+      expect(joined.blocks[0]!.text).toEqual([{ text: 'cdabX' }]);
+      const result = apply((doc) => splitBlock(doc, 'suffix', 4, 'last').doc);
+      expect(result.blocks.map((b) => b.text)).toEqual([
+        [{ text: 'cdab' }],
+        [{ text: 'X' }],
+      ]);
+      expect(observe(true)).toEqual(result);
+      send();
+      expect(b.getDoc()).toEqual(result);
+      a.undo();
+      send();
+      expect(b.getDoc()).toEqual(joined);
+      a.redo();
+      send();
+      expect(b.getDoc()).toEqual(result);
+    }
+  );
+  it(engine + ' locates a concurrent split inside a descendant slice', () => {
+    const { a, b, send, observe } = pair(engine, {
+      ...seed,
+      blocks: [block('a', 'abcd')],
+    });
+    const split = (
+      peer: CollaborationAdapter,
+      from: string,
+      at: number,
+      into: string
+    ) => {
+      const previous = peer.getDoc(),
+        { doc } = splitBlock(previous, from, at, into);
+      peer.applyLocalChange(
+        { previous, doc, source: 'input', selection: null },
+        diffDocs(previous, doc)
+      );
+    };
+    split(a, 'a', 1, 'rest');
+    send();
+    split(a, 'rest', 1, 'middle');
+    // The later logical clock forces this cut to replay after the concurrent
+    // split has already moved its native character into the middle paragraph.
+    edit(b, (doc) => {
+      doc.title = 'Edited';
+    });
+    split(b, 'rest', 2, 'last');
+    send();
+    expect(
+      Object.fromEntries(a.getDoc().blocks.map((b) => [b.id, b.text]))
+    ).toEqual({
+      a: [{ text: 'a' }],
+      rest: [{ text: 'b' }],
+      middle: [{ text: 'c' }],
+      last: [{ text: 'd' }],
+    });
+    expect(observe(true)).toEqual(a.getDoc());
+    expect(b.getDoc()).toEqual(a.getDoc());
+  });
   it.each(['', 'cXb'])(
     engine + ' edits reordered native slices to produce %j',
     (replacement) => {
