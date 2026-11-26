@@ -92,10 +92,24 @@ class YBackend implements Backend {
   format(k: string, i: number, n: number, name: string, v: unknown) {
     this.text(k).format(i, n, { [name]: v ?? null });
   }
-  cursor(k: string, i: number) {
+  cursor(k: string, i: number, exact = false) {
     const p = Y.createRelativePositionFromTypeIndex(this.text(k), i);
-    return () =>
-      Y.createAbsolutePositionFromRelativePosition(p, this.doc)?.index ?? null;
+    return () => {
+      const at = Y.createAbsolutePositionFromRelativePosition(
+        p,
+        this.doc
+      )?.index;
+      if (
+        at === undefined ||
+        (exact &&
+          !Y.compareRelativePositions(
+            p,
+            Y.createRelativePositionFromTypeIndex(this.text(k), at)
+          ))
+      )
+        return null;
+      return at;
+    };
   }
   transact(fn: () => void) {
     this.doc.transact(fn, this.origin);

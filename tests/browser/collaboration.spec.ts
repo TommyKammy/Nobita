@@ -336,3 +336,50 @@ test('record detail IME merges an incoming edit before the composition anchor', 
     )
   ).toBe('Ba日Zb');
 });
+
+test('IME replacement retains a peer insertion inside the original selection', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await page.evaluate(async () => {
+    const path = '/peers.ts';
+    await (await import(path)).setupPeers();
+    const editor = window.__editor!;
+    editor.store.update((d) => ({
+      ...d,
+      blocks: d.blocks.map((b) =>
+        b.id === 'p' ? { ...b, text: [{ text: 'abcd' }] } : b
+      ),
+    }));
+    editor.focus('p', 1);
+    const root = window.__host.shadowRoot! as ShadowRoot & {
+      getSelection(): Selection;
+    };
+    const input = root.querySelector('[data-block-id="p"] .nb-text')!;
+    const node = document
+      .createTreeWalker(input, NodeFilter.SHOW_TEXT)
+      .nextNode()!;
+    root.getSelection().setBaseAndExtent(node, 1, node, 3);
+  });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.imeSetComposition', {
+    text: 'に',
+    selectionStart: 1,
+    selectionEnd: 1,
+  });
+  await page.evaluate(() => {
+    const editor = (document.querySelector('#peer') as typeof window.__host)
+      .editor!;
+    editor.store.update((d) => ({
+      ...d,
+      blocks: d.blocks.map((b) =>
+        b.id === 'p' ? { ...b, text: [{ text: 'abXcd' }] } : b
+      ),
+    }));
+  });
+  await cdp.send('Input.insertText', { text: '日' });
+  const peer = page.locator('#peer [data-block-id="p"] .nb-text');
+  await expect(peer).toHaveText('a日Xd');
+  await page.keyboard.type('Z');
+  await expect(peer).toHaveText('a日ZXd');
+});

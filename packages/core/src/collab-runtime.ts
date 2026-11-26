@@ -44,7 +44,7 @@ export interface Backend {
     name: string,
     value: unknown
   ): void;
-  cursor(key: string, index: number): () => number | null;
+  cursor(key: string, index: number, exact?: boolean): () => number | null;
   transact(fn: () => void): void;
   undo(): boolean;
   redo(): boolean;
@@ -330,7 +330,7 @@ export class SharedAdapter implements CollaborationAdapter {
         target: CompositionTarget;
         path: string;
         start: () => number | null;
-        end: () => number | null;
+        selected: { offset: () => number | null; length: number }[];
       }
     | undefined;
   constructor(
@@ -606,21 +606,32 @@ export class SharedAdapter implements CollaborationAdapter {
               target.rowId,
               target.columnId
             );
+    let i = target.from;
+    const selected =
+      target.from === target.to
+        ? []
+        : Array.from(
+            plainText(this.store.runs(path)).slice(target.from, target.to),
+            (ch) => {
+              const offset = this.store.cursor(path, i, true);
+              i += ch.length;
+              return { offset, length: ch.length };
+            }
+          );
     this.#composition = {
       target,
       path,
       start: this.store.cursor(path, target.from),
-      end: this.store.cursor(path, target.to),
+      selected,
     };
   }
   commitComposition(text: string): RemoteDocUpdate {
     const comp = this.#composition;
     this.#composition = undefined;
     if (!comp) return { doc: this.#snapshot };
-    const from = comp.start(),
-      to = comp.end();
+    const start = comp.start();
     const block = find(this.#snapshot.blocks, comp.target.blockId);
-    if (from === null || to === null || !block) return { doc: this.#snapshot };
+    if (start === null || !block) return { doc: this.#snapshot };
     if (comp.target.rowId !== undefined) {
       const grid = block.props.table ?? block.props.database,
         { rowId, columnId } = comp.target;
@@ -632,8 +643,21 @@ export class SharedAdapter implements CollaborationAdapter {
       )
         return { doc: this.#snapshot };
     }
+    const ranges: { start: number; length: number }[] = [];
+    for (const char of comp.selected) {
+      const at = char.offset();
+      if (at === null) continue;
+      const last = ranges.at(-1);
+      if (last && last.start + last.length === at) last.length += char.length;
+      else ranges.push({ start: at, length: char.length });
+    }
+    let from = start;
     this.store.transact(() => {
-      this.store.splice(comp.path, from, Math.max(0, to - from), text);
+      for (const range of ranges.reverse()) {
+        this.store.splice(comp.path, range.start, range.length, '');
+        from -= Math.max(0, Math.min(range.length, from - range.start));
+      }
+      this.store.splice(comp.path, from, 0, text);
       if (comp.target.pendingMarks && text.length)
         for (const name of BOOLEAN_MARK_KEYS)
           this.store.format(

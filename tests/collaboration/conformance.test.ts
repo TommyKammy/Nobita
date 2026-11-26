@@ -364,3 +364,86 @@ for (const engine of ['automerge', 'yjs']) {
     }
   );
 }
+
+it('preserves concurrent identical Automerge formatting across independent undo and redo', () => {
+  const { a, b, send } = pair('automerge', seed);
+  for (const peer of [a, b])
+    edit(peer, (d) => {
+      d.blocks[0]!.text = [{ text: 'a', marks: { bold: true } }, { text: 'b' }];
+    });
+  send();
+  a.undo();
+  send();
+  expect(b.getDoc().blocks[0]!.text).toEqual([
+    { text: 'a', marks: { bold: true } },
+    { text: 'b' },
+  ]);
+  b.undo();
+  send();
+  expect(a.getDoc().blocks[0]!.text).toEqual([{ text: 'ab' }]);
+  a.redo();
+  send();
+  expect(b.getDoc().blocks[0]!.text[0]?.marks?.bold).toBe(true);
+});
+
+for (const engine of ['automerge', 'yjs']) {
+  it.each(['abX😀cd', 'aX😀d', 'aXd'])(
+    engine + ' replaces only the original IME characters in %s',
+    (remote) => {
+      const doc = structuredClone(seed);
+      doc.blocks[0]!.text = [{ text: 'ab😀cd' }];
+      const { a, b, send } = pair(engine, doc);
+      a.beginComposition({ blockId: 'a', from: 1, to: 5 });
+      edit(b, (d) => {
+        d.blocks[0]!.text = [{ text: remote }];
+      });
+      send();
+      const update = a.commitComposition('日');
+      const text = update.doc.blocks[0]!.text.map((r) => r.text).join('');
+      expect([...text].sort()).toEqual([...'a日Xd'].sort());
+      expect(update.remapPoint?.({ blockId: 'a', offset: 1 })?.offset).toBe(
+        text.indexOf('日') + 1
+      );
+      send();
+      expect(b.getDoc()).toEqual(a.getDoc());
+      a.undo();
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual([{ text: remote }]);
+    }
+  );
+}
+
+it('restores overlapping Automerge mark ranges independently after synchronization', () => {
+  const { a, b, send } = pair('automerge', seed);
+  edit(a, (d) => {
+    d.blocks[0]!.text = [{ text: 'ab', marks: { bold: true } }];
+  });
+  edit(b, (d) => {
+    d.blocks[0]!.text = [{ text: 'a' }, { text: 'b', marks: { bold: true } }];
+  });
+  send();
+  expect(a.getDoc().blocks[0]!.text).toEqual([
+    { text: 'ab', marks: { bold: true } },
+  ]);
+  a.undo();
+  send();
+  expect(b.getDoc().blocks[0]!.text).toEqual([
+    { text: 'a' },
+    { text: 'b', marks: { bold: true } },
+  ]);
+  // A later removal wins until its own author undoes it.
+  edit(a, (d) => {
+    d.blocks[0]!.text = [{ text: 'ab' }];
+  });
+  send();
+  expect(b.getDoc().blocks[0]!.text).toEqual([{ text: 'ab' }]);
+  a.undo();
+  send();
+  expect(b.getDoc().blocks[0]!.text).toEqual([
+    { text: 'a' },
+    { text: 'b', marks: { bold: true } },
+  ]);
+  b.undo();
+  send();
+  expect(a.getDoc().blocks[0]!.text).toEqual([{ text: 'ab' }]);
+});

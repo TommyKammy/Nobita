@@ -1,6 +1,6 @@
 import diffText from 'fast-diff';
 import * as A from '@automerge/automerge';
-import type { Doc, InlineRun } from '@nobita/core';
+import { normalizeRuns, type Doc, type InlineRun } from '@nobita/core';
 import {
   SharedAdapter,
   type Backend,
@@ -41,11 +41,17 @@ class AutomergeBackend implements Backend {
     };
   }
   private sequence = 0;
+  private markClock = 0;
   // Flat field identities avoid competing Automerge map creations on previously empty blocks.
   private names = new Map<string, Set<string>>();
   reindex() {
     this.names.clear();
     for (const path of Object.keys(this.doc.fields)) {
+      if (path.startsWith('!clock:'))
+        this.markClock = Math.max(
+          this.markClock,
+          Number(this.doc.fields[path])
+        );
       if (path.startsWith('!')) continue;
       const [k, n] = JSON.parse(path) as [string, string];
       this.track(k, n);
@@ -164,30 +170,48 @@ class AutomergeBackend implements Backend {
   }
   runs(k: string): InlineRun[] {
     if (!this.state.texts[k]) return [];
-    return A.spans(this.state, ['texts', k]).flatMap((s) =>
-      s.type === 'text'
-        ? [
-            {
-              text: s.value,
-              ...(s.marks &&
-                Object.keys(s.marks).length && {
-                  marks: Object.fromEntries(
-                    Object.entries(s.marks).map(([n, v]) => [
-                      n,
-                      JSON.parse(String(v)),
-                    ])
-                  ),
-                }),
-            },
-          ]
-        : []
-    );
+    const runs: InlineRun[] = [];
+    for (const span of A.spans(this.state, ['texts', k])) {
+      if (span.type !== 'text') continue;
+      const marks: Record<string, unknown> = {};
+      const latest = new Map<string, { clock: number; actor: string }>();
+      for (const [id, raw] of Object.entries(span.marks ?? {})) {
+        if (!id.startsWith('@')) {
+          // Native marks from older snapshots form the base layer.
+          if (!latest.has(id)) marks[id] = JSON.parse(String(raw));
+          continue;
+        }
+        if (this.state.fields['!' + id] !== undefined) continue;
+        const [clock, actor, name] = JSON.parse(id.slice(1)) as [
+          number,
+          string,
+          string,
+        ];
+        const winner = latest.get(name);
+        if (
+          winner &&
+          (winner.clock > clock ||
+            (winner.clock === clock && winner.actor >= actor))
+        )
+          continue;
+        latest.set(name, { clock, actor });
+        if (raw === '') delete marks[name];
+        else marks[name] = JSON.parse(String(raw));
+      }
+      runs.push({ text: span.value, marks });
+    }
+    return normalizeRuns(runs);
   }
-  cursor(k: string, i: number) {
-    if (this.state.texts[k] === undefined) return () => 0;
+  cursor(k: string, i: number): () => number;
+  cursor(k: string, i: number, exact: boolean): () => number | null;
+  cursor(k: string, i: number, exact = false) {
+    if (this.state.texts[k] === undefined) return () => (exact ? null : 0);
     const path = ['texts', k],
       c = A.getCursor(this.state, path, i);
-    return () => A.getCursorPosition(this.state, path, c);
+    return () => {
+      const at = A.getCursorPosition(this.state, path, c);
+      return exact && A.getCursor(this.state, path, at) !== c ? null : at;
+    };
   }
   splice(k: string, i: number, n: number, v: string) {
     this.ensureText(k);
@@ -218,40 +242,40 @@ class AutomergeBackend implements Backend {
         let pos = after();
         this.splice(k, pos, 0, old);
         Array.from(old).forEach((ch, j) => {
-          for (const [name, value] of Object.entries(marks[j]!))
-            this.format(k, pos, ch.length, name, JSON.parse(String(value)));
+          // Restore the original native marks, including their operation identities.
+          const range = {
+            start: pos,
+            end: pos + ch.length,
+            expand: 'none' as const,
+          };
+          const inherited = A.marksAt(this.state, path, pos),
+            saved = marks[j]!;
+          for (const name of Object.keys(inherited))
+            if (!(name in saved)) A.unmark(this.state, path, range, name);
+          for (const [name, value] of Object.entries(saved))
+            if (value !== inherited[name])
+              A.mark(this.state, path, range, name, value);
           pos += ch.length;
         });
       }
     });
   }
   format(k: string, i: number, n: number, name: string, v: unknown) {
-    const path = ['texts', k],
-      state = this.state,
-      encoded = JSON.stringify(v);
-    let offset = i;
-    for (const ch of state.texts[k]!.slice(i, i + n)) {
-      const cursor = A.getCursor(state, path, offset),
-        previous = A.marksAt(state, path, offset)[name];
-      this.recording.push(() => {
-        const at = A.getCursorPosition(this.state, path, cursor);
-        if (
-          A.getCursor(this.state, path, at) === cursor &&
-          A.marksAt(this.state, path, at)[name] === encoded
-        )
-          this.format(
-            k,
-            at,
-            ch.length,
-            name,
-            previous === undefined ? undefined : JSON.parse(String(previous))
-          );
-      });
-      offset += ch.length;
-    }
-    const range = { start: i, end: i + n, expand: 'none' as const };
-    if (encoded === undefined) A.unmark(state, path, range, name);
-    else A.mark(state, path, range, name, encoded);
+    if (!n) return;
+    // Each operation has its own native Peritext range. Undo masks that
+    // operation only; overlapping peer marks remain on their original ranges.
+    const actor = this.actor,
+      clock = ++this.markClock;
+    this.state.fields['!clock:' + actor] = String(clock);
+    const id = '@' + JSON.stringify([clock, actor, name]);
+    A.mark(
+      this.state,
+      ['texts', k],
+      { start: i, end: i + n, expand: 'none' },
+      id,
+      JSON.stringify(v) ?? ''
+    );
+    this.recording.push(() => this.toggleUndo('!' + id, ''));
   }
   private change(fn: Action) {
     const actions: Action[] = [];
