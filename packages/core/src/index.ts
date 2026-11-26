@@ -94,6 +94,12 @@ export type {
 } from './database.js';
 
 export {
+  buildTableOccupancyGrid, clearTableRange, expandTableRange, tableSpanAt,
+  mergeTableCells, unmergeTableCell, unmergeTableRange,
+  type TableRect,
+} from './table-spans.js';
+
+export {
   cloneTableData,
   clearTableColumn,
   clearTableRow,

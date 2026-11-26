@@ -1,3 +1,4 @@
+import { tableSpanAt } from './table-spans.js';
 import { createBlock, createDoc } from './doc.js';
 import { cloneDatabaseData, databaseCellDisplay, normalizeDatabaseData, sortedDatabaseRows } from './database.js';
 import { cloneRuns, parseInlineRuns, runsToHtml } from './text.js';
@@ -273,9 +274,11 @@ function tableToHtml(block: Block): string {
   const table = block.props.table;
   if (!table) return `<table data-block-id="${block.id}"></table>`;
   const rows = table.rows
-    .map(row => {
+    .map((row, r) => {
       const cells = table.columns
-        .map(column => {
+        .map((column, c) => {
+          const span = tableSpanAt(table, r, c);
+          if (span && (span.rowStart !== r || span.columnStart !== c)) return '';
           const cell = row.cells[column.id];
           const color = column.backgroundColor ?? row.backgroundColor;
           const style = color
@@ -285,7 +288,9 @@ function tableToHtml(block: Block): string {
             cell?.runs && cell.runs.length > 0
               ? runsToInlineHtml(cell.runs)
               : escapeHtml(cell?.text ?? '');
-          return `<td${style}>${content}</td>`;
+          const colspan = cell?.colspan ? ` colspan="${cell.colspan}"` : '';
+          const rowspan = cell?.rowspan ? ` rowspan="${cell.rowspan}"` : '';
+          return `<td${colspan}${rowspan}${style}>${content}</td>`;
         })
         .join('');
       return `<tr>${cells}</tr>`;
