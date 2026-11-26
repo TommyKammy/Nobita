@@ -7,6 +7,7 @@ import {
   type PeerPresence,
   type RemoteDocUpdate,
 } from './collab.js';
+import { bodyText, JoinedText, type TextBackend } from './joined-text.js';
 import { BOOLEAN_MARK_KEYS } from './types.js';
 import { marksAt, plainText } from './text.js';
 import type {
@@ -35,6 +36,7 @@ export interface Backend {
   list(key: string): string[];
   insert(key: string, index: number, value: string): void;
   ensureText(key: string): void;
+  prepareCells?(keys: Iterable<string>): void;
   runs(key: string): InlineRun[];
   splice(key: string, index: number, count: number, text: string): void;
   format(
@@ -65,7 +67,7 @@ function fields(store: Backend, path: string, before: Fields, next: Fields) {
     if (!equal(before[name], next[name])) store.field(path, name, next[name]);
 }
 function applyMarkChanges(
-  store: Backend,
+  store: TextBackend,
   path: string,
   from: number,
   length: number,
@@ -81,7 +83,7 @@ function applyMarkChanges(
   }
 }
 function writeText(
-  store: Backend,
+  store: TextBackend,
   path: string,
   before: InlineRun[],
   next: InlineRun[]
@@ -302,7 +304,14 @@ function readGrid(store: Backend, id: string, kind: string): Grid {
     ...store.read(key(id, kind, 'col', c)),
     id: c,
   }));
-  const rows = axis('rows').map((r) => {
+  const rowIds = axis('rows');
+  store.prepareCells?.(
+    (function* () {
+      for (const r of rowIds)
+        for (const c of columns) yield key(id, kind, r, c.id);
+    })()
+  );
+  const rows = rowIds.map((r) => {
     const cells: Fields = Object.create(null);
     for (const c of columns) {
       const path = key(id, kind, r, c.id),
@@ -331,11 +340,11 @@ function readGrid(store: Backend, id: string, kind: string): Grid {
   });
   return { ...store.read(key(id, kind)), rows, columns } as Grid;
 }
-const bodyText = (id: string) => key(id, 'text');
 type Location = { parent: string | null; clock: number; actor: string };
 export class SharedAdapter implements CollaborationAdapter {
   #listeners = new Set<(u: RemoteDocUpdate) => void>();
   #snapshot: Doc;
+  #text: JoinedText;
   #composition:
     | {
         target: CompositionTarget;
@@ -349,6 +358,7 @@ export class SharedAdapter implements CollaborationAdapter {
     seed?: Doc,
     private presence?: PresenceChannel
   ) {
+    this.#text = new JoinedText(store, []);
     if (!store.read('doc').id) {
       if (!seed)
         throw new Error(
@@ -426,7 +436,9 @@ export class SharedAdapter implements CollaborationAdapter {
           placements.push(p);
           break;
         case 'replaceBlockText':
-          writeText(s, bodyText(id), p.previous, p.next);
+          if (p.mergedFrom !== undefined)
+            s.field('joins', p.mergedFrom, { into: id, clock, actor: s.actor });
+          else writeText(this.#text, bodyText(id), p.previous, p.next);
           break;
         case 'setBlockType':
           s.field('types', id, p.blockType);
@@ -484,6 +496,7 @@ export class SharedAdapter implements CollaborationAdapter {
       types = s.read('types');
     const live = Object.keys(types).sort(),
       parents = new Map<string, string | null>();
+    this.#text = new JoinedText(s, live);
     for (const id of live) {
       const choices = Object.values(s.read(key('locations', id))) as Location[];
       const win = choices.reduce<Location | undefined>(
@@ -537,7 +550,7 @@ export class SharedAdapter implements CollaborationAdapter {
           id,
           type: types[id] as Block['type'],
           props,
-          text: s.runs(bodyText(id)),
+          text: this.#text.runs(bodyText(id)),
           children: children(id),
         };
       });
@@ -556,16 +569,27 @@ export class SharedAdapter implements CollaborationAdapter {
     this.#snapshot = this.#read();
   }
   protected received(history?: RemoteDocUpdate['history']) {
-    const offsets = this.store.offsets;
+    const offsets = this.store.offsets,
+      previousText = this.#text;
     this.#snapshot = this.#read();
-    const doc = this.#snapshot;
+    const doc = this.#snapshot,
+      updatedText = this.#text;
     const update: RemoteDocUpdate = {
       doc,
       ...(history && { history }),
-      remapPoint: (p) =>
-        find(doc.blocks, p.blockId)
-          ? { ...p, offset: offsets(bodyText(p.blockId), p.offset) }
-          : null,
+      remapPoint: (p) => {
+        const point = previousText.at(bodyText(p.blockId), p.offset, true);
+        const id =
+          updatedText.owner(point.path) ??
+          (JSON.parse(point.path)[0] as string);
+        if (!find(doc.blocks, id)) return null;
+        return {
+          blockId: id,
+          offset:
+            (updatedText.prefix(bodyText(id), point.path, true) ?? 0) +
+            offsets(point.path, point.offset),
+        };
+      },
       remapCellOffset: (id, row, col, i) => {
         const b = find(doc.blocks, id),
           grid = b?.props.table ?? b?.props.database;
@@ -617,14 +641,24 @@ export class SharedAdapter implements CollaborationAdapter {
               target.rowId,
               target.columnId
             );
+    const cursor = (i: number, exact = false) => {
+      if (target.rowId !== undefined) return this.store.cursor(path, i, exact);
+      const anchor = this.#text.anchor(path, i, exact);
+      return () => {
+        const at = anchor.resolve();
+        const owner = this.#text.owner(path) ?? target.blockId;
+        const prefix = this.#text.prefix(bodyText(owner), anchor.path);
+        return at === null || prefix === null ? null : prefix + at;
+      };
+    };
     let i = target.from;
     const selected =
       target.from === target.to
         ? []
         : Array.from(
-            plainText(this.store.runs(path)).slice(target.from, target.to),
+            plainText(this.#text.runs(path)).slice(target.from, target.to),
             (ch) => {
-              const offset = this.store.cursor(path, i, true);
+              const offset = cursor(i, true);
               i += ch.length;
               return { offset, length: ch.length };
             }
@@ -632,7 +666,7 @@ export class SharedAdapter implements CollaborationAdapter {
     this.#composition = {
       target,
       path,
-      start: this.store.cursor(path, target.from),
+      start: cursor(target.from),
       selected,
     };
   }
@@ -641,7 +675,12 @@ export class SharedAdapter implements CollaborationAdapter {
     this.#composition = undefined;
     if (!comp) return { doc: this.#snapshot };
     const start = comp.start();
-    const block = find(this.#snapshot.blocks, comp.target.blockId);
+    const id =
+      comp.target.rowId === undefined
+        ? (this.#text.owner(comp.path) ?? comp.target.blockId)
+        : comp.target.blockId;
+    const path = comp.target.rowId === undefined ? bodyText(id) : comp.path;
+    const block = find(this.#snapshot.blocks, id);
     if (start === null || !block) return { doc: this.#snapshot };
     if (comp.target.rowId !== undefined) {
       const grid = block.props.table ?? block.props.database,
@@ -663,7 +702,7 @@ export class SharedAdapter implements CollaborationAdapter {
       else ranges.push({ start: at, length: char.length });
     }
     let from = start;
-    const desired = { ...marksAt(this.store.runs(comp.path), start) };
+    const desired = { ...marksAt(this.#text.runs(path), start) };
     delete desired.mention;
     delete desired.page;
     if (comp.target.pendingMarks) {
@@ -674,26 +713,19 @@ export class SharedAdapter implements CollaborationAdapter {
     }
     this.store.transact(() => {
       for (const range of ranges.reverse()) {
-        this.store.splice(comp.path, range.start, range.length, '');
+        this.#text.splice(path, range.start, range.length, '');
         from -= Math.max(0, Math.min(range.length, from - range.start));
       }
-      this.store.splice(comp.path, from, 0, text);
+      this.#text.splice(path, from, 0, text);
       if (!text.length) return;
-      const actual = marksAt(this.store.runs(comp.path), from + text.length);
-      applyMarkChanges(
-        this.store,
-        comp.path,
-        from,
-        text.length,
-        actual,
-        desired
-      );
+      const actual = marksAt(this.#text.runs(path), from + text.length);
+      applyMarkChanges(this.#text, path, from, text.length, actual, desired);
     });
     this.#snapshot = this.#read();
     return {
       doc: this.#snapshot,
       remapPoint: () => ({
-        blockId: comp.target.blockId,
+        blockId: id,
         offset: from + text.length,
       }),
     };

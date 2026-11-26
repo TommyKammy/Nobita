@@ -423,3 +423,49 @@ test('disconnect during IME retains deferred peer edits for subsequent local typ
     'Bab'
   );
 });
+
+for (const key of ['Backspace', 'Delete']) {
+  test(
+    key + ' joins a paragraph without dropping offline typing in it',
+    async ({ page }) => {
+      await openFixture(page);
+      const network = await page.evaluateHandle(async () => {
+        const path = '/peers.ts';
+        const network = await (await import(path)).setupPeers();
+        const editor = window.__editor!,
+          p = editor.doc.blocks[0]!;
+        editor.setDoc({
+          ...editor.doc,
+          blocks: [
+            { ...p, text: [{ text: 'a' }] },
+            { ...p, id: 'q', text: [{ text: 'b' }] },
+          ],
+        });
+        network.pause();
+        return network;
+      });
+      await page.evaluate(
+        (key) =>
+          window.__editor!.focus(
+            key === 'Backspace' ? 'q' : 'p',
+            key === 'Backspace' ? 0 : 1
+          ),
+        key
+      );
+      await page.keyboard.press(key);
+      await expect(page.locator('#editor .nb-text')).toHaveCount(1);
+      await page.evaluate(() =>
+        (document.querySelector('#peer') as typeof window.__host).editor!.focus(
+          'q',
+          1
+        )
+      );
+      await page.keyboard.type('X');
+      await network.evaluate((n) => n.resume());
+      await expect(page.locator('#editor .nb-text')).toHaveText('abX');
+      await expect(page.locator('#peer .nb-text')).toHaveText('abX');
+      await page.keyboard.type('Y');
+      await expect(page.locator('#editor .nb-text')).toHaveText('abXY');
+    }
+  );
+}

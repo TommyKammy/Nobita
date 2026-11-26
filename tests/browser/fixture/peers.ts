@@ -39,8 +39,13 @@ export async function setupPeers(history = true) {
       return () => {};
     },
   });
-  a.on('update', (u: Uint8Array) => Y.applyUpdate(b, u));
-  b.on('update', (u: Uint8Array) => Y.applyUpdate(a, u));
+  let online = true;
+  a.on('update', (u: Uint8Array) => {
+    if (online) Y.applyUpdate(b, u);
+  });
+  b.on('update', (u: Uint8Array) => {
+    if (online) Y.applyUpdate(a, u);
+  });
   const withoutHistory: CollaborationAdapter = {
     getDoc: () => first.getDoc(),
     applyLocalChange: (c, p) => first.applyLocalChange(c, p),
@@ -53,4 +58,14 @@ export async function setupPeers(history = true) {
     one.editor!.setCollaboration(history ? first : withoutHistory),
     two.editor!.setCollaboration(second),
   ]);
+  return {
+    pause() {
+      online = false;
+    },
+    resume() {
+      online = true;
+      Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+      Y.applyUpdate(a, Y.encodeStateAsUpdate(b));
+    },
+  };
 }

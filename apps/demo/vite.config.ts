@@ -17,6 +17,7 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
+    modulePreload: { polyfill: false },
     sourcemap: true,
     minify: 'terser',
     terserOptions: { mangle: { properties: { regex: new RegExp('^(' + controllerMethods.join('|') + ')$') } } },

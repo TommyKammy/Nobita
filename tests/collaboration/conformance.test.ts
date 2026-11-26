@@ -5,6 +5,8 @@ import { AutomergeCollaborationAdapter } from '../../packages/collab-automerge/s
 import {
   diffDocs,
   insertTextAt,
+  mergeBlockWithPrevious,
+  mergeBlockWithNext,
   type InlineMark,
   type Block,
   type Doc,
@@ -533,6 +535,96 @@ for (const engine of ['automerge', 'yjs']) {
       expect(b.getDoc().blocks[0]!.text).toEqual([
         chip,
         { text: '日', marks: toggle ? { color: 'blue' } : styling },
+      ]);
+    }
+  );
+}
+
+for (const engine of ['automerge', 'yjs']) {
+  it.each(['table', 'database'] as const)(
+    engine + ' merges edits at a concurrently created %s intersection',
+    (kind) => {
+      const initial = structuredClone(seed),
+        grid = {
+          columns: [{ id: 'c1', name: 'Old', type: 'text' as const }],
+          rows: [{ id: 'r1', cells: {} }],
+        };
+      initial.blocks[0]!.props =
+        kind === 'table'
+          ? { table: grid }
+          : { database: { ...grid, variant: 'database' } };
+      initial.blocks[0]!.type = kind;
+      const { a, b, send } = pair(engine, initial),
+        data = (d: Doc) =>
+          (d.blocks[0]!.props.table ?? d.blocks[0]!.props.database)!;
+      edit(a, (d) => {
+        data(d).rows.push({ id: 'r2', cells: {} });
+      });
+      edit(b, (d) => {
+        data(d).columns.push({ id: 'c2', name: 'New', type: 'text' });
+      });
+      send();
+      for (const [peer, text] of [
+        [a, 'A'],
+        [b, 'B'],
+      ] as const)
+        edit(peer, (d) => {
+          data(d).rows[1]!.cells.c2 = { text };
+        });
+      send();
+      expect(a.getDoc()).toEqual(b.getDoc());
+      expect(
+        [...(data(a.getDoc()).rows[1]!.cells.c2!.text ?? '')].sort()
+      ).toEqual(['A', 'B']);
+      a.undo();
+      send();
+      expect(data(b.getDoc()).rows[1]!.cells.c2?.text).toBe('B');
+    }
+  );
+  it.each(['Backspace', 'Delete'])(
+    engine + ' preserves edits to the source paragraph across %s merge',
+    (direction) => {
+      const initial = structuredClone(seed);
+      initial.blocks[0]!.text = [{ text: 'a' }];
+      initial.blocks[1]!.text = [{ text: 'b' }];
+      const { a, b, send } = pair(engine, initial),
+        previous = a.getDoc();
+      const doc =
+        direction === 'Backspace'
+          ? mergeBlockWithPrevious(previous, 'b')!.doc
+          : mergeBlockWithNext(previous, 'a')!;
+      a.applyLocalChange(
+        { doc, previous, selection: null, source: 'update' },
+        diffDocs(previous, doc)
+      );
+      edit(b, (d) => {
+        d.blocks[1]!.text.push({ text: 'X', marks: { bold: true } });
+      });
+      send();
+      expect(a.getDoc()).toEqual(b.getDoc());
+      expect(a.getDoc().blocks[0]!.text).toEqual([
+        { text: 'ab' },
+        { text: 'X', marks: { bold: true } },
+      ]);
+      a.undo();
+      send();
+      expect(b.getDoc().blocks[1]!.text).toEqual([
+        { text: 'b' },
+        { text: 'X', marks: { bold: true } },
+      ]);
+      a.redo();
+      send();
+      edit(b, (d) => {
+        d.blocks[0]!.text = [
+          { text: 'A!' },
+          { text: 'X', marks: { bold: true } },
+        ];
+      });
+      send();
+      expect(a.getDoc()).toEqual(b.getDoc());
+      expect(a.getDoc().blocks[0]!.text).toEqual([
+        { text: 'A!' },
+        { text: 'X', marks: { bold: true } },
       ]);
     }
   );

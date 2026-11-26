@@ -165,6 +165,48 @@ class AutomergeBackend implements Backend {
       });
     });
   }
+  private textRoot?: { id: string; hash: string; maxOp: number };
+
+  prepareCells(keys: Iterable<string>) {
+    if (this.draft) return;
+    const changes: Uint8Array[] = [];
+    for (const k of keys) {
+      if (this.doc.texts[k] !== undefined) continue;
+      if (!this.textRoot) {
+        const id = A.getObjectId(this.doc.texts)!;
+        const [counter, actor] = id.split('@');
+        const creation = A.getChangesMetaSince(this.doc, []).find(
+          (change) =>
+            change.actor === actor &&
+            change.startOp <= Number(counter) &&
+            Number(counter) <= change.maxOp
+        )!;
+        this.textRoot = { id, hash: creation.hash, maxOp: creation.maxOp };
+      }
+      // A row and a column can first meet on multiple offline replicas. Give
+      // the empty text exactly the same creation operation on every replica.
+      // The actor namespace is longer than an Automerge-generated actor ID.
+      const actor =
+        'ff'.repeat(17) +
+        Array.from(new TextEncoder().encode(k), (b) =>
+          b.toString(16).padStart(2, '0')
+        ).join('');
+      const root = this.textRoot;
+      changes.push(
+        A.encodeChange({
+          actor,
+          author: null,
+          seq: 1,
+          startOp: root.maxOp + 1,
+          time: 0,
+          message: null,
+          deps: [root.hash],
+          ops: [{ action: 'makeText', obj: root.id, key: k, pred: [] }],
+        })
+      );
+    }
+    if (changes.length) [this.doc] = A.applyChanges(this.doc, changes);
+  }
   ensureText(k: string) {
     if (this.state.texts[k] === undefined) this.state.texts[k] = '';
   }
