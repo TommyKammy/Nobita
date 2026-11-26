@@ -13,6 +13,7 @@ export type {
   MentionProvider,
   NobitaOptions,
   NobitaTheme,
+  PageProvider,
 } from './editor.js';
 
 export {

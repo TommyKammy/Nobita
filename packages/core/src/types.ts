@@ -276,6 +276,7 @@ export interface InlineMark {
   highlight?: HighlightColor;
   color?: TextColor;
   mention?: MentionRef;
+  page?: PageInfo;
 }
 
 export type MarkKey = keyof InlineMark;

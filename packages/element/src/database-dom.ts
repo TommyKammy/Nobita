@@ -21,6 +21,7 @@ import type {
   DatabaseView as DatabaseViewConfig,
   InlineMark,
   InlineRun,
+  PageInfo,
 } from '@nobita/core';
 import { nativeSelection } from './dom.js';
 import { icon } from './icons.js';
@@ -434,12 +435,13 @@ export function runsSignature(runs: readonly InlineRun[] | undefined): string {
 
 export function renderTextCellContent(
   element: HTMLElement,
-  cell: DatabaseCell | undefined
+  cell: DatabaseCell | undefined,
+  resolvePage?: (pageId: string) => PageInfo | null
 ): void {
   const runs = cell?.runs;
   element.dataset.runs = runsSignature(runs);
   if (runs && runs.length > 0) {
-    renderInlineRuns(element, runs);
+    renderInlineRuns(element, runs, resolvePage);
   } else {
     element.textContent = cell?.text ?? '';
   }
@@ -467,14 +469,15 @@ export function readRichTextRuns(target: HTMLElement): InlineRun[] {
 
 export function renderRichTextRuns(
   target: HTMLElement,
-  runs: readonly InlineRun[]
+  runs: readonly InlineRun[],
+  resolvePage?: (pageId: string) => PageInfo | null
 ): void {
   if (isMultilineRichText(target)) {
-    if (runs.length > 0) renderInlineRuns(target, runs);
+    if (runs.length > 0) renderInlineRuns(target, runs, resolvePage);
     else target.replaceChildren();
     return;
   }
-  if (runs.some(run => run.marks)) renderInlineRuns(target, runs);
+  if (runs.some(run => run.marks)) renderInlineRuns(target, runs, resolvePage);
   else target.textContent = plainText(runs);
 }
 

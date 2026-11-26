@@ -20,6 +20,7 @@ export interface PageRecord {
   doc: Doc;
   parentId: string | null;
   favorite: boolean;
+  order?: number;
   updatedAt: number;
 }
 
@@ -56,6 +57,15 @@ const code = (text: string, language = 'ts'): Block =>
   createBlock('code', { text, props: { language } });
 
 const divider = (): Block => createBlock('divider');
+
+const pageCard = (pageId: string, pageTitle: string, pageIcon?: string): Block =>
+  createBlock('page', {
+    props: {
+      pageId,
+      pageTitle,
+      ...(pageIcon ? { pageIcon } : {}),
+    },
+  });
 
 const database = (
   _variant: 'table' | 'database',
@@ -132,10 +142,21 @@ export function createSeedState(): DemoState {
       bulleted('**Small surface** — 13 block types, one dependency-free package.'),
       heading(3, 'Try the controls'),
       todo('Type `/` anywhere to open the block menu', false),
+      todo('Type `[[` to link another page or create a new one', false),
       todo('Drag the handle in the left gutter to reorder blocks', false),
       todo('Select text to reveal the formatting toolbar', false),
-      todo('Press `⌘K` to search pages, `⌘N` for a new page', true),
-      todo('Open **Data views** to inspect typed tables and databases', false),
+      todo('Press `⌘K` to search pages and content, `⌘N` for a new page', true),
+      createBlock('todo', {
+        text: [
+          { text: 'Open ' },
+          {
+            text: 'Data views',
+            marks: { page: { id: 'data-views', title: 'Data views', icon: '📊' } },
+          },
+          { text: ' to inspect typed tables and databases' },
+        ],
+        props: { checked: false },
+      }),
       quote('The best editor is the one that disappears while you write.'),
       code(
         `const doc = editor.getDoc();
@@ -148,12 +169,26 @@ await fetch('/api/docs/' + doc.id, {
         'ts'
       ),
       divider(),
-      heading(3, 'What is inside'),
-      paragraph(
-        'Headings, lists, to-dos, quotes, callouts, code, dividers, images, tables and databases, inline marks, links, markdown shortcuts, paste from HTML or Markdown, drag & drop, and history — without a framework runtime.'
-      ),
+      heading(3, 'Explore this workspace'),
+      createBlock('paragraph', {
+        text: [
+          { text: 'Jump to ' },
+          {
+            text: 'Design principles',
+            marks: { page: { id: 'design-principles', title: 'Design principles', icon: '🎨' } },
+          },
+          { text: ' or ' },
+          {
+            text: 'Keyboard shortcuts',
+            marks: { page: { id: 'shortcuts', title: 'Keyboard shortcuts', icon: '⌨️' } },
+          },
+          { text: ' — linked pages automatically track backlinks at the bottom of each page.' },
+        ],
+      }),
+      pageCard('embedding-guide', 'Embedding guide', '🧩'),
+      pageCard('data-views', 'Data views', '📊'),
       callout(
-        'Next: open **Embedding guide** in the sidebar to see how little code it takes to put Nobita inside your own product.',
+        'Next: open **Embedding guide** above or in the sidebar to see how little code it takes to put Nobita inside your own product.',
         'success'
       ),    ],
     true
@@ -375,7 +410,10 @@ export function loadState(): DemoState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return createSeedState();
     const parsed = JSON.parse(raw) as {
-      pages?: Record<string, { doc?: unknown; parentId?: string | null; favorite?: boolean; updatedAt?: number }>;
+      pages?: Record<
+        string,
+        { doc?: unknown; parentId?: string | null; favorite?: boolean; order?: number; updatedAt?: number }
+      >;
       activeId?: string | null;
       theme?: string;
     };
@@ -387,6 +425,9 @@ export function loadState(): DemoState {
         doc: { ...doc, id },
         parentId: typeof record.parentId === 'string' ? record.parentId : null,
         favorite: Boolean(record.favorite),
+        ...(typeof record.order === 'number' && Number.isFinite(record.order)
+          ? { order: record.order }
+          : {}),
         updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : Date.now(),
       };
     }

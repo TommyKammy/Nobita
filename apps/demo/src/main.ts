@@ -2,17 +2,28 @@ import {
   NobitaEditor,
   createEditor,
   icon,
-  type NobitaTheme,
+  type PageProvider,
 } from '@nobita/element';
 import { demoIcon } from './icons';
 import {
   blocksToMarkdown,
+  buildPageTree,
+  canReparentPage,
   cloneDoc,
   countWords,
   createBlock,
   createDoc,
   docToJSON,
+  flattenPageTree,
+  getBacklinks,
+  getPageBreadcrumbs,
+  getPageDescendantIds,
+  searchWorkspacePages,
   type Doc,
+  type PageInfo,
+  type PageSearchHit,
+  type PageTreeInput,
+  type PageTreeNode,
 } from '@nobita/core';
 import {
   createSeedState,
@@ -75,6 +86,7 @@ app.innerHTML = `
       </header>
       <div class="editor-scroll" id="editor-scroll">
         <div id="editor-host"></div>
+        <section class="backlinks" id="backlinks" aria-label="Backlinks" hidden></section>
         <div class="empty-state" id="empty-state" hidden>
           <div class="empty-icon">${demoIcon.file}</div>
           <h2>No page open</h2>
@@ -104,6 +116,7 @@ const pageMenuButton = $('#page-menu') as HTMLButtonElement;
 const saveStatus = $('#save-status') as HTMLElement;
 const saveText = $('#save-text') as HTMLElement;
 const editorHost = $('#editor-host') as HTMLDivElement;
+const backlinksPanel = $('#backlinks') as HTMLElement;
 const editorScroll = $('#editor-scroll') as HTMLDivElement;
 const emptyState = $('#empty-state') as HTMLDivElement;
 const modalRoot = $('#modal-root') as HTMLDivElement;
@@ -115,6 +128,8 @@ let saving = false;
 let saveTimer = 0;
 let toastTimer = 0;
 const collapsed = new Set<string>();
+let backlinksOpen = true;
+let draggedPageId: string | null = null;
 let closePopup: (() => void) | null = null;
 let closeModal: (() => void) | null = null;
 
@@ -123,44 +138,75 @@ const activeRecord = (): PageRecord | null =>
 
 const titleOf = (record: PageRecord): string => record.doc.title.trim() || 'Untitled';
 
-function pagePath(id: string): string[] {
-  const out: string[] = [];
-  let cursor = state.pages[id]?.parentId ?? null;
-  let guard = 0;
-  while (cursor && state.pages[cursor] && guard < 32) {
-    out.unshift(titleOf(state.pages[cursor]!));
-    cursor = state.pages[cursor]!.parentId;
-    guard += 1;
-  }
-  return out;
+const allDocs = (): Doc[] => Object.values(state.pages).map(record => record.doc);
+
+function treeInputs(): PageTreeInput[] {
+  return Object.entries(state.pages).map(([id, record]) => ({
+    id,
+    title: titleOf(record),
+    ...(record.doc.icon ? { icon: record.doc.icon } : {}),
+    parentId: record.parentId,
+    favorite: record.favorite,
+    ...(record.order === undefined ? {} : { order: record.order }),
+    updatedAt: record.updatedAt,
+  }));
 }
 
-function childrenOf(parentId: string | null): [string, PageRecord][] {
-  return Object.entries(state.pages)
-    .filter(([, record]) => record.parentId === parentId)
-    .sort((a, b) => {
-      if (a[1].favorite !== b[1].favorite) return a[1].favorite ? -1 : 1;
-      return a[1].updatedAt - b[1].updatedAt;
-    });
+function pagePath(id: string): string[] {
+  const crumbsPath = getPageBreadcrumbs(treeInputs(), id);
+  return crumbsPath.slice(0, -1).map(item => item.title);
 }
 
 function descendants(id: string): string[] {
-  const out: string[] = [id];
-  const seen = new Set<string>([id]);
-  const queue = [id];
-  while (queue.length > 0) {
-    const current = queue.pop();
-    if (!current) continue;
-    for (const [childId, record] of Object.entries(state.pages)) {
-      if (record.parentId === current && !seen.has(childId)) {
-        seen.add(childId);
-        out.push(childId);
-        queue.push(childId);
-      }
-    }
-  }
-  return out;
+  return [id, ...getPageDescendantIds(treeInputs(), id)];
 }
+
+function resolvePageInfo(pageId: string): PageInfo | null {
+  const record = state.pages[pageId];
+  if (!record) return null;
+  return {
+    id: pageId,
+    title: titleOf(record),
+    ...(record.doc.icon ? { icon: record.doc.icon } : {}),
+  };
+}
+
+function createWorkspacePage(title: string, parentId: string | null): PageInfo {
+  const doc = createDoc({ title, blocks: [createBlock('paragraph')] });
+  const siblings = Object.values(state.pages).filter(record => record.parentId === parentId);
+  state.pages[doc.id] = {
+    doc,
+    parentId,
+    favorite: false,
+    order: siblings.length,
+    updatedAt: Date.now(),
+  };
+  if (parentId) collapsed.delete(parentId);
+  saveState(state);
+  renderTree();
+  return { id: doc.id, title: doc.title.trim() || 'Untitled' };
+}
+
+const pageProvider: PageProvider = {
+  search(query: string): PageInfo[] {
+    const needle = query.trim().toLowerCase();
+    return Object.entries(state.pages)
+      .filter(([, record]) => !needle || titleOf(record).toLowerCase().includes(needle))
+      .sort((a, b) => {
+        if (a[0] === state.activeId && b[0] !== state.activeId) return 1;
+        if (b[0] === state.activeId && a[0] !== state.activeId) return -1;
+        return b[1].updatedAt - a[1].updatedAt;
+      })
+      .map(([id, record]) => ({
+        id,
+        title: titleOf(record),
+        ...(record.doc.icon ? { icon: record.doc.icon } : {}),
+      }));
+  },
+  create(title: string): PageInfo {
+    return createWorkspacePage(title, state.activeId);
+  },
+};
 
 function iconFor(record: PageRecord): string {
   if (record.doc.icon) {
@@ -177,6 +223,7 @@ function mountEditor(): void {
   const record = activeRecord();
   if (!record) {
     editorHost.hidden = true;
+    backlinksPanel.hidden = true;
     emptyState.hidden = false;
     crumbs.replaceChildren();
     favoriteButton.dataset.active = 'false';
@@ -189,8 +236,11 @@ function mountEditor(): void {
     editor = createEditor(editorHost, {
       doc: record.doc,
       theme: state.theme,
-      placeholder: "Type '/' for commands",
+      placeholder: "Type '/' for commands, '[[' to link a page",
       autofocus: false,
+      pageProvider,
+      resolvePage: resolvePageInfo,
+      onOpenPage: pageId => openPage(pageId),
       onChange: (doc, meta) => handleDocChange(doc, meta.source),
       onSelectionChange: () => updateStats(),
     });
@@ -200,6 +250,7 @@ function mountEditor(): void {
     editor.setDoc(record.doc);
   }
   editorScroll.scrollTop = 0;
+  renderBacklinks();
 }
 
 
@@ -223,8 +274,70 @@ function handleDocChange(doc: Doc, source: string): void {
       title.classList.toggle('is-empty', !doc.title.trim());
     }
     renderCrumbs();
+    editor?.refreshPageLinks();
     document.title = `${titleOf(record)} · Nobita`;
   }
+  if (source !== 'replace') renderBacklinks();
+}
+
+function renderBacklinks(): void {
+  const activeId = state.activeId;
+  if (!activeId || !state.pages[activeId]) {
+    backlinksPanel.hidden = true;
+    backlinksPanel.replaceChildren();
+    return;
+  }
+  const links = getBacklinks(allDocs(), activeId);
+  if (links.length === 0) {
+    backlinksPanel.hidden = true;
+    backlinksPanel.replaceChildren();
+    return;
+  }
+  backlinksPanel.hidden = false;
+  backlinksPanel.replaceChildren();
+
+  const header = document.createElement('button');
+  header.type = 'button';
+  header.className = 'backlinks-head';
+  header.setAttribute('aria-expanded', String(backlinksOpen));
+  header.innerHTML = `<span class="backlinks-chevron" data-open="${String(backlinksOpen)}">${icon.chevron}</span><span>Backlinks</span><span class="backlinks-count">${links.length}</span>`;
+  header.addEventListener('click', () => {
+    backlinksOpen = !backlinksOpen;
+    renderBacklinks();
+  });
+  backlinksPanel.append(header);
+
+  if (!backlinksOpen) return;
+
+  const list = document.createElement('div');
+  list.className = 'backlinks-list';
+  for (const item of links) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'backlink-card';
+    const top = document.createElement('div');
+    top.className = 'backlink-source';
+    const iconEl = document.createElement('span');
+    iconEl.className = 'backlink-icon';
+    if (item.sourceIcon) iconEl.textContent = item.sourceIcon;
+    else iconEl.innerHTML = demoIcon.file;
+    const titleEl = document.createElement('span');
+    titleEl.className = 'backlink-title';
+    titleEl.textContent = item.sourceTitle;
+    const kindEl = document.createElement('span');
+    kindEl.className = 'backlink-kind';
+    kindEl.textContent = item.kind === 'block' ? 'Page card' : 'Inline';
+    top.append(iconEl, titleEl, kindEl);
+
+    const snippet = document.createElement('div');
+    snippet.className = 'backlink-snippet';
+    snippet.textContent = item.snippet;
+
+    card.append(top, snippet);
+    card.addEventListener('click', () => openPage(item.sourceDocId, item.blockId));
+    list.append(card);
+  }
+  backlinksPanel.append(list);
 }
 
 function scheduleSave(): void {
@@ -246,7 +359,7 @@ function updateStats(): void {
   saveText.textContent = saving ? 'Saving…' : `Saved · ${label}`;
 }
 
-function openPage(id: string): void {
+function openPage(id: string, focusBlockId?: string): void {
   if (!state.pages[id]) return;
   if (saveTimer) {
     window.clearTimeout(saveTimer);
@@ -255,7 +368,9 @@ function openPage(id: string): void {
     saving = false;
   }
   state.activeId = id;
-  collapsed.delete(id);
+  for (const crumb of getPageBreadcrumbs(treeInputs(), id)) {
+    collapsed.delete(crumb.id);
+  }
   saveState(state);
   if (editor) editor.setDoc(state.pages[id]!.doc);
   else mountEditor();
@@ -264,27 +379,75 @@ function openPage(id: string): void {
   renderTree();
   renderCrumbs();
   renderFavorite();
+  renderBacklinks();
   updateStats();
-  editorScroll.scrollTop = 0;
+  if (focusBlockId) {
+    editor?.focus(focusBlockId, 0);
+  } else {
+    editorScroll.scrollTop = 0;
+  }
   if (window.innerWidth <= 880) shell.classList.remove('sidebar-open');
 }
 
 function newPage(parentId: string | null = null): void {
-  const doc = createDoc({ title: '', blocks: [createBlock('paragraph')] });
-  state.pages[doc.id] = {
-    doc,
-    parentId,
-    favorite: false,
-    updatedAt: Date.now(),
-  };
-  state.activeId = doc.id;
+  const created = createWorkspacePage('', parentId);
+  state.activeId = created.id;
   saveState(state);
   mountEditor();
   renderTree();
   renderCrumbs();
   renderFavorite();
+  renderBacklinks();
   updateStats();
   editor?.focusTitle();
+}
+
+function movePageInTree(
+  pageId: string,
+  newParentId: string | null,
+  anchorId?: string,
+  position?: 'before' | 'after'
+): void {
+  const inputs = treeInputs();
+  if (!canReparentPage(inputs, pageId, newParentId)) return;
+  const record = state.pages[pageId];
+  if (!record) return;
+  record.parentId = newParentId;
+  if (newParentId) collapsed.delete(newParentId);
+
+  // Recompute sibling ordering deterministically.
+  const tree = buildPageTree(treeInputs());
+  const findSiblings = (nodes: readonly PageTreeNode[], targetParent: string | null): PageTreeNode[] => {
+    if (targetParent === null) return [...nodes];
+    for (const node of nodes) {
+      if (node.id === targetParent) return [...node.children];
+      const nested = findSiblings(node.children, targetParent);
+      if (nested.length > 0 || node.children.some(c => c.id === targetParent)) return nested;
+    }
+    return [];
+  };
+  const siblingIds = findSiblings(tree, newParentId)
+    .map(node => node.id)
+    .filter(id => id !== pageId);
+  if (anchorId && position) {
+    const idx = siblingIds.indexOf(anchorId);
+    if (idx >= 0) {
+      siblingIds.splice(position === 'before' ? idx : idx + 1, 0, pageId);
+    } else {
+      siblingIds.push(pageId);
+    }
+  } else {
+    siblingIds.push(pageId);
+  }
+  siblingIds.forEach((id, index) => {
+    const target = state.pages[id];
+    if (target) target.order = index;
+  });
+
+  saveState(state);
+  renderTree();
+  renderCrumbs();
+  showToast('Page moved');
 }
 
 /* ---------------- sidebar ---------------- */
@@ -308,18 +471,20 @@ function renderTree(): void {
       pageTree.append(empty);
       return;
     }
-    for (const [id, record] of favorites) pageTree.append(pageRow(id, record, 0, false));
+    for (const [id, record] of favorites) pageTree.append(pageRow(id, record, 0, false, false));
     return;
   }
 
-  const renderLevel = (parentId: string | null, depth: number): void => {
-    const children = childrenOf(parentId);
-    for (const [id, record] of children) {
-      pageTree.append(pageRow(id, record, depth, true));
-      if (!collapsed.has(id)) renderLevel(id, depth + 1);
+  const tree = buildPageTree(treeInputs());
+  const renderNodes = (nodes: readonly PageTreeNode[]): void => {
+    for (const node of nodes) {
+      const record = state.pages[node.id];
+      if (!record) continue;
+      pageTree.append(pageRow(node.id, record, node.depth, true, node.children.length > 0));
+      if (!collapsed.has(node.id) && node.children.length > 0) renderNodes(node.children);
     }
   };
-  renderLevel(null, 0);
+  renderNodes(tree);
 
   if (pageTree.childElementCount === 0) {
     const empty = document.createElement('div');
@@ -329,7 +494,17 @@ function renderTree(): void {
   }
 }
 
-function pageRow(id: string, record: PageRecord, depth: number, showTree: boolean): HTMLElement {
+function clearRowDropClasses(row: HTMLElement): void {
+  row.classList.remove('is-drop-before', 'is-drop-after', 'is-drop-inside');
+}
+
+function pageRow(
+  id: string,
+  record: PageRecord,
+  depth: number,
+  showTree: boolean,
+  hasChildren: boolean
+): HTMLElement {
   const row = document.createElement('div');
   row.className = 'page-row';
   row.dataset.active = String(state.activeId === id);
@@ -338,8 +513,8 @@ function pageRow(id: string, record: PageRecord, depth: number, showTree: boolea
   row.tabIndex = 0;
   row.setAttribute('role', 'treeitem');
   row.setAttribute('aria-selected', String(state.activeId === id));
+  if (showTree) row.draggable = true;
 
-  const hasChildren = childrenOf(id).length > 0;
   const chevron = document.createElement('button');
   chevron.type = 'button';
   chevron.className = `page-chevron${hasChildren ? '' : ' is-empty'}`;
@@ -406,6 +581,57 @@ function pageRow(id: string, record: PageRecord, depth: number, showTree: boolea
       openPage(id);
     }
   });
+  if (showTree) {
+    row.addEventListener('dragstart', event => {
+      draggedPageId = id;
+      row.classList.add('is-dragging');
+      event.dataTransfer?.setData('text/plain', id);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+    });
+    row.addEventListener('dragend', () => {
+      draggedPageId = null;
+      row.classList.remove('is-dragging');
+      for (const el of pageTree.querySelectorAll<HTMLElement>('.page-row')) {
+        clearRowDropClasses(el);
+      }
+    });
+    row.addEventListener('dragover', event => {
+      if (!draggedPageId || draggedPageId === id) return;
+      const rect = row.getBoundingClientRect();
+      const ratio = (event.clientY - rect.top) / Math.max(1, rect.height);
+      const mode = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'inside';
+      const targetParent = mode === 'inside' ? id : record.parentId;
+      if (!canReparentPage(treeInputs(), draggedPageId, targetParent)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      clearRowDropClasses(row);
+      row.classList.add(
+        mode === 'before'
+          ? 'is-drop-before'
+          : mode === 'after'
+            ? 'is-drop-after'
+            : 'is-drop-inside'
+      );
+    });
+    row.addEventListener('dragleave', () => {
+      clearRowDropClasses(row);
+    });
+    row.addEventListener('drop', event => {
+      const sourceId = draggedPageId;
+      clearRowDropClasses(row);
+      if (!sourceId || sourceId === id) return;
+      const rect = row.getBoundingClientRect();
+      const ratio = (event.clientY - rect.top) / Math.max(1, rect.height);
+      const mode = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'inside';
+      const targetParent = mode === 'inside' ? id : record.parentId;
+      if (!canReparentPage(treeInputs(), sourceId, targetParent)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      draggedPageId = null;
+      if (mode === 'inside') movePageInTree(sourceId, id);
+      else movePageInTree(sourceId, targetParent, id, mode);
+    });
+  }
   return row;
 }
 
@@ -413,20 +639,12 @@ function renderCrumbs(): void {
   crumbs.replaceChildren();
   const record = activeRecord();
   if (!record || !state.activeId) return;
-  const path = pagePath(state.activeId);
-  const ancestors: [string, PageRecord][] = [];
-  let cursor = record.parentId;
-  let guard = 0;
-  while (cursor && state.pages[cursor] && guard < 32) {
-    ancestors.unshift([cursor, state.pages[cursor]!]);
-    cursor = state.pages[cursor]!.parentId;
-    guard += 1;
-  }
-  ancestors.forEach(([id, parent]) => {
+  const chain = getPageBreadcrumbs(treeInputs(), state.activeId);
+  chain.slice(0, -1).forEach(ancestor => {
     const button = document.createElement('button');
     button.className = 'crumb';
-    button.textContent = titleOf(parent);
-    button.addEventListener('click', () => openPage(id));
+    button.textContent = ancestor.title;
+    button.addEventListener('click', () => openPage(ancestor.id));
     crumbs.append(button, separator());
   });
   const current = document.createElement('span');
@@ -434,7 +652,6 @@ function renderCrumbs(): void {
   current.textContent = titleOf(record);
   crumbs.append(current);
   document.title = `${titleOf(record)} · Nobita`;
-  void path;
 }
 
 function separator(): HTMLElement {
@@ -457,8 +674,10 @@ function renamePage(id: string, title: string): void {
   record.updatedAt = Date.now();
   saveState(state);
   if (state.activeId === id) editor?.setTitle(title);
+  editor?.refreshPageLinks();
   renderTree();
   renderCrumbs();
+  renderBacklinks();
   updateStats();
 }
 
@@ -538,10 +757,31 @@ function showPopup(anchor: HTMLElement, items: PopupItem[]): void {
   closePopup = close;
 }
 
+function openMoveMenu(id: string, anchor: HTMLElement): void {
+  const inputs = treeInputs();
+  const flat = flattenPageTree(buildPageTree(inputs));
+  const items: PopupItem[] = [
+    {
+      label: 'Workspace root',
+      icon: demoIcon.file,
+      action: () => movePageInTree(id, null),
+    },
+  ];
+  for (const node of flat) {
+    if (!canReparentPage(inputs, id, node.id)) continue;
+    items.push({
+      label: `${'  '.repeat(node.depth)}${node.title}`,
+      action: () => movePageInTree(id, node.id),
+    });
+  }
+  showPopup(anchor, items);
+}
+
 function openPageMenu(id: string, anchor: HTMLElement): void {
   const record = state.pages[id];
   if (!record) return;
   showPopup(anchor, [
+    { label: 'Move to…', icon: icon.indent, action: () => openMoveMenu(id, anchor) },
     { label: 'Duplicate', icon: icon.duplicate, action: () => duplicatePage(id) },
     { label: 'Export Markdown', icon: icon.copy, action: () => exportMarkdown(id) },
     { label: 'Export JSON', icon: demoIcon.file, action: () => exportJSON(id) },
@@ -560,6 +800,7 @@ function topbarMenu(): void {
       const next = window.prompt('Page title', record.doc.title);
       if (next !== null) renamePage(id, next);
     } },
+    { label: 'Move to…', icon: icon.indent, action: () => openMoveMenu(id, pageMenuButton) },
     { label: 'Duplicate', icon: icon.duplicate, action: () => duplicatePage(id) },
     { label: 'Export Markdown', icon: icon.copy, action: () => exportMarkdown(id) },
     { label: 'Export JSON', icon: demoIcon.file, action: () => exportJSON(id) },
@@ -596,11 +837,13 @@ function deletePage(id: string): void {
   if (!state.activeId) {
     editor?.setDoc(createDoc());
     editorHost.hidden = true;
+    backlinksPanel.hidden = true;
     emptyState.hidden = false;
     updateStats();
   } else {
     openPage(state.activeId);
   }
+  editor?.refreshPageLinks();
   renderFavorite();
   showToast('Page deleted');
 }
@@ -654,7 +897,7 @@ function openSearch(): void {
   const list = backdrop.querySelector<HTMLDivElement>('.palette-list');
   if (!input || !list) return;
 
-  let results: [string, PageRecord][] = [];
+  let results: PageSearchHit[] = [];
   let active = 0;
 
   const render = (): void => {
@@ -668,9 +911,11 @@ function openSearch(): void {
     }
     const group = document.createElement('div');
     group.className = 'palette-group';
-    group.textContent = 'Pages';
+    group.textContent = input.value.trim() ? 'Matches' : 'Pages';
     list.append(group);
-    results.forEach(([id, record], index) => {
+    results.forEach((hit, index) => {
+      const record = state.pages[hit.docId];
+      if (!record) return;
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'palette-item';
@@ -678,16 +923,25 @@ function openSearch(): void {
       const iconElement = document.createElement('span');
       iconElement.className = 'p-icon';
       iconElement.innerHTML = iconFor(record);
+      const copy = document.createElement('span');
+      copy.className = 'p-copy';
       const title = document.createElement('span');
       title.className = 'p-title';
       title.textContent = titleOf(record);
+      copy.append(title);
+      if (hit.snippet) {
+        const snippet = document.createElement('span');
+        snippet.className = 'p-snippet';
+        snippet.textContent = hit.snippet;
+        copy.append(snippet);
+      }
       const path = document.createElement('span');
       path.className = 'p-path';
-      path.textContent = pagePath(id).join(' / ');
-      button.append(iconElement, title, path);
+      path.textContent = pagePath(hit.docId).join(' / ');
+      button.append(iconElement, copy, path);
       button.addEventListener('click', () => {
         close();
-        openPage(id);
+        openPage(hit.docId, hit.blockId);
       });
       list.append(button);
     });
@@ -696,10 +950,20 @@ function openSearch(): void {
   };
 
   const filter = (query: string): void => {
-    const needle = query.trim().toLowerCase();
-    results = Object.entries(state.pages)
-      .filter(([, record]) => !needle || titleOf(record).toLowerCase().includes(needle))
-      .sort((a, b) => b[1].updatedAt - a[1].updatedAt);
+    const trimmed = query.trim();
+    if (!trimmed) {
+      results = Object.entries(state.pages)
+        .sort((a, b) => b[1].updatedAt - a[1].updatedAt)
+        .map(([docId, record]) => ({
+          docId,
+          title: titleOf(record),
+          ...(record.doc.icon ? { icon: record.doc.icon } : {}),
+          matchType: 'title' as const,
+          score: 1,
+        }));
+    } else {
+      results = searchWorkspacePages(allDocs(), trimmed);
+    }
     active = 0;
     render();
   };
@@ -716,10 +980,10 @@ function openSearch(): void {
       render();
     } else if (event.key === 'Enter') {
       event.preventDefault();
-      const id = results[active]?.[0];
-      if (id) {
+      const hit = results[active];
+      if (hit) {
         close();
-        openPage(id);
+        openPage(hit.docId, hit.blockId);
       }
     } else if (event.key === 'Escape') {
       event.preventDefault();
@@ -897,6 +1161,24 @@ function initEvents(): void {
 
   $('#menu-toggle').addEventListener('click', () => shell.classList.add('sidebar-open'));
   $('#scrim').addEventListener('click', () => shell.classList.remove('sidebar-open'));
+
+  const sidebarScroll = $<HTMLElement>('.sidebar-scroll');
+  sidebarScroll.addEventListener('dragover', event => {
+    if (!draggedPageId || currentView !== 'all') return;
+    if ((event.target as Element | null)?.closest('.page-row')) return;
+    if (!canReparentPage(treeInputs(), draggedPageId, null)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  });
+  sidebarScroll.addEventListener('drop', event => {
+    if (!draggedPageId || currentView !== 'all') return;
+    if ((event.target as Element | null)?.closest('.page-row')) return;
+    const sourceId = draggedPageId;
+    draggedPageId = null;
+    if (!canReparentPage(treeInputs(), sourceId, null)) return;
+    event.preventDefault();
+    movePageInTree(sourceId, null);
+  });
 
   window.addEventListener('keydown', event => {
     const mod = event.metaKey || event.ctrlKey;

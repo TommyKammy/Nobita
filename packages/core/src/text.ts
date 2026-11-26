@@ -16,6 +16,7 @@ export const MARK_KEYS: readonly MarkKey[] = [
   'highlight',
   'link',
   'mention',
+  'page',
 ];
 
 /** Drop falsy marks and unknown keys, returning `undefined` for "plain". */
@@ -43,6 +44,19 @@ export function normalizeMark(mark: InlineMark | undefined): InlineMark | undefi
       ...(typeof mark.mention.kind === 'string' && mark.mention.kind
         ? { kind: mark.mention.kind.slice(0, 60) }
         : {}),
+    };
+  }
+  if (
+    mark.page &&
+    typeof mark.page.id === 'string' &&
+    mark.page.id.length > 0
+  ) {
+    const rawTitle = typeof mark.page.title === 'string' ? mark.page.title.trim() : '';
+    const rawIcon = typeof mark.page.icon === 'string' ? mark.page.icon.trim() : '';
+    out.page = {
+      id: mark.page.id,
+      title: (rawTitle || 'Untitled page').slice(0, 200),
+      ...(rawIcon ? { icon: rawIcon.slice(0, 40) } : {}),
     };
   }
   return Object.keys(out).length === 0 ? undefined : out;
@@ -80,7 +94,7 @@ export function parseInlineRuns(value: unknown): InlineRun[] {
   return normalizeRuns(runs);
 }
 
-/** Deep-clone runs, including nested mention metadata. */
+/** Deep-clone runs, including nested mention/page metadata. */
 export function cloneRuns(runs: readonly InlineRun[]): InlineRun[] {
   return runs.map(run => ({
     ...run,
@@ -89,6 +103,7 @@ export function cloneRuns(runs: readonly InlineRun[]): InlineRun[] {
           marks: {
             ...run.marks,
             ...(run.marks.mention ? { mention: { ...run.marks.mention } } : {}),
+            ...(run.marks.page ? { page: { ...run.marks.page } } : {}),
           },
         }
       : {}),
@@ -102,8 +117,8 @@ export function normalizeRuns(runs: readonly InlineRun[]): InlineRun[] {
     if (run.text.length === 0) continue;
     const marks = normalizeMark(run.marks);
     const previous = out[out.length - 1];
-    // Adjacent references stay separate so each remains one atomic mention.
-    if (previous && marksEqual(previous.marks, marks) && !marks?.mention) {
+    // Adjacent references stay separate so each remains one atomic chip.
+    if (previous && marksEqual(previous.marks, marks) && !marks?.mention && !marks?.page) {
       previous.text += run.text;
     } else {
       out.push(marks ? { text: run.text, marks } : { text: run.text });
@@ -182,6 +197,33 @@ export function mentionRangeAt(
 }
 
 /**
+ * Range of the inline page reference run that contains the character at `offset`.
+ * Used to keep page links atomic when deleting.
+ */
+export function pageRangeAt(
+  runs: readonly InlineRun[],
+  offset: number
+): { start: number; end: number } | null {
+  let cursor = 0;
+  for (const run of runs) {
+    const end = cursor + run.text.length;
+    if (run.marks?.page && offset >= cursor && offset < end) {
+      return { start: cursor, end };
+    }
+    cursor = end;
+  }
+  return null;
+}
+
+/** Range of any atomic inline reference (mention or page link) at `offset`. */
+export function atomicRangeAt(
+  runs: readonly InlineRun[],
+  offset: number
+): { start: number; end: number } | null {
+  return mentionRangeAt(runs, offset) ?? pageRangeAt(runs, offset);
+}
+
+/**
  * Insert text at an offset. `marks` omitted inherits the mark before the caret;
  * pass `{}` for plain text.
  */
@@ -194,10 +236,10 @@ export function insertTextAt(
   if (text.length === 0) return normalizeRuns(runs as InlineRun[]);
   const at = Math.max(0, Math.min(offset, runsLength(runs)));
   const inherited = marks === undefined ? marksAt(runs, at) : undefined;
-  // Mentions are atomic: typing next to one must not extend it.
+  // Atomic references (mentions, inline page links) must not extend when typing next to them.
   let insertMarks = marks === undefined ? inherited : normalizeMark(marks);
-  if (marks === undefined && insertMarks?.mention) {
-    const { mention: _mention, ...rest } = insertMarks;
+  if (marks === undefined && (insertMarks?.mention || insertMarks?.page)) {
+    const { mention: _mention, page: _page, ...rest } = insertMarks;
     insertMarks = normalizeMark(rest);
   }
   return normalizeRuns([
@@ -333,6 +375,14 @@ export function markStateInRange(
         ) {
           delete state.mention;
         }
+      } else if (key === 'page') {
+        if (
+          state.page?.id !== marks.page?.id ||
+          state.page?.title !== marks.page?.title ||
+          state.page?.icon !== marks.page?.icon
+        ) {
+          delete state.page;
+        }
       } else if (marks[key] !== true) {
         delete state[key];
       }
@@ -398,7 +448,7 @@ export function runsToHtml(runs: readonly InlineRun[], escape: (text: string) =>
     if (marks.highlight) {
       inner = `<mark data-nb-highlight="${marks.highlight}" style="background-color:var(--nb-hl-${marks.highlight}, ${HIGHLIGHT_HEX[marks.highlight]})">${inner}</mark>`;
     }
-    if (marks.link) {
+    if (marks.link && !marks.page) {
       const href = safeHref(marks.link);
       if (href) {
         const escaped = escape(href).replace(/"/g, '&quot;');
@@ -412,6 +462,15 @@ export function runsToHtml(runs: readonly InlineRun[], escape: (text: string) =>
         ? ` data-nb-mention-kind="${escape(marks.mention.kind).replace(/"/g, '&quot;')}"`
         : '';
       inner = `<span data-nb-mention-id="${id}" data-nb-mention-label="${label}"${kind} class="nb-m-mention" contenteditable="false">${inner}</span>`;
+    }
+    if (marks.page) {
+      const id = escape(marks.page.id).replace(/"/g, '&quot;');
+      const title = escape(marks.page.title).replace(/"/g, '&quot;');
+      const iconAttr = marks.page.icon
+        ? ` data-nb-page-icon="${escape(marks.page.icon).replace(/"/g, '&quot;')}"`
+        : '';
+      const href = `#page-${encodeURIComponent(marks.page.id)}`;
+      inner = `<a href="${href}" data-nb-page-id="${id}" data-nb-page-title="${title}"${iconAttr} class="nb-m-page" contenteditable="false">${inner}</a>`;
     }
     html += inner;
   }

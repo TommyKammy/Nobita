@@ -16,6 +16,10 @@ export function isTextNode(node: Node | null): node is Text {
 export function textLengthOfSubtree(node: Node): number {
   if (isTextNode(node)) return node.data.length;
   if (node.nodeName === 'BR') return 1;
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    const atomicLen = (node as Element).getAttribute('data-atomic-length');
+    if (atomicLen !== null) return Number(atomicLen) || 0;
+  }
   let total = 0;
   for (let child = node.firstChild; child; child = child.nextSibling) {
     total += textLengthOfSubtree(child);
@@ -31,6 +35,20 @@ export function domPointToOffset(root: HTMLElement, node: Node, offset: number):
 
   const visit = (current: Node): void => {
     if (found) return;
+    if (
+      current !== root &&
+      current.nodeType === Node.ELEMENT_NODE &&
+      (current as Element).getAttribute('data-atomic-length') !== null
+    ) {
+      const len = Number((current as Element).getAttribute('data-atomic-length')) || 0;
+      if (current === node || current.contains(node)) {
+        result = total + (offset > 0 ? len : 0);
+        found = true;
+        return;
+      }
+      total += len;
+      return;
+    }
     if (current === node) {
       if (isTextNode(current)) {
         result = total + Math.max(0, Math.min(offset, current.data.length));

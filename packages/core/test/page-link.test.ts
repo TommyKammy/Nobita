@@ -3,6 +3,17 @@ import { blockSearchText, setBlockType } from '../src/commands.js';
 import { createBlock, createDoc } from '../src/doc.js';
 import { blocksToMarkdown } from '../src/markdown.js';
 import { blocksToHtml, parseDoc } from '../src/serialize.js';
+import {
+  atomicRangeAt,
+  cloneRuns,
+  insertTextAt,
+  markStateInRange,
+  marksEqual,
+  normalizeMark,
+  normalizeRuns,
+  pageRangeAt,
+  runsToHtml,
+} from '../src/text.js';
 import { isTextualBlock } from '../src/types.js';
 
 const pageBlock = () =>
@@ -97,5 +108,95 @@ describe('page link block', () => {
     expect(block.text).toEqual([]);
     expect(block.props.pageId).toBe('p2');
     expect(block.props.pageTitle).toBe('Notes');
+  });
+});
+
+describe('inline page link mark', () => {
+  it('normalizes, distinguishes, and preserves long host page ids', () => {
+    const longId = 'p'.repeat(300);
+    expect(normalizeMark({ page: { id: longId, title: 'Roadmap', icon: '🗺️' } })).toEqual({
+      page: { id: longId, title: 'Roadmap', icon: '🗺️' },
+    });
+    expect(normalizeMark({ page: { id: '', title: 'Missing' } })).toBeUndefined();
+    expect(normalizeMark({ page: { id: 'p1', title: '' } })).toEqual({
+      page: { id: 'p1', title: 'Untitled page' },
+    });
+    expect(
+      marksEqual(
+        { page: { id: 'p1', title: 'A' } },
+        { page: { id: 'p2', title: 'A' } }
+      )
+    ).toBe(false);
+  });
+
+  it('keeps inline page links atomic when typing, deleting, and normalizing', () => {
+    const pageMark = { page: { id: 'p1', title: 'Roadmap', icon: '🗺️' } } as const;
+    const runs = [
+      { text: 'See ' },
+      { text: 'Roadmap', marks: pageMark },
+    ];
+    expect(insertTextAt(runs, 11, '!')).toEqual([
+      { text: 'See ' },
+      { text: 'Roadmap', marks: pageMark },
+      { text: '!' },
+    ]);
+    expect(pageRangeAt(runs, 4)).toEqual({ start: 4, end: 11 });
+    expect(atomicRangeAt(runs, 10)).toEqual({ start: 4, end: 11 });
+    expect(pageRangeAt(runs, 3)).toBeNull();
+    expect(pageRangeAt(runs, 11)).toBeNull();
+
+    // Adjacent identical page chips stay separate runs.
+    expect(
+      normalizeRuns([
+        { text: 'Roadmap', marks: pageMark },
+        { text: 'Roadmap', marks: pageMark },
+      ])
+    ).toHaveLength(2);
+
+    // Deep clone does not share nested page objects.
+    const cloned = cloneRuns(runs);
+    expect(cloned[1]?.marks?.page).toEqual(pageMark.page);
+    expect(cloned[1]?.marks?.page).not.toBe(runs[1]?.marks?.page);
+
+    expect(markStateInRange(runs, 4, 11)).toEqual(pageMark);
+  });
+
+  it('exports inline page links to HTML and Markdown and round-trips JSON', () => {
+    const doc = parseDoc({
+      version: 1,
+      id: 'inline-page',
+      title: '',
+      blocks: [
+        {
+          id: 'b1',
+          type: 'paragraph',
+          text: [
+            { text: 'Open ' },
+            {
+              text: 'Roadmap',
+              marks: { page: { id: 'p(1)', title: 'Roadmap', icon: '🗺️' } },
+            },
+            { text: ' now' },
+          ],
+          props: {},
+          children: [],
+        },
+      ],
+    });
+    expect(doc.blocks[0]?.text[1]?.marks?.page).toEqual({
+      id: 'p(1)',
+      title: 'Roadmap',
+      icon: '🗺️',
+    });
+
+    const html = runsToHtml(doc.blocks[0]!.text, v => v);
+    expect(html).toContain('class="nb-m-page"');
+    expect(html).toContain('data-nb-page-id="p(1)"');
+    expect(html).toContain('data-nb-page-title="Roadmap"');
+    expect(html).toContain('data-nb-page-icon="🗺️"');
+    expect(html).toContain('href="#page-p(1)"');
+
+    const md = blocksToMarkdown(doc, { title: false });
+    expect(md).toContain('Open [Roadmap](#page-p%281%29) now');
   });
 });

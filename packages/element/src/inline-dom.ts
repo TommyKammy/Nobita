@@ -5,7 +5,7 @@ import {
   normalizeRuns,
   safeHref,
 } from '@nobita/core';
-import type { InlineMark, InlineRun } from '@nobita/core';
+import type { InlineMark, InlineRun, PageInfo } from '@nobita/core';
 import { childIndex } from './dom.js';
 
 function marksFromElement(element: Element, inherited: InlineMark | undefined): InlineMark | undefined {
@@ -26,8 +26,29 @@ function marksFromElement(element: Element, inherited: InlineMark | undefined): 
     next = { ...(next ?? {}), strike: true };
   }
   if (tag === 'CODE') next = { ...(next ?? {}), code: true };
+  const pageId =
+    element.getAttribute('data-nb-page-id') ??
+    element.getAttribute('data-page-id');
+  if (pageId) {
+    const pageTitle =
+      element.getAttribute('data-nb-page-title') ??
+      element.getAttribute('data-page-title') ??
+      element.textContent?.trim() ??
+      'Untitled page';
+    const pageIcon =
+      element.getAttribute('data-nb-page-icon') ??
+      element.getAttribute('data-page-icon');
+    next = {
+      ...(next ?? {}),
+      page: {
+        id: pageId,
+        title: pageTitle || 'Untitled page',
+        ...(pageIcon ? { icon: pageIcon } : {}),
+      },
+    };
+  }
   const href = element.getAttribute('data-link') ?? element.getAttribute('href');
-  if (href) {
+  if (href && !pageId) {
     const safe = safeHref(href);
     if (safe) next = { ...(next ?? {}), link: safe };
   }
@@ -126,6 +147,19 @@ export function domPointToRunsOffset(
     }
     if (current.nodeType !== Node.ELEMENT_NODE) return;
     const element = current as Element;
+    const atomicLenAttr =
+      current !== root ? element.getAttribute('data-atomic-length') : null;
+    if (atomicLenAttr !== null) {
+      const len = Number(atomicLenAttr) || 0;
+      if (current === node || current.contains(node)) {
+        result = total + (offset > 0 ? len : 0);
+        found = true;
+        return;
+      }
+      total += len;
+      if (len > 0) endsWithNewline = false;
+      return;
+    }
     if (element.tagName === 'BR') {
       if (current === node) {
         result = total;
@@ -206,11 +240,15 @@ export function runsOffsetToDomPoint(
       element !== root &&
       element.getAttribute('contenteditable') === 'false'
     ) {
-      const length = domPointToRunsOffset(
-        element as HTMLElement,
-        element,
-        element.childNodes.length
-      );
+      const atomicLenAttr = element.getAttribute('data-atomic-length');
+      const length =
+        atomicLenAttr !== null
+          ? Number(atomicLenAttr) || 0
+          : domPointToRunsOffset(
+              element as HTMLElement,
+              element,
+              element.childNodes.length
+            );
       const end = total + length;
       const parent = element.parentNode ?? root;
       const index = childIndex(element as ChildNode);
@@ -291,7 +329,10 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
         bufferMarks.color === marks.color &&
         bufferMarks.mention?.id === marks.mention?.id &&
         bufferMarks.mention?.label === marks.mention?.label &&
-        bufferMarks.mention?.kind === marks.mention?.kind);
+        bufferMarks.mention?.kind === marks.mention?.kind &&
+        bufferMarks.page?.id === marks.page?.id &&
+        bufferMarks.page?.title === marks.page?.title &&
+        bufferMarks.page?.icon === marks.page?.icon);
     if (!same) {
       flush();
       bufferMarks = marks;
@@ -318,6 +359,12 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
     if (isBlockElement(element) && lastChar && lastChar !== '\n') {
       append('\n', undefined);
     }
+    const modelText = element.getAttribute('data-model-text');
+    if (modelText !== null && nextMarks?.page) {
+      append(modelText, nextMarks);
+      flush();
+      return;
+    }
     for (let child = element.firstChild; child; child = child.nextSibling) {
       walk(child, nextMarks);
     }
@@ -327,8 +374,11 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
     const mentionLabel =
       element.getAttribute('data-nb-mention-label') ??
       element.getAttribute('data-mention-label');
-    // Distinct mention elements stay separate even when their metadata matches.
-    if (mentionId && mentionLabel) flush();
+    const pageId =
+      element.getAttribute('data-nb-page-id') ??
+      element.getAttribute('data-page-id');
+    // Distinct atomic reference elements stay separate even when metadata matches.
+    if ((mentionId && mentionLabel) || pageId) flush();
   };
 
   for (let child = root.firstChild; child; child = child.nextSibling) {
@@ -342,7 +392,8 @@ export function readRunsFromDom(root: HTMLElement): InlineRun[] {
 /** Render runs into a contenteditable host using the editor's inline markup. */
 export function renderInlineRuns(
   root: HTMLElement,
-  runs: readonly InlineRun[]
+  runs: readonly InlineRun[],
+  resolvePage?: (pageId: string) => PageInfo | null
 ): void {
   const fragment = document.createDocumentFragment();
   for (const run of runs) {
@@ -372,7 +423,7 @@ export function renderInlineRuns(
         classes.push('nb-m-code');
         tokens.push('code');
       }
-      if (marks.link) {
+      if (marks.link && !marks.page) {
         const safe = safeHref(marks.link);
         if (safe) {
           classes.push('nb-m-link');
@@ -387,6 +438,26 @@ export function renderInlineRuns(
         span.dataset.mentionId = marks.mention.id;
         span.dataset.mentionLabel = marks.mention.label;
         if (marks.mention.kind) span.dataset.mentionKind = marks.mention.kind;
+        span.dataset.atomicLength = String(run.text.length);
+        span.contentEditable = 'false';
+      }
+      if (marks.page) {
+        const info = resolvePage?.(marks.page.id) ?? null;
+        const displayTitle =
+          (info?.title ?? marks.page.title ?? run.text).trim() || 'Untitled page';
+        const displayIcon = (info?.icon ?? marks.page.icon ?? '').trim();
+        classes.push('nb-m-page');
+        span.dataset.pageId = marks.page.id;
+        span.dataset.pageTitle = displayTitle;
+        span.dataset.pageFallbackTitle = marks.page.title;
+        if (marks.page.icon) span.dataset.pageFallbackIcon = marks.page.icon;
+        if (displayIcon) span.dataset.pageIcon = displayIcon;
+        span.dataset.atomicLength = String(run.text.length);
+        span.dataset.modelText = run.text;
+        span.textContent = displayTitle;
+        span.title = displayTitle;
+        span.setAttribute('role', 'link');
+        span.setAttribute('aria-label', `Open page: ${displayTitle}`);
         span.contentEditable = 'false';
       }
       if (classes.length > 0) span.className = classes.join(' ');
@@ -395,4 +466,26 @@ export function renderInlineRuns(
     fragment.append(span);
   }
   root.replaceChildren(fragment);
+}
+
+/** Re-sync live title/icon metadata on all rendered `.nb-m-page` chips inside `container`. */
+export function refreshInlinePageChips(
+  container: ParentNode,
+  resolvePage?: (pageId: string) => PageInfo | null
+): void {
+  for (const chip of container.querySelectorAll<HTMLElement>('.nb-m-page')) {
+    const pageId = chip.dataset.pageId;
+    if (!pageId) continue;
+    const info = resolvePage?.(pageId) ?? null;
+    const displayTitle =
+      (info?.title ?? chip.dataset.pageFallbackTitle ?? chip.dataset.modelText ?? '').trim() ||
+      'Untitled page';
+    const displayIcon = (info?.icon ?? chip.dataset.pageFallbackIcon ?? '').trim();
+    chip.textContent = displayTitle;
+    chip.dataset.pageTitle = displayTitle;
+    if (displayIcon) chip.dataset.pageIcon = displayIcon;
+    else delete chip.dataset.pageIcon;
+    chip.title = displayTitle;
+    chip.setAttribute('aria-label', `Open page: ${displayTitle}`);
+  }
 }

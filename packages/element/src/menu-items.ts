@@ -26,6 +26,8 @@ export interface SlashMenuContext {
   alignBlock(align: TextAlign): void;
   moveBlock(position: 'before' | 'after'): void;
   copyBlock(): void;
+  linkPage?: () => void;
+  createPage?: () => void;
 }
 
 export interface BlockMenuContext {
@@ -235,6 +237,29 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
         }),
     }
   );
+
+  if (context.linkPage) {
+    items.push({
+      id: 'link-page',
+      label: 'Link page',
+      description: 'Insert a link to another page',
+      icon: icon.page,
+      group: 'Pages',
+      keywords: ['page', 'link', 'link-page', 'wiki', 'reference', 'subpage', '[['],
+      action: () => context.linkPage?.(),
+    });
+  }
+  if (context.createPage) {
+    items.push({
+      id: 'new-page',
+      label: 'New page',
+      description: 'Create and link a new page',
+      icon: icon.plus,
+      group: 'Pages',
+      keywords: ['page', 'new', 'new-page', 'subpage', 'create', 'doc'],
+      action: () => context.createPage?.(),
+    });
+  }
 
   items.push(
     {

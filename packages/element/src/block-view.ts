@@ -246,6 +246,7 @@ export class BlockView {
           get readonly() {
             return host.readonly;
           },
+          resolvePage: pageId => host.pageInfo(pageId),
           commit: (data, options) => host.updateTable(blockId, data, options),
           undo: () => host.undoTable(),
           redo: () => host.redoTable(),
@@ -269,6 +270,7 @@ export class BlockView {
           get uploadImage() {
             return host.uploadImage;
           },
+          resolvePage: pageId => host.pageInfo(pageId),
           commit: (data, options) => host.updateDatabase(blockId, data, options),
           undo: () => host.undoDatabase(),
           redo: () => host.redoDatabase(),
@@ -344,7 +346,7 @@ export class BlockView {
   #renderRuns(): void {
     const text = this.#text;
     if (!text) return;
-    renderInlineRuns(text, this.block.text);
+    renderInlineRuns(text, this.block.text, pageId => this.#host.pageInfo(pageId));
   }
 
   #openPage(): void {
@@ -375,7 +377,9 @@ export class BlockView {
   }
 
   refreshPageLink(): void {
-    if (this.block.type === 'page') this.#syncPageLink(this.block);
+    if (this.block.type === 'page') {
+      this.#syncPageLink(this.block);
+    }
   }
 
   focusPageLink(): void {

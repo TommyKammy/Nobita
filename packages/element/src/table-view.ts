@@ -22,7 +22,7 @@ import {
   setTableRowColor,
   tableCellText,
 } from '@nobita/core';
-import type { TableCell, TableData } from '@nobita/core';
+import type { PageInfo, TableCell, TableData } from '@nobita/core';
 import {
   btn,
   el,
@@ -41,6 +41,7 @@ import { parseTsv, tsvCell } from './tsv.js';
 
 export interface TableHost {
   readonly readonly: boolean;
+  resolvePage?: (pageId: string) => PageInfo | null;
   commit(data: TableData, options?: { mergeKey?: string }): void;
   undo(): void;
   redo(): void;
@@ -148,6 +149,7 @@ export class SimpleTableView {
       isReadonly: () => this.#readonly,
       getSignal: () => this.#events.signal,
       richTextSelector: '.nb-table-cell',
+      resolvePage: pageId => this.#host.resolvePage?.(pageId) ?? null,
     });
     const doc = this.element.ownerDocument;
     doc.addEventListener(
@@ -242,7 +244,7 @@ export class SimpleTableView {
   #renderCellContent(cell: HTMLElement, tableCell: TableCell | undefined): void {
     if (tableCell?.runs && tableCell.runs.length > 0) {
       cell.dataset.runs = runsSignature(tableCell.runs);
-      renderInlineRuns(cell, tableCell.runs);
+      renderInlineRuns(cell, tableCell.runs, this.#host.resolvePage);
     } else {
       cell.dataset.runs = '';
       writeCellText(cell, tableCell?.text ?? '');

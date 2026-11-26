@@ -25,7 +25,7 @@ Stable exports:
 - `NobitaOptions`
 - `NobitaTheme`
 - `NobitaChangeDetail`, `NobitaPageOpenDetail`
-- `MentionItem`, `MentionProvider`, `ImageUploadResult`, `ImageUploadHandler`
+- `MentionItem`, `MentionProvider`, `PageProvider`, `ImageUploadResult`, `ImageUploadHandler`
 - `htmlToBlocks`, `plainTextToBlocks`, `readClipboardPayload`
 - `icon`
 
@@ -49,6 +49,7 @@ these files directly. The core `DatabaseView` type is exported from
 | `onChange` | `(doc, { source }) => void` | Document change callback |
 | `onSelectionChange` | `(selection \| null) => void` | Selection change callback |
 | `mentionProvider` | `MentionProvider` | Host directory used by the `@` mention picker |
+| `pageProvider` | `PageProvider` | Host page directory used by `[[` inline links and `/page` / `/new-page` |
 | `uploadImage` | `ImageUploadHandler` | Upload pasted/dropped images |
 | `onOpenPage` | `(pageId) => void` | Host navigation for page reference blocks |
 | `resolvePage` | `(pageId) => PageInfo \| null` | Optional cached metadata for live page titles/icons |
@@ -67,11 +68,13 @@ browser-native HTML.
 `getBlockLink(blockId)` returns `#block-<id>`. Clicking a matching link inside
 the same document focuses the block. Use normal URLs for links across documents.
 
-Page references are block-level links to documents owned by the host. A page
-block stores `{ pageId, pageTitle, pageIcon? }` and never embeds page content.
-`insertPageLink(page, { afterBlockId? })` creates one; `refreshPageLinks()`
-re-reads optional `resolvePage` metadata after a host rename. The resolver must
-be synchronous and cached; `onOpenPage` owns loading and routing.
+Page references can be block-level cards (`page` block with `{ pageId, pageTitle, pageIcon? }`)
+or atomic inline chips (`marks.page: PageInfo`), and never embed target page content.
+`insertPageLink(page, { afterBlockId? })` creates a block card; `insertInlinePageLink(page)`
+creates an inline chip; `pageProvider` powers the `[[` wiki-link picker and `/page` / `/new-page`
+slash commands; `refreshPageLinks()` re-reads optional `resolvePage` metadata for both block cards
+and inline chips after a host rename. The resolver must be synchronous and cached; `onOpenPage`
+owns loading and routing.
 
 ### Editor methods
 
@@ -79,19 +82,21 @@ be synchronous and cached; `onOpenPage` owns loading and routing.
 `getSelection()`, `getSelectedBlockIds()`, `selectBlocks(ids)`, `clearBlockSelection()`,
 `focus(blockId?, offset?)`, `focusTitle()`, `blur()`, `setTitle(title)`,
 `setReadonly(value)`, `setTheme(theme)`, `setPlaceholder(value)`, `undo()`, `redo()`,
-`insertMarkdown(markdown)`, `insertPageLink(page, { afterBlockId? })`, `refreshPageLinks()`,
-`getBlockLink(blockId)`, `setMentionProvider(provider)`, `setUploadImage(handler)`, `destroy()`.
+`insertMarkdown(markdown)`, `insertPageLink(page, { afterBlockId? })`,
+`insertInlinePageLink(page)`, `refreshPageLinks()`,
+`getBlockLink(blockId)`, `setMentionProvider(provider)`, `setPageProvider(provider)`,
+`setUploadImage(handler)`, `destroy()`.
 
 ### `<nobita-editor>`
 
 Attributes: `readonly`, `theme`, `placeholder`, `min-height`, `doc` (JSON string).
 
-Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `uploadImage`,
-`onOpenPage`, `resolvePage`.
+Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `pageProvider`,
+`uploadImage`, `onOpenPage`, `resolvePage`.
 
 Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`,
 `getSelectedBlockIds()`, `selectBlocks(ids)`, `clearBlockSelection()`,
-`insertPageLink()`, `refreshPageLinks()`, `setReadonly()`, `setTheme()`.
+`insertPageLink()`, `insertInlinePageLink()`, `refreshPageLinks()`, `setReadonly()`, `setTheme()`.
 
 Events:
 
@@ -123,6 +128,9 @@ Stable exports include:
   `moveTableColumn`, `moveTableColumnTo`, `clearTableRow`, `clearTableColumn`,
   `setTableCellText`, `setTableCellRuns`, `setTableColumnWidth`,
   `setTableRowColor`, `setTableColumnColor`
+- Workspace graph & tree helpers: `extractPageLinks`, `buildBacklinkIndex`,
+  `getBacklinks`, `buildPageTree`, `flattenPageTree`, `getPageBreadcrumbs`,
+  `getPageDescendantIds`, `canReparentPage`, `searchWorkspacePages`
 - Store: `EditorStore`
 - Validation/URL helpers: `parseInlineRuns`, `safeHref`, `safeImageSrc`
 

@@ -6,6 +6,7 @@ import {
   type MentionProvider,
   type NobitaOptions,
   type NobitaTheme,
+  type PageProvider,
 } from './editor.js';
 
 const Base = (typeof HTMLElement === 'undefined' ? class {} : HTMLElement) as typeof HTMLElement;
@@ -31,6 +32,7 @@ export class NobitaEditorElement extends Base {
   #pendingDoc: Doc | string | undefined;
   #lastDoc: Doc | null = null;
   #mentionProvider: MentionProvider | undefined;
+  #pageProvider: PageProvider | undefined;
   #uploadImage: ImageUploadHandler | undefined;
   #onOpenPage: ((pageId: string) => void) | undefined;
   #resolvePage: ((pageId: string) => PageInfo | null) | undefined;
@@ -70,6 +72,7 @@ export class NobitaEditorElement extends Base {
         );
       },
       ...(this.#mentionProvider ? { mentionProvider: this.#mentionProvider } : {}),
+      ...(this.#pageProvider ? { pageProvider: this.#pageProvider } : {}),
       ...(this.#uploadImage ? { uploadImage: this.#uploadImage } : {}),
       onOpenPage: pageId => {
         this.#onOpenPage?.(pageId);
@@ -143,6 +146,15 @@ export class NobitaEditorElement extends Base {
     this.#editor?.setMentionProvider(value);
   }
 
+  get pageProvider(): PageProvider | undefined {
+    return this.#pageProvider;
+  }
+
+  set pageProvider(value: PageProvider | undefined) {
+    this.#pageProvider = value;
+    this.#editor?.setPageProvider(value);
+  }
+
   get uploadImage(): ImageUploadHandler | undefined {
     return this.#uploadImage;
   }
@@ -204,6 +216,10 @@ export class NobitaEditorElement extends Base {
 
   insertPageLink(page: PageInfo, options: { afterBlockId?: string } = {}): string | null {
     return this.#editor?.insertPageLink(page, options) ?? null;
+  }
+
+  insertInlinePageLink(page: PageInfo): boolean {
+    return this.#editor?.insertInlinePageLink(page) ?? false;
   }
 
   refreshPageLinks(): void {

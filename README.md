@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **102.2 KB gzipped** (`373.0 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core and data views.
+- **104.9 KB gzipped** (`383.8 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core and data views.
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -27,10 +27,10 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Area | Included |
 | --- | --- |
 | Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, simple table, database, page links |
-| Inline | Bold, italic, underline, strikethrough, inline code, links, mentions, alignment, 8-color highlight and text-color palettes |
+| Inline | Bold, italic, underline, strikethrough, inline code, links, mentions, `[[` inline page chips, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo, block selection (`Escape`, gutter `Shift`/`Cmd`-click, staged `Cmd/Ctrl+A`, `Shift+Arrow`, batch delete / duplicate / copy / paste / drag across text & non-text blocks) |
 | Data views | Multiple named table and board views per database, AFFiNE-style view settings (`⋯`), per-view column order/widths/visibility, nested AND/OR filters, multi-sort, container-aware expandable search (auto-hidden below `560px`), footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state; rich-text cells (`B`/`I`/`U`/`S`/code toolbar & shortcuts, highlight/color rendering, IME & plain-text paste safe), editable record pages (`row.page.content`), board card covers (`coverColumnId`), board card add/open/drag-reorder/group actions (preserving multi-select tags), drag cell selection & fill, TSV copy/paste, readonly view switching & record-page viewing; 11 typed columns (`text`, `number`, `progress`, `select`, `multi-select`, `date`, `checkbox`, `url`, `image`, `files`, `people`) |
-| Menus | Slash menu with fuzzy search and block actions (move/copy/link), block handle menu, selection toolbar with Turn into / Align / format / Color, link popover, mention picker |
+| Menus | Slash menu with fuzzy search and block/page actions (move/copy/link/new page), block handle menu, selection toolbar with Turn into / Align / format / Color, link popover, `@` mention picker, `[[` page link picker |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
 | Clipboard | Rich HTML, Markdown, plain text, a private `application/x-nobita+json` format, and image paste through an upload adapter |
@@ -115,7 +115,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 102.2 KB gzipped bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 104.9 KB gzipped bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -267,13 +267,15 @@ See [docs/public-api.md](docs/public-api.md) for the stable import surface, edit
 | `setReadonly(value)` / `setTheme(theme)` / `setPlaceholder(value)` | Runtime configuration |
 | `insertMarkdown(markdown)` | Insert blocks at the caret |
 | `getBlockLink(blockId)` | Return the stable `#block-…` link for a block |
-| `insertPageLink(page, { afterBlockId? })` | Insert a reference to a host-owned page |
-| `refreshPageLinks()` | Re-read optional page metadata after a rename |
+| `insertPageLink(page, { afterBlockId? })` | Insert a block-level reference card to a host-owned page |
+| `insertInlinePageLink(page)` | Insert an atomic inline page link chip at the selection |
+| `refreshPageLinks()` | Re-read optional page metadata for cards and inline chips after a rename |
 | `setMentionProvider(provider)` | Replace the mention directory at runtime |
+| `setPageProvider(provider)` | Replace the `[[` / `/page` page directory at runtime |
 | `setUploadImage(handler)` | Replace the image upload adapter at runtime |
 | `destroy()` | Remove listeners and DOM |
 
-Options: `doc`, `readonly`, `theme` (`light` / `dark` / `auto`), `placeholder`, `autofocus`, `spellcheck`, `historyLimit`, `onChange(doc, { source })`, `onSelectionChange(selection)`, `mentionProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
+Options: `doc`, `readonly`, `theme` (`light` / `dark` / `auto`), `placeholder`, `autofocus`, `spellcheck`, `historyLimit`, `onChange(doc, { source })`, `onSelectionChange(selection)`, `mentionProvider`, `pageProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
 
 ### Mentions, links and images
 
@@ -302,14 +304,15 @@ editor.uploadImage = async file => {
 
 Typing `@` opens the picker; mention references stay atomic while typing and deleting. `getBlockLink(blockId)` returns `#block-<id>` for links the host can copy; clicking one inside the same document focuses the block. Image paste and drop only run when `uploadImage` is set, and the adapter owns storage, authentication and URL lifetime.
 
-### Page links
+### Page links & workspace primitives
 
-Pages stay separate `Doc`s. The editor stores a small reference block and never loads or embeds page content:
+Pages stay separate `Doc`s. The editor supports both block-level page cards (`page` blocks) and atomic inline page chips (`[[` picker / `marks.page`), without loading or embedding target page content:
 
 ```ts
-const page = await createPage({ title: 'Roadmap' });
-editor.insertPageLink(page, { afterBlockId: currentBlockId });
-
+editor.pageProvider = {
+  search: query => pages.filter(p => p.title.toLowerCase().includes(query.toLowerCase())),
+  create: title => createWorkspacePage(title),
+};
 editor.onOpenPage = pageId => router.open(`/pages/${pageId}`);
 editor.resolvePage = pageId => pageCache.get(pageId) ?? null;
 
@@ -318,15 +321,15 @@ pageCache.set('p1', { id: 'p1', title: 'Product roadmap' });
 editor.refreshPageLinks();
 ```
 
-`insertPageLink` stores `{ pageId, pageTitle, pageIcon? }` so the card works offline and exports to JSON/HTML. `resolvePage` is a synchronous, cached override for live titles; `onOpenPage` owns routing and loading. Page trees, backlinks and breadcrumbs remain host concerns.
+`@nobita/core` also exports pure, DOM-free workspace helpers (`extractPageLinks`, `buildBacklinkIndex`, `getBacklinks`, `buildPageTree`, `getPageBreadcrumbs`, `canReparentPage`, `searchWorkspacePages`) so hosts can build backlinks panels, drag-and-drop page trees and full-text search without coupling them to the editor bundle.
 
 The placeholder behaves like AFFiNE: it appears only on the **focused empty paragraph** (or heading, which shows “Heading 1/2/3/4/5/6”), and disappears as soon as text exists or focus leaves the body. It is not shown while the page title is focused. The default is `Type '/' for commands`; set `placeholder` to override the paragraph text.
 
 ### `<nobita-editor>`
 
 Attributes: `readonly`, `theme`, `placeholder`, `min-height`, `doc` (JSON string).
-Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
-Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`, `insertPageLink()`, `refreshPageLinks()`, `setReadonly()`, `setTheme()`.
+Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `pageProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
+Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`, `insertPageLink()`, `insertInlinePageLink()`, `refreshPageLinks()`, `setReadonly()`, `setTheme()`.
 Events: `nobita-change` (`{ doc, source }`), `nobita-selection` (`{ selection }`), `nobita-page-open` (`{ pageId }`), `nobita-ready`.
 
 Use `doc` as a property for normal use. Set `doc` **before** the element connects, or use the property after mount; the element keeps the last document across disconnect/reconnect.
@@ -377,8 +380,8 @@ Measured in headless Chromium via `pnpm bench` (`setDoc` + full render, median o
 | Blocks | `setDoc` + render (median) |
 | --- | ---: |
 | 200 | 2.4 ms |
-| 1,000 | 14.0 ms |
-| 3,000 | 32.1 ms |
+| 1,000 | 12.6 ms |
+| 3,000 | 43.9 ms |
 
 Data-view cell edits update cells in-place by reference identity without rebuilding the grid, memoize per-state view queries, apply differential selection updates, and delegate table header/body events.
 
@@ -386,9 +389,9 @@ Bundle sizes (`pnpm size`):
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 373.0 KB | **102.2 KB** |
-| Editor IIFE (`nobita.global.js`) | 372.9 KB | **102.2 KB** |
-| Demo app (editor + UI + seed data) | 417.9 KB | 114.0 KB |
+| Editor ESM (`nobita.js`) | 383.8 KB | **104.9 KB** |
+| Editor IIFE (`nobita.global.js`) | 383.7 KB | **104.9 KB** |
+| Demo app (editor + UI + seed data) | 439.5 KB | 119.8 KB |
 
 The optional `@nobita/storage` package is not part of any editor bundle; it is only present when a host imports it.
 
@@ -422,7 +425,6 @@ A command-by-command comparison with AFFiNE is in [docs/command-comparison.md](d
 
 - Database: formulas and relations. Calendar view is intentionally out of scope.
 - Simple table: merged cells.
-- Page workspace: navigation, backlinks and page trees.
 - Collaboration adapter (Yjs/Automerge) behind an explicit interface.
 - Virtualized rendering for 10k+ block documents.
 - Vue/Svelte wrappers (the web component already works in both).

@@ -411,6 +411,37 @@ input, select, textarea { font: inherit; color: inherit; }
   font-weight: 500;
   user-select: none;
 }
+.nb-m-page {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--nb-hover);
+  color: var(--nb-text);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--nb-border-strong);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 120ms ease, color 120ms ease;
+}
+.nb-m-page::before {
+  content: attr(data-page-icon);
+  font-size: 0.9em;
+  line-height: 1;
+}
+.nb-m-page:not([data-page-icon])::before {
+  content: "📄";
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+.nb-m-page:hover {
+  background: var(--nb-accent-soft);
+  color: var(--nb-accent);
+  text-decoration-color: color-mix(in oklab, var(--nb-accent) 45%, transparent);
+}
 .nb-tail { min-height: 140px; cursor: text; }
 
 .nb-block[data-type="todo"][data-checked="true"] > .nb-row .nb-text {

@@ -20,7 +20,7 @@ const MAX_TABLE_ROWS = 1000;
 const asString = (value: unknown): string =>
   typeof value === 'string' ? value.replace(/\r\n?/gu, '\n').slice(0, MAX_CELL_TEXT_LENGTH) : '';
 
-/** Return true if any run carries an inline formatting mark or mention. */
+/** Return true if any run carries an inline formatting mark, mention, or page link. */
 export function hasRichMarks(runs: readonly InlineRun[]): boolean {
   return runs.some(run =>
     Boolean(
@@ -33,7 +33,8 @@ export function hasRichMarks(runs: readonly InlineRun[]): boolean {
           run.marks.link ||
           run.marks.highlight ||
           run.marks.color ||
-          run.marks.mention)
+          run.marks.mention ||
+          run.marks.page)
     )
   );
 }
