@@ -50,15 +50,15 @@ const estimates: Partial<Record<Block['type'], number>> = {
 function sameLayoutOnEdit(previous: readonly Block[], next: readonly Block[], topLevel = true): boolean {
   if (previous === next) return true;
   if (previous.length !== next.length) return false;
-  let first = 0;
-  let last = next.length - 1;
-  if (previous[last]?.id !== next[last]?.id) return false;
-  while (first <= last && previous[first] === next[first]) first++;
-  if (first > last) return true;
-  while (last > first && previous[last] === next[last]) last--;
-  if (first !== last) return false;
-  const a = previous[first]!;
-  const b = next[first]!;
+  let edit = -1;
+  for (let i = 0; i < next.length; i++) {
+    if (previous[i] === next[i]) continue;
+    if (edit >= 0) return false;
+    edit = i;
+  }
+  if (edit < 0) return true;
+  const a = previous[edit]!;
+  const b = next[edit]!;
   // Only top-level block types contribute to the estimated offsets.
   return (
     a.id === b.id &&

@@ -174,6 +174,26 @@ test('updates nested pins after an equal-length swap of distant subtrees', async
   expect(parents).toEqual(['bench-200', 'bench-800', 'bench-200']);
 });
 
+test('edits a nested paragraph through the virtual window and restores it on undo', async ({ page }) => {
+  await setup(page, 1000);
+  await page.evaluate(() => {
+    const editor = window.__host.editor!;
+    editor.store.update(doc => {
+      const blocks = doc.blocks.slice();
+      const parent = blocks[700]!;
+      blocks[700] = { ...parent, children: [{ ...parent, id: 'nested-edit' }] };
+      return { ...doc, blocks };
+    });
+    editor.focus('nested-edit', 0);
+  });
+  const nested = page.locator('[data-block-id="nested-edit"] .nb-text');
+  await page.keyboard.type('X');
+  await expect(nested).toHaveText('XBlock 700');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(nested).toHaveText('Block 700');
+  await expect(nested).toBeInViewport();
+});
+
 test('reindexes a bulk replacement without walking the discarded tree', async ({ page }) => {
   await setup(page, 1000);
   const result = await page.evaluate(() => {
