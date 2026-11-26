@@ -92,6 +92,19 @@ class YBackend implements Backend {
   format(k: string, i: number, n: number, name: string, v: unknown) {
     this.text(k).format(i, n, { [name]: v ?? null });
   }
+  boundary(k: string, i: number) {
+    return JSON.stringify(
+      Y.createRelativePositionFromTypeIndex(this.text(k), i)
+    );
+  }
+  resolveBoundary(_k: string, token: string) {
+    return (
+      Y.createAbsolutePositionFromRelativePosition(
+        Y.createRelativePositionFromJSON(JSON.parse(token)),
+        this.doc
+      )?.index ?? 0
+    );
+  }
   cursor(k: string, i: number, exact = false) {
     const p = Y.createRelativePositionFromTypeIndex(this.text(k), i);
     return () => {

@@ -18,6 +18,7 @@ import type {
   DocChange,
   InlineMark,
   InlineRun,
+  Point,
   TableData,
 } from './types.js';
 
@@ -46,6 +47,8 @@ export interface Backend {
     name: string,
     value: unknown
   ): void;
+  boundary(key: string, index: number): string;
+  resolveBoundary(key: string, token: string): number;
   cursor(key: string, index: number, exact?: boolean): () => number | null;
   transact(fn: () => void): void;
   undo(): boolean;
@@ -59,7 +62,7 @@ export interface PresenceChannel {
   publish(value: Omit<PeerPresence, 'clientId'> | null): void;
   subscribe(listener: (peers: readonly PeerPresence[]) => void): () => void;
 }
-const key = (...path: string[]) => JSON.stringify(path);
+const key = (...path: (string | string[])[]) => JSON.stringify(path);
 const equal = (a: unknown, b: unknown) =>
   a === b || JSON.stringify(a) === JSON.stringify(b);
 function fields(store: Backend, path: string, before: Fields, next: Fields) {
@@ -158,18 +161,49 @@ function place(
   store.insert(path, at, JSON.stringify([id, clock, store.actor]));
   return { id, index: at };
 }
-function writeGrid(
+// Existing snapshots use the block ID directly. A replacement uses a fresh
+// namespace, including its cell texts, record pages and ordering metadata.
+function gridId(store: Backend, blockId: string, kind: string) {
+  const generation = store.read(key(blockId, 'grids'))[kind];
+  return typeof generation === 'string' ? [blockId, generation] : blockId;
+}
+function gridTextPath(
   store: Backend,
   id: string,
+  kind: string,
+  row: string,
+  column?: string
+) {
+  const storageId = gridId(store, id, kind);
+  return column === undefined
+    ? key(storageId, 'recordPage', row)
+    : key(storageId, kind, row, column);
+}
+function writeGrid(
+  store: Backend,
+  blockId: string,
   kind: 'table' | 'database',
   before: Grid | undefined,
   next: Grid | undefined,
   clock: number
 ) {
-  const base = key(id, kind);
-  if (!!before !== !!next)
-    store.field(key(id, 'grids'), kind, next ? true : undefined);
-  if (!next) return;
+  if (!next) {
+    if (before) {
+      store.field(key(blockId, 'grids'), kind, undefined);
+      store.field(key(blockId, 'retiredGrids'), kind, true);
+    }
+    return;
+  }
+  if (!before)
+    store.field(
+      key(blockId, 'grids'),
+      kind,
+      store.read(key(blockId, 'retiredGrids'))[kind]
+        ? JSON.stringify([clock, store.actor])
+        : true
+    );
+  const id = gridId(store, blockId, kind),
+    base = key(id, kind);
   const { rows, columns, ...meta } = next;
   if (!before) {
     store.ensureList(key(id, kind, 'columns'));
@@ -293,7 +327,8 @@ function writeGrid(
     }
   }
 }
-function readGrid(store: Backend, id: string, kind: string): Grid {
+function readGrid(store: Backend, blockId: string, kind: string): Grid {
+  const id = gridId(store, blockId, kind);
   const axis = (name: string) => {
     const active = store.read(key(id, kind, name, 'active'));
     return ids(store, key(id, kind, name))
@@ -349,8 +384,8 @@ export class SharedAdapter implements CollaborationAdapter {
     | {
         target: CompositionTarget;
         path: string;
-        start: () => number | null;
-        selected: { offset: () => number | null; length: number }[];
+        start: () => Point | null;
+        selected: { offset: () => Point | null; length: number }[];
       }
     | undefined;
   constructor(
@@ -426,7 +461,17 @@ export class SharedAdapter implements CollaborationAdapter {
           s.ensureList(key('children', 'block', id));
           s.field('types', id, p.block.type);
           props(p.block.props);
-          writeText(s, bodyText(id), s.runs(bodyText(id)), p.block.text);
+          if (p.split) {
+            s.ensureText(bodyText(id));
+            const cut = this.#text.at(bodyText(p.split.from), p.split.offset);
+            s.field('splits', id, {
+              from: p.split.from,
+              path: cut.path,
+              token: s.boundary(cut.path, cut.offset),
+              clock,
+              actor: s.actor,
+            });
+          } else writeText(s, bodyText(id), s.runs(bodyText(id)), p.block.text);
           placements.push({ ...p, blockId: id });
           break;
         case 'deleteBlock':
@@ -438,7 +483,8 @@ export class SharedAdapter implements CollaborationAdapter {
         case 'replaceBlockText':
           if (p.mergedFrom !== undefined)
             s.field('joins', p.mergedFrom, { into: id, clock, actor: s.actor });
-          else writeText(this.#text, bodyText(id), p.previous, p.next);
+          else if (!p.splitSuffix)
+            writeText(this.#text, bodyText(id), p.previous, p.next);
           break;
         case 'setBlockType':
           s.field('types', id, p.blockType);
@@ -579,16 +625,13 @@ export class SharedAdapter implements CollaborationAdapter {
       ...(history && { history }),
       remapPoint: (p) => {
         const point = previousText.at(bodyText(p.blockId), p.offset, true);
-        const id =
-          updatedText.owner(point.path) ??
-          (JSON.parse(point.path)[0] as string);
-        if (!find(doc.blocks, id)) return null;
-        return {
-          blockId: id,
-          offset:
-            (updatedText.prefix(bodyText(id), point.path, true) ?? 0) +
-            offsets(point.path, point.offset),
-        };
+        const mapped = updatedText.logical(
+          point.path,
+          offsets(point.path, point.offset),
+          p.blockId,
+          true
+        );
+        return mapped && find(doc.blocks, mapped.blockId) ? mapped : null;
       },
       remapCellOffset: (id, row, col, i) => {
         const b = find(doc.blocks, id),
@@ -599,7 +642,13 @@ export class SharedAdapter implements CollaborationAdapter {
         )
           return null;
         return offsets(
-          key(id, b?.props.table ? 'table' : 'database', row, col),
+          gridTextPath(
+            this.store,
+            id,
+            b?.props.table ? 'table' : 'database',
+            row,
+            col
+          ),
           i
         );
       },
@@ -630,25 +679,31 @@ export class SharedAdapter implements CollaborationAdapter {
   }
   beginComposition(target: CompositionTarget) {
     const block = find(this.#snapshot.blocks, target.blockId);
+    const kind = block?.type === 'table' ? 'table' : 'database';
     const path =
       target.rowId === undefined
         ? bodyText(target.blockId)
-        : target.columnId === undefined
-          ? key(target.blockId, 'recordPage', target.rowId)
-          : key(
-              target.blockId,
-              block?.type === 'table' ? 'table' : 'database',
-              target.rowId,
-              target.columnId
-            );
+        : gridTextPath(
+            this.store,
+            target.blockId,
+            kind,
+            target.rowId,
+            target.columnId
+          );
     const cursor = (i: number, exact = false) => {
-      if (target.rowId !== undefined) return this.store.cursor(path, i, exact);
+      if (target.rowId !== undefined) {
+        const resolve = this.store.cursor(path, i, exact);
+        return () => {
+          const at = resolve();
+          return at === null ? null : { blockId: target.blockId, offset: at };
+        };
+      }
       const anchor = this.#text.anchor(path, i, exact);
       return () => {
         const at = anchor.resolve();
-        const owner = this.#text.owner(path) ?? target.blockId;
-        const prefix = this.#text.prefix(bodyText(owner), anchor.path);
-        return at === null || prefix === null ? null : prefix + at;
+        return at === null
+          ? null
+          : this.#text.logical(anchor.path, at, target.blockId);
       };
     };
     let i = target.from;
@@ -674,18 +729,24 @@ export class SharedAdapter implements CollaborationAdapter {
     const comp = this.#composition;
     this.#composition = undefined;
     if (!comp) return { doc: this.#snapshot };
-    const start = comp.start();
-    const id =
-      comp.target.rowId === undefined
-        ? (this.#text.owner(comp.path) ?? comp.target.blockId)
-        : comp.target.blockId;
+    const point = comp.start();
+    if (!point) return { doc: this.#snapshot };
+    const { blockId: id, offset: start } = point;
     const path = comp.target.rowId === undefined ? bodyText(id) : comp.path;
     const block = find(this.#snapshot.blocks, id);
-    if (start === null || !block) return { doc: this.#snapshot };
+    if (!block) return { doc: this.#snapshot };
     if (comp.target.rowId !== undefined) {
       const grid = block.props.table ?? block.props.database,
         { rowId, columnId } = comp.target;
       if (
+        comp.path !==
+          gridTextPath(
+            this.store,
+            id,
+            block.type === 'table' ? 'table' : 'database',
+            rowId,
+            columnId
+          ) ||
         !grid?.rows.some((r) => r.id === rowId) ||
         (columnId !== undefined
           ? !grid.columns.some((c) => c.id === columnId)
@@ -695,8 +756,9 @@ export class SharedAdapter implements CollaborationAdapter {
     }
     const ranges: { start: number; length: number }[] = [];
     for (const char of comp.selected) {
-      const at = char.offset();
-      if (at === null) continue;
+      const current = char.offset();
+      if (current?.blockId !== id) continue;
+      const at = current.offset;
       const last = ranges.at(-1);
       if (last && last.start + last.length === at) last.length += char.length;
       else ranges.push({ start: at, length: char.length });

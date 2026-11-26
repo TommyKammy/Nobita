@@ -469,3 +469,35 @@ for (const key of ['Backspace', 'Delete']) {
     }
   );
 }
+
+test('Enter keeps offline typing and its caret in the split suffix', async ({
+  page,
+}) => {
+  await openFixture(page);
+  const network = await page.evaluateHandle(async () => {
+    const path = '/peers.ts',
+      network = await (await import(path)).setupPeers(),
+      editor = window.__editor!;
+    const block = editor.doc.blocks[0]!;
+    editor.setDoc({
+      ...editor.doc,
+      blocks: [{ ...block, text: [{ text: 'abcd' }] }],
+    });
+    network.pause();
+    editor.focus(block.id, 2);
+    return network;
+  });
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#editor .nb-text')).toHaveText(['ab', 'cd']);
+  await page.evaluate(() =>
+    (document.querySelector('#peer') as typeof window.__host).editor!.focus(
+      'p',
+      3
+    )
+  );
+  await page.keyboard.type('X');
+  await network.evaluate((n) => n.resume());
+  await expect(page.locator('#peer .nb-text')).toHaveText(['ab', 'cXd']);
+  await page.keyboard.type('Y');
+  await expect(page.locator('#editor .nb-text')).toHaveText(['ab', 'cXYd']);
+});

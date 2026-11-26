@@ -1,4 +1,4 @@
-import { recordBlockMerge } from './block-merge.js';
+import { recordTextTransfer } from './block-merge.js';
 import { createDocId, createId } from './id.js';
 import { createDatabaseData, duplicateDatabaseData } from './database.js';
 import { createTableData, duplicateTableData } from './table.js';
@@ -354,6 +354,7 @@ export function splitBlock(doc: Doc, id: string, offset: number, newId?: string)
   };
   let nextDoc = setBlockText(doc, id, before);
   nextDoc = insertBlocksAfter(nextDoc, id, [newBlock]);
+  if (at < length) recordTextTransfer(doc, nextDoc, id, newBlock.id, at);
   return { doc: nextDoc, newBlock, caretOffset: 0 };
 }
 
@@ -392,7 +393,7 @@ function joinAdjacentBlocks(doc: Doc, into: Block, source: Block): Doc {
     children: [...block.children, ...source.children],
   }));
   const next = removeBlock(merged, source.id);
-  recordBlockMerge(doc, next, source.id, into.id);
+  recordTextTransfer(doc, next, source.id, into.id);
   return next;
 }
 

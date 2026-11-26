@@ -244,6 +244,12 @@ class AutomergeBackend implements Backend {
     }
     return normalizeRuns(runs);
   }
+  boundary(k: string, i: number) {
+    return A.getCursor(this.state, ['texts', k], i);
+  }
+  resolveBoundary(k: string, token: string) {
+    return A.getCursorPosition(this.state, ['texts', k], token);
+  }
   cursor(k: string, i: number): () => number;
   cursor(k: string, i: number, exact: boolean): () => number | null;
   cursor(k: string, i: number, exact = false) {

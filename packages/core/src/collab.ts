@@ -1,4 +1,4 @@
-import { blockMergeFor } from './block-merge.js';
+import { textTransferFor } from './block-merge.js';
 import type {
   Block,
   BlockProps,
@@ -21,6 +21,7 @@ export type DocPatch =
       parentId: string | null;
       index: number;
       block: Block;
+      split?: { from: string; offset: number };
     }
   | { type: 'deleteBlock'; blockId: string }
   | {
@@ -39,6 +40,7 @@ export type DocPatch =
   | {
       type: 'replaceBlockText';
       mergedFrom?: string;
+      splitSuffix?: boolean;
       blockId: string;
       previous: InlineRun[];
       next: InlineRun[];
@@ -104,7 +106,7 @@ export interface CollaborationAdapter {
 /** Only index changed sibling lists. Shared subtrees are already identical. */
 export function diffDocs(previous: Doc, next: Doc): DocPatch[] {
   const patches: DocPatch[] = [];
-  const merge = blockMergeFor(previous, next);
+  const transfer = textTransferFor(previous, next);
   if (previous.title !== next.title)
     patches.push({ type: 'setTitle', title: next.title });
   if (previous.icon !== next.icon)
@@ -141,6 +143,10 @@ export function diffDocs(previous: Doc, next: Doc): DocPatch[] {
         parentId,
         index,
         block: { ...block, children: [] },
+        ...(transfer?.into === blockId &&
+          transfer.offset !== undefined && {
+            split: { from: transfer.from, offset: transfer.offset },
+          }),
       });
       continue;
     }
@@ -153,7 +159,10 @@ export function diffDocs(previous: Doc, next: Doc): DocPatch[] {
       patches.push({
         type: 'replaceBlockText',
         blockId,
-        ...(merge?.into === blockId && { mergedFrom: merge.from }),
+        ...(transfer?.into === blockId &&
+          transfer.offset === undefined && { mergedFrom: transfer.from }),
+        ...(transfer?.from === blockId &&
+          transfer.offset !== undefined && { splitSuffix: true }),
         previous: before.text,
         next: block.text,
       });

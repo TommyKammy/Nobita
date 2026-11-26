@@ -4,6 +4,7 @@ import { YjsCollaborationAdapter } from '../../packages/collab-yjs/src/index';
 import { AutomergeCollaborationAdapter } from '../../packages/collab-automerge/src/index';
 import {
   diffDocs,
+  splitBlock,
   insertTextAt,
   mergeBlockWithPrevious,
   mergeBlockWithNext,
@@ -626,6 +627,114 @@ for (const engine of ['automerge', 'yjs']) {
         { text: 'A!' },
         { text: 'X', marks: { bold: true } },
       ]);
+    }
+  );
+}
+
+for (const engine of ['automerge', 'yjs']) {
+  it(
+    engine + ' preserves offline edits and formatting in the split suffix',
+    () => {
+      const initial = structuredClone(seed);
+      initial.blocks[0]!.text = [{ text: 'abcd' }];
+      const { a, b, send, observe } = pair(engine, initial);
+      const previous = a.getDoc(),
+        { doc } = splitBlock(previous, 'a', 2, 'suffix');
+      a.applyLocalChange(
+        { previous, doc, source: 'input', selection: null },
+        diffDocs(previous, doc)
+      );
+      edit(b, (d) => {
+        d.blocks[0]!.text = [
+          { text: 'ab' },
+          { text: 'cXd', marks: { bold: true } },
+        ];
+      });
+      send();
+      expect(
+        a
+          .getDoc()
+          .blocks.slice(0, 2)
+          .map((b) => b.text)
+      ).toEqual([[{ text: 'ab' }], [{ text: 'cXd', marks: { bold: true } }]]);
+      expect(observe(true)).toEqual(a.getDoc());
+      a.undo();
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual([
+        { text: 'ab' },
+        { text: 'cXd', marks: { bold: true } },
+      ]);
+      a.redo();
+      send();
+      edit(b, (d) => {
+        d.blocks[1]!.text.unshift({ text: '!' });
+      });
+      send();
+      expect(a.getDoc().blocks[0]!.text).toEqual([{ text: 'ab' }]);
+      expect(a.getDoc().blocks[1]!.text).toEqual([
+        { text: '!' },
+        { text: 'cXd', marks: { bold: true } },
+      ]);
+    }
+  );
+  it(
+    engine + ' keeps both concurrent joins of three adjacent paragraphs',
+    () => {
+      const initial = structuredClone(seed);
+      initial.blocks = ['a', 'b', 'c'].map((id) => block(id, id));
+      const { a, b, send } = pair(engine, initial);
+      for (const [peer, id] of [
+        [a, 'a'],
+        [b, 'b'],
+      ] as const) {
+        const previous = peer.getDoc(),
+          doc = mergeBlockWithNext(previous, id)!;
+        peer.applyLocalChange(
+          { previous, doc, source: 'input', selection: null },
+          diffDocs(previous, doc)
+        );
+      }
+      send();
+      expect(a.getDoc().blocks.map((b) => b.text)).toEqual([[{ text: 'abc' }]]);
+      expect(b.getDoc()).toEqual(a.getDoc());
+    }
+  );
+  it.each(['table', 'database'] as const)(
+    engine + ' retires a %s when converting its block',
+    (kind) => {
+      const { a, b, send } = pair(engine, seed);
+      const grid = (ids: string[]) => ({
+        columns: ids.map((id) => ({ id, name: id, type: 'text' as const })),
+        rows: ids.map((id) => ({ id, cells: {} })),
+      });
+      edit(a, (d) => {
+        d.blocks[0]!.type = kind;
+        d.blocks[0]!.props = { [kind]: grid(['reuse', 'old']) };
+      });
+      edit(a, (d) => {
+        (d.blocks[0]!.props.table ??
+          d.blocks[0]!.props.database)!.rows[0]!.cells.reuse = {
+          text: 'old content',
+        };
+      });
+      send();
+      const original = a.getDoc();
+      edit(a, (d) => {
+        d.blocks[0]!.type = 'paragraph';
+        d.blocks[0]!.props = {};
+      });
+      edit(a, (d) => {
+        d.blocks[0]!.type = kind;
+        d.blocks[0]!.props = { [kind]: grid(['new', 'reuse']) };
+      });
+      send();
+      expect(b.getDoc().blocks[0]!.props).toEqual({
+        [kind]: grid(['new', 'reuse']),
+      });
+      a.undo();
+      a.undo();
+      send();
+      expect(b.getDoc()).toEqual(original);
     }
   );
 }
