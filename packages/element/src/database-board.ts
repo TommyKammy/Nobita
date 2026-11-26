@@ -26,6 +26,7 @@ import {
   parseProgressValue,
   seedGroupSettings,
   withText,
+  isComputedColumn,
 } from './database-dom.js';
 import type { DatabaseRichTextController } from './database-rich-text.js';
 
@@ -682,7 +683,7 @@ export class DatabaseBoardController {
 
     let rows = data.rows;
     if (!sameGroup) {
-      if (groupColumn.type === 'formula' || groupColumn.type === 'relation') return;
+      if (isComputedColumn(groupColumn)) return;
       const cells = { ...row.cells };
       let next: DatabaseCell;
       if (groupColumn.type === 'multi-select') {

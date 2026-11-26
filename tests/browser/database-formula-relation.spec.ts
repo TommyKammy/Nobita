@@ -297,3 +297,66 @@ test('notifies the external host of paired edits and undo', async ({
   );
   expect(changes).toEqual(['first:false', 'second:true']);
 });
+
+for (const external of [false, true]) {
+  test(
+    'searches and selects computed titles in a ' +
+      (external ? 'remote' : 'local') +
+      ' database',
+    async ({ page }) => {
+      await openFixture(page);
+      await page.evaluate(
+        ({ tasks, projects, external }) => {
+          const host = document.querySelector(
+            'nobita-editor'
+          ) as NobitaEditorElement;
+          tasks.titleColumnId = 'label';
+          tasks.columns.push({
+            id: 'label',
+            name: 'Label',
+            type: 'formula',
+            formula: { expression: 'concat("Task ",prop("hours"))' },
+          });
+          delete projects.view;
+          projects.rows[0]!.cells = {};
+          if (external) {
+            projects.columns[1]!.relation!.pageId = 'remote';
+            host.resolveDatabase = (id, pageId) =>
+              id === 'tasks' && pageId === 'remote' ? tasks : null;
+          }
+          host.doc = {
+            ...host.doc,
+            blocks: (external ? [projects] : [projects, tasks]).map(
+              (database) => ({
+                id: database.title!.toLowerCase(),
+                type: 'database',
+                props: { database },
+                children: [],
+                text: [],
+              })
+            ),
+          };
+        },
+        { tasks, projects, external }
+      );
+      const relation = page.locator(
+        'td[data-row-id="p0"][data-column-id="tasks"] button'
+      );
+      await relation.click();
+      const picker = page.locator('.nb-db-popover');
+      await picker.getByRole('searchbox').fill('Task 3');
+      await expect(picker.getByRole('button')).toHaveText(['Task 3']);
+      await picker.getByRole('button', { name: 'Task 3', exact: true }).click();
+      await expect(relation).toHaveText('Task 3');
+      expect(
+        await page.evaluate(
+          () =>
+            (
+              document.querySelector('nobita-editor') as NobitaEditorElement
+            ).editor!.resolveDatabase('projects')!.rows[0]!.cells.tasks
+              ?.relations
+        )
+      ).toEqual([{ rowId: 't0', label: 'Task 3' }]);
+    }
+  );
+}

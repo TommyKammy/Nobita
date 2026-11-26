@@ -40,7 +40,7 @@ const controllerMethods = [
   'commitColumnFields', 'commitDeletedRows', 'setPendingBoardFocus', 'addColumnOfType',
   'addFilterForColumn', 'setGroupProperty', 'setFilterTree', 'defaultGroupColumn', 'patchViewColumn',
   'applyFirst', 'formatSelect', 'decimalPatch', 'insertColumn', 'deleteColumn', 'focusAfter',
-  'activeView', 'titleColumn', 'syncValues', 'closePopover',
+  'activeView', 'titleColumn', 'syncValues', 'showPopover', 'closePopover',
   'updateActiveView', 'groupsFor', 'columnStates', 'viewColumns', 'navigationRows', 'visibleColumns',
   'openAddPropertyMenu', 'openDetailPanel', 'openComputed', 'openColumnPopover', 'openRowPopover',
   'openPeoplePopover', 'openMultiSelectPopover', 'openSelectPopover', 'openFilesPopover', 'openImagePopover',

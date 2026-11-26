@@ -80,6 +80,7 @@ import {
   setSelectionOffsets,
   shortcutTag,
   withText,
+  isComputedColumn,
 } from './database-dom.js';
 import { DatabaseBoardController } from './database-board.js';
 import { DatabaseDetailController } from './database-detail.js';
@@ -2016,7 +2017,7 @@ export class DatabaseView {
       column.type === 'select' ||
       column.type === 'multi-select' ||
       column.type === 'files' ||
-      column.type === 'people' || column.type === 'formula' || column.type === 'relation' ||
+      column.type === 'people' || isComputedColumn(column) ||
       column.type === 'image'
     ) {
       this.#createPickerCell(td, nodes, row, column, cell);
@@ -2121,7 +2122,7 @@ export class DatabaseView {
     const button = btn(className, { disabled: this.#readonly });
     this.#applyButtonLabel(button, column, cell);
     const open = (): void => {
-      if (column.type === 'formula' || column.type === 'relation') {
+      if (isComputedColumn(column)) {
         this.#popovers.openComputed(column.id,button,column.type === 'relation' ? row.id : undefined);
       } else if (column.type === 'select') {
         this.#popovers.openSelectPopover(column.id, row.id, button);

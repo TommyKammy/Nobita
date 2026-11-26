@@ -139,6 +139,10 @@ export interface ButtonOptions {
   dataset?: Record<string, string>;
 }
 
+export function isComputedColumn(column: DatabaseColumn) {
+  return column.type === 'formula' || column.type === 'relation';
+}
+
 /** Create a type="button" element with common attributes. */
 export function btn(
   className?: string,
@@ -168,11 +172,10 @@ export function iconBtn(
   options: { title?: string; disabled?: boolean; dataset?: Record<string, string> } = {}
 ): HTMLButtonElement {
   return btn(className, {
+    ...options,
     html: iconMarkup,
     title: options.title ?? label,
     ariaLabel: label,
-    ...(options.disabled !== undefined ? { disabled: options.disabled } : {}),
-    ...(options.dataset ? { dataset: options.dataset } : {}),
   });
 }
 

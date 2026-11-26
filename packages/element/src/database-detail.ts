@@ -36,6 +36,7 @@ import {
   shortcutTag,
   titleTextEditable,
   withText,
+  isComputedColumn,
 } from './database-dom.js';
 import type { DatabaseRichTextController } from './database-rich-text.js';
 
@@ -382,7 +383,7 @@ export class DatabaseDetailController {
   ): void {
     if (column.type === 'files') applyFilesLabel(button, cell?.files ?? [], column.name);
     else if (column.type === 'people') applyPeopleLabel(button, cell?.people ?? [], column.name);
-    else if (column.type === 'formula' || column.type === 'relation') button.textContent = databaseCellDisplay(cell,column.type);
+    else if (isComputedColumn(column)) button.textContent = databaseCellDisplay(cell,column.type);
     else if (column.type === 'image') applyImageLabel(button, cell?.text, column.name);
   }
 
@@ -557,7 +558,7 @@ export class DatabaseDetailController {
       });
       this.#applyPickerLabel(button, column, cell);
       button.addEventListener('click', () => {
-        if (column.type === 'formula' || column.type === 'relation') {
+        if (isComputedColumn(column)) {
           this.#ctx.openComputed(column.id,button,column.relation ? row.id : undefined);
         } else if (column.type === 'files') {
           this.#ctx.openFilesPopover(column.id, row.id, button);

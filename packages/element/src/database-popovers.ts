@@ -1,4 +1,5 @@
 import {
+  DatabaseEvalContext,
   DATABASE_STAT_LABELS,
   DATABASE_STAT_TYPES,
   createId,
@@ -42,6 +43,7 @@ import {
   iconBtn,
   popTitle,
   selectEl,
+  isComputedColumn,
 } from './database-dom.js';
 import type { DatabaseHost, DatabaseImageUploader } from './database-view.js';
 
@@ -1227,6 +1229,7 @@ export class DatabasePopoversController {
   ) {
     const ctx = this.#ctx;
     const { host } = ctx;
+    const { resolveDatabase } = host;
     const data = ctx.getData();
     const column = data.columns.find(c => c.id === columnId);
     if (!column || ctx.getReadonly()) return;
@@ -1251,7 +1254,7 @@ export class DatabasePopoversController {
     };
     const action = (label: string, fn: () => void) => {
       const button = btn(undefined, { text: label });
-      button.addEventListener('click', fn);
+      button.onclick = fn;
       content.append(button);
     };
     if (column.type === 'formula') {
@@ -1260,7 +1263,7 @@ export class DatabasePopoversController {
       input.value = formulaNames(
         column.formula?.expression ?? '',
         data,
-        host.resolveDatabase,
+        resolveDatabase,
         true
       );
       content.append(popTitle('Edit formula'), input);
@@ -1271,7 +1274,7 @@ export class DatabasePopoversController {
             expression: formulaNames(
               input.value,
               ctx.getData(),
-              host.resolveDatabase
+              resolveDatabase
             ),
           },
         })
@@ -1285,29 +1288,35 @@ export class DatabasePopoversController {
     search.type = 'search';
     const list = el('div', 'nb-db-pop-actions');
     if (rowId && rel) {
+      const evaluation = new DatabaseEvalContext(resolveDatabase);
       search.setAttribute('aria-label', 'Search rows');
       content.append(popTitle('Linked rows'), search, list);
       const render = () => {
-        const target = host.resolveDatabase(rel.databaseId, rel.pageId);
+        const target = resolveDatabase(rel.databaseId, rel.pageId);
         const title = target && databaseTitleColumn(target);
         const refs =
           ctx.getData().rows.find(r => r.id === rowId)?.cells[columnId]
             ?.relations ?? [];
         const options = new Map(refs.map(r => [r.rowId, r.label ?? r.rowId]));
-        for (const r of target?.rows ?? [])
-          options.set(r.id, (title && databaseCellText(r.cells[title.id], title.type)) || r.id);
+        const rows = target && title && isComputedColumn(title)
+          ? evaluation.project(target).rows
+          : target?.rows;
+        for (const row of rows ?? []) {
+          const label = title && databaseCellText(row.cells[title.id], title.type);
+          options.set(row.id, label || options.get(row.id) || row.id);
+        }
+        const query = search.value.toLowerCase();
         list.replaceChildren();
         for (const [id, label] of options) {
-          if (!label.toLowerCase().includes(search.value.toLowerCase()))
+          if (!label.toLowerCase().includes(query))
             continue;
           const selected = refs.some(ref => ref.rowId === id);
           const button = btn(undefined, { text: label });
           button.setAttribute('aria-pressed', String(selected));
           button.onclick = () => {
-            const remaining = refs.filter(r => r.rowId !== id);
             const relations = selected
-              ? remaining
-              : [...(rel.limit ? [] : remaining), { rowId: id, label }];
+              ? refs.filter(r => r.rowId !== id)
+              : [...(rel.limit ? [] : refs), { rowId: id, label }];
             ctx.commitCell(
               rowId,
               columnId,
@@ -1342,7 +1351,7 @@ export class DatabasePopoversController {
     const refreshReverse = (selected = rel?.syncedColumnId) => {
       const choice = targets[target.selectedIndex];
       const db =
-        choice && host.resolveDatabase(choice.databaseId, choice.pageId);
+        choice && resolveDatabase(choice.databaseId, choice.pageId);
       reverse.replaceChildren(new Option('One-way', ''));
       for (const c of db?.columns ?? [])
         if (c.type === 'relation' && compatibleReverse(c.relation, host.databaseId, columnId, choice?.pageId && host.pageId)) {
@@ -1371,9 +1380,7 @@ export class DatabasePopoversController {
       );
       refreshReverse();
     };
-    search.oninput = () => {
-      void refresh();
-    };
+    search.oninput = refresh;
     action('Save relation', () => {
       const choice = targets[target.selectedIndex];
       if (!choice) return;
@@ -1482,7 +1489,7 @@ export class DatabasePopoversController {
       });
       actions.append(button);
     };
-    if (column.type === 'formula' || column.type === 'relation') {
+    if (isComputedColumn(column)) {
       action(
         column.type === 'formula' ? 'Edit formula' : 'Configure relation',
         icon.check,
