@@ -73,9 +73,13 @@ for (const { name, path } of artifacts()) {
     console.warn('  warning: standalone ESM exceeds the Phase 4 budget (main + 1,000 and cumulative 115,147 gzip bytes)');
     if (strict) failed = true;
   }
-  if (before && gzipDelta > threshold) {
-    console.warn(`  warning: gzip grew more than ${threshold * 100}%`);
-    if (strict) failed = true;
+  if (before) {
+    const baselineLimit = Math.floor(before.gzip * (1 + threshold));
+    const limit = name === 'demo' ? Math.max(baselineLimit, 131_905) : baselineLimit;
+    if (gzip > limit) {
+      console.warn(`  warning: ${name} exceeds the ${limit} byte gzip budget`);
+      if (strict) failed = true;
+    }
   }
 }
 

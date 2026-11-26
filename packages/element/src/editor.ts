@@ -4170,30 +4170,8 @@ function escapeMenuText(text: string): string {
 
 
 
-function replaceBlockText(doc: Doc, blockId: string, runs: Block['text']): Doc {  const blocks = replaceTextIn(doc.blocks, blockId, runs);
-  return blocks === doc.blocks ? doc : { ...doc, blocks };
-}
-
-function replaceTextIn(
-  blocks: readonly Block[],
-  blockId: string,
-  runs: Block['text']
-): Block[] {
-  let changed = false;
-  const next = blocks.map(block => {
-    if (block.id === blockId) {
-      if (block.text === runs) return block;
-      changed = true;
-      return { ...block, text: runs };
-    }
-    const children = replaceTextIn(block.children, blockId, runs);
-    if (children !== block.children) {
-      changed = true;
-      return { ...block, children };
-    }
-    return block;
-  });
-  return changed ? next : (blocks as Block[]);
+function replaceBlockText(doc: Doc, blockId: string, runs: Block['text']): Doc {
+  return updateBlock(doc, blockId, block => block.text === runs ? block : { ...block, text: runs });
 }
 
 function setChildrenDeep(blocks: readonly Block[], blockId: string, children: Block[]): Block[] {

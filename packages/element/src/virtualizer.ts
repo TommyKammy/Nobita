@@ -45,6 +45,28 @@ const estimates: Partial<Record<Block['type'], number>> = {
   database: 240,
 };
 
+// A single edit copies one path through the tree. For a bulk replacement,
+// rebuilding directly avoids comparing two whole snapshots before indexing.
+function sameLayoutOnEdit(previous: readonly Block[], next: readonly Block[], topLevel = true): boolean {
+  if (previous === next) return true;
+  if (previous.length !== next.length) return false;
+  let edit = -1;
+  for (let i = 0; i < next.length; i++) {
+    if (previous[i] === next[i]) continue;
+    if (edit >= 0) return false;
+    edit = i;
+  }
+  if (edit < 0) return true;
+  const a = previous[edit]!;
+  const b = next[edit]!;
+  // Only top-level block types contribute to the estimated offsets.
+  return (
+    a.id === b.id &&
+    (!topLevel || a.type === b.type) &&
+    sameLayoutOnEdit(a.children, b.children, false)
+  );
+}
+
 export class Virtualizer {
   #parent: HTMLElement | Window = window;
   #awaitingAttachment;
@@ -163,8 +185,10 @@ export class Virtualizer {
     const changed = blocks !== this.#blocks;
     const anchor = this.#at(top);
 
+    const rebuild = changed && !sameLayoutOnEdit(this.#blocks, blocks);
+    this.#blocks = blocks;
     let delta = 0;
-    if (changed || this.#pending.size) {
+    if (rebuild || this.#pending.size) {
       for (const [id, h] of this.#pending) {
         const previous = this.#heights.get(id);
         if (
@@ -176,8 +200,7 @@ export class Virtualizer {
         this.#heights.set(id, h);
       }
       this.#pending.clear();
-      if (changed) {
-        this.#blocks = blocks;
+      if (rebuild) {
         this.#indices.clear();
         const index = (b: Block, i: number) => {
           this.#indices.set(b.id, i);
@@ -186,14 +209,16 @@ export class Virtualizer {
         blocks.forEach(index);
         for (const id of this.#heights.keys())
           if (!this.#indices.has(id)) this.#heights.delete(id);
-        this.#offsets = new Float64Array(blocks.length + 1);
+        if (this.#offsets.length !== blocks.length + 1)
+          this.#offsets = new Float64Array(blocks.length + 1);
       }
-      blocks.forEach((b, i) => {
+      for (let i = 0; i < blocks.length; i++) {
+        const b = blocks[i]!;
         this.#offsets[i + 1] =
           this.#offsets[i]! +
           (this.#heights.get(b.id) ??
             (estimates[b.type] ?? 32) + b.children.length * 32);
-      });
+      }
     }
     if (delta) parent.scrollBy(0, delta);
     const fixed: number[] = [];
