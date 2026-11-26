@@ -439,13 +439,20 @@ The following sizes are in bytes, measured with `pnpm size` on Node.js 22.23.5. 
 
 ## Repository layout
 
+### Packages
+
+| Package README | Role |
+| --- | --- |
+| [@nobita/core](packages/core/README.md) | DOM-free document model, editing commands, history, and Markdown and JSON serialization. |
+| [@nobita/element](packages/element/README.md) | Browser editor with block rendering, selection, menus and database views. Embed it with `<nobita-editor>` or `createEditor()`. |
+| [@nobita/react](packages/react/README.md) | React wrapper for the web component, with document props, change callbacks and an editor ref. |
+| [@nobita/storage](packages/storage/README.md) | Optional document persistence in memory, Web Storage, SQLite or Cloudflare D1, or through an HTTP API. |
+| [@nobita/collab-yjs](packages/collab-yjs/README.md) | Optional Yjs adapter for concurrent editing and remote selections through awareness. |
+| [@nobita/collab-automerge](packages/collab-automerge/README.md) | Optional Automerge adapter for concurrent editing and merging offline changes through binary snapshots. |
+
+### Demo, examples and documentation
+
 ```
-packages/core              Document model, commands, markdown, JSON validation, history — no DOM
-packages/element           Editor engine, block views, modular database views, selection, menus, toolbar, web component, CSS bundler
-packages/collab-yjs        Optional Yjs adapter and awareness integration
-packages/collab-automerge  Optional Automerge adapter
-packages/react             Thin React host wrapper
-packages/storage           Optional persistence port and adapters (localStorage, SQLite/D1, HTTP)
 apps/demo                  Notion-like demo: drag-and-drop page tree, [[ links, backlinks, full-text search, Trash, right-click menus, export, embed dialog
 examples/                  Optional integrations, including the Cloudflare D1 Worker
 docs/                      AFFiNE analysis, architecture, public API, command comparison, testing and storage notes
