@@ -137,19 +137,23 @@ export class BlockView {
       this.#buildContent(block);
     }
 
-    this.element.dataset.type = block.type;
-    this.element.dataset.depth = String(context.depth);
-    if (block.type === 'heading') this.element.dataset.level = String(block.props.level ?? 1);
-    else delete this.element.dataset.level;
-    if (block.type === 'todo') this.element.dataset.checked = String(Boolean(block.props.checked));
-    else delete this.element.dataset.checked;
-    if (block.type === 'callout') this.element.dataset.tone = block.props.tone ?? 'info';
-    else delete this.element.dataset.tone;
-    if (block.props.collapsed) this.element.dataset.collapsed = 'true';
-    else delete this.element.dataset.collapsed;
+    if (rebuild || contextChanged || previous.props.level !== block.props.level ||
+        previous.props.checked !== block.props.checked || previous.props.tone !== block.props.tone ||
+        previous.props.collapsed !== block.props.collapsed || previous.props.align !== block.props.align) {
+      this.element.dataset.type = block.type;
+      this.element.dataset.depth = String(context.depth);
+      if (block.type === 'heading') this.element.dataset.level = String(block.props.level ?? 1);
+      else delete this.element.dataset.level;
+      if (block.type === 'todo') this.element.dataset.checked = String(Boolean(block.props.checked));
+      else delete this.element.dataset.checked;
+      if (block.type === 'callout') this.element.dataset.tone = block.props.tone ?? 'info';
+      else delete this.element.dataset.tone;
+      if (block.props.collapsed) this.element.dataset.collapsed = 'true';
+      else delete this.element.dataset.collapsed;
 
-    if (block.props.align) this.#content.style.textAlign = block.props.align;
-    else this.#content.style.removeProperty('text-align');
+      if (block.props.align) this.#content.style.textAlign = block.props.align;
+      else this.#content.style.removeProperty('text-align');
+    }
 
     this.#renderMarker(context);
 
