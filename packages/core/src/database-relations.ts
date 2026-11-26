@@ -20,6 +20,20 @@ function rowLinks(row: DatabaseRow | undefined, columnId: string) {
   return row?.cells[columnId]?.relations ?? [];
 }
 
+export function compatibleReverse(
+  config: DatabaseRelationConfig | undefined,
+  sourceId: string,
+  columnId: string,
+  pageId?: string
+) {
+  return (
+    !config ||
+    (config.databaseId === sourceId &&
+      (!config.pageId || config.pageId === pageId) &&
+      (!config.syncedColumnId || config.syncedColumnId === columnId))
+  );
+}
+
 function sameBinding(
   a: DatabaseRelationConfig | undefined,
   b: DatabaseRelationConfig
@@ -126,13 +140,7 @@ export function updateDatabaseRelations(
       const reverse = target?.columns.find((c) => c.id === rel.syncedColumnId);
       if (!target || reverse?.type !== 'relation') return;
       const config = reverse.relation;
-      if (
-        config &&
-        (config.databaseId !== sourceId ||
-          config.pageId ||
-          (config.syncedColumnId && config.syncedColumnId !== columnId))
-      )
-        return;
+      if (!compatibleReverse(config, sourceId, columnId)) return;
       if (attach !== undefined && Boolean(config?.syncedColumnId) !== attach) {
         const { syncedColumnId: _old, ...rest } = config ?? {
           databaseId: sourceId,
@@ -147,46 +155,19 @@ export function updateDatabaseRelations(
       }
       return { target, reverse };
     };
-    const apply = (change: RelationChange) => {
-      const { databaseId, syncedColumnId } = change.target;
-      const binding = bind(
-        change.target,
-        change.columnId,
-        change.linked ? true : undefined
-      );
+    const apply = ({target: relation, sourceRowId, columnId, targetRowId, linked}: RelationChange) => {
+      const { databaseId, syncedColumnId } = relation;
+      const binding = bind(relation, columnId, linked || undefined);
       if (!binding || !syncedColumnId) return;
-      const { target, reverse } = binding;
-      if (change.linked && reverse.relation?.limit === 1) {
-        const links = (id: string) =>
-          rowLinks(
-            target.rows.find((r) => r.id === id),
-            syncedColumnId
-          );
-        // In a self-paired column an earlier displacement can remove a pending forward edge.
-        if (
-          sourceId === databaseId &&
-          change.columnId === syncedColumnId &&
-          !links(change.sourceRowId).some((r) => r.rowId === change.targetRowId)
-        )
-          return;
-        for (const old of links(change.targetRowId))
-          if (old.rowId !== change.sourceRowId) {
-            write(
-              sourceId,
-              old.rowId,
-              change.columnId,
-              change.targetRowId,
-              false
-            );
-          }
+      if (linked && binding.reverse.relation?.limit === 1) {
+        const links = (db: DatabaseData, id: string, key: string) =>
+          rowLinks(db.rows.find(row => row.id === id), key);
+        // An earlier displacement may have deleted this queued forward edge.
+        if (!links(updates.get(sourceId)!, sourceRowId, columnId).some(ref => ref.rowId === targetRowId)) return;
+        for (const old of links(binding.target, targetRowId, syncedColumnId))
+          if (old.rowId !== sourceRowId) write(sourceId, old.rowId, columnId, targetRowId, false);
       }
-      write(
-        databaseId,
-        change.targetRowId,
-        syncedColumnId,
-        change.sourceRowId,
-        change.linked
-      );
+      write(databaseId, targetRowId, syncedColumnId, sourceRowId, linked);
     };
     for (const change of changes) if (!change.linked) apply(change);
     if (before.columns !== after.columns) {

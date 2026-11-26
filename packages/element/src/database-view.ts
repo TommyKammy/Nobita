@@ -91,6 +91,8 @@ export type DatabaseImageUploader = (
 ) => string | { src: string } | Promise<string | { src: string }>;
 
 export interface DatabaseHost {
+  databaseId: string;
+  readonly pageId: string;
   resolveDatabase: DatabaseResolver;
   databaseTargets(query: string): Promise<readonly DatabaseTarget[]>;
   observeDatabases(fn: () => void): () => void;
@@ -273,8 +275,7 @@ export class DatabaseView {
     });
     this.#popovers = new DatabasePopoversController({
       ...baseCtx,
-      resolveDatabase: host.resolveDatabase,
-      databaseTargets: host.databaseTargets,
+      host,
       getEventsSignal: () => this.#events.signal,
       getUploadImage: () => this.#host.uploadImage,
       views: () => this.#views(),

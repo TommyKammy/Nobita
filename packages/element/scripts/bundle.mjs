@@ -39,6 +39,7 @@ const controllerMethods = [
   'getReadonly', 'getUploadImage', 'currentCell', 'commitCell', 'commitTextRuns', 'commitRowPage',
   'commitColumnFields', 'commitDeletedRows', 'setPendingBoardFocus', 'addColumnOfType',
   'addFilterForColumn', 'setGroupProperty', 'setFilterTree', 'defaultGroupColumn', 'patchViewColumn',
+  'applyFirst', 'formatSelect', 'decimalPatch', 'insertColumn', 'deleteColumn', 'focusAfter',
   'activeView', 'titleColumn', 'syncValues', 'closePopover',
   'updateActiveView', 'groupsFor', 'columnStates', 'viewColumns', 'navigationRows', 'visibleColumns',
   'openAddPropertyMenu', 'openDetailPanel', 'openComputed', 'openColumnPopover', 'openRowPopover',

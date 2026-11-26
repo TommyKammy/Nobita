@@ -271,6 +271,8 @@ export class BlockView {
             return host.uploadImage;
           },
           resolvePage: pageId => host.pageInfo(pageId),
+          databaseId: blockId,
+          get pageId() { return host.doc.id; },
           resolveDatabase: (id,page) => host.resolveDatabase(id,page),
           databaseTargets: query => host.databaseTargets(query),
           observeDatabases: fn => host.observeDatabases(fn),

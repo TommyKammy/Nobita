@@ -155,6 +155,21 @@ test('edit a formula, configure paired properties, link a row and undo both ends
         header: { titleColumnId: 'name' },
       };
       tasks.columns[2]!.relation = { databaseId: 'projects' };
+      tasks.columns.push(
+        {
+          id: 'foreign',
+          name: 'Other DB',
+          type: 'relation',
+          relation: { databaseId: 'elsewhere' },
+        },
+        {
+          id: 'taken',
+          name: 'Already paired',
+          type: 'relation',
+          relation: { databaseId: 'projects', syncedColumnId: 'other' },
+        },
+        { id: 'unused', name: 'Unconfigured', type: 'relation' }
+      );
       tasks.rows[0]!.cells.back = { relations: [{ rowId: 'p1' }] };
       delete projects.columns[1]!.relation;
       projects.rows.forEach((r) => delete r.cells.tasks);
@@ -190,7 +205,13 @@ test('edit a formula, configure paired properties, link a row and undo both ends
   );
   await relation.click();
   await page.getByLabel('Target database').selectOption('tasks');
-  await page.getByLabel('Reverse property').selectOption('back');
+  const reverse = page.getByLabel('Reverse property');
+  await expect(reverse.locator('option')).toHaveText([
+    'One-way',
+    'Projects',
+    'Unconfigured',
+  ]);
+  await reverse.selectOption('back');
   await page.getByRole('button', { name: 'Save relation' }).click();
   const imported = page.locator(
     'td[data-row-id="p1"][data-column-id="tasks"] button'

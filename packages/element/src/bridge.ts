@@ -3,6 +3,7 @@ import type { BlockView } from './block-view.js';
 
 /** Surface the block view needs from the editor. Implemented by NobitaEditor. */
 export interface BlockHost {
+  readonly doc: { id: string };
   readonly readonly: boolean;
   readonly uploadImage?:
     | ((file: File) => string | { src: string } | Promise<string | { src: string }>)

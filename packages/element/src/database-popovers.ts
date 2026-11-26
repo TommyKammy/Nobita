@@ -3,8 +3,9 @@ import {
   DATABASE_STAT_TYPES,
   createId,
   databaseTitleColumn,
+  compatibleReverse,
+  databaseCellText,
   formulaNames,
-  type DatabaseResolver,
   type DatabaseTarget,
   databaseFilterGroup,
   databaseSorts,
@@ -42,12 +43,11 @@ import {
   popTitle,
   selectEl,
 } from './database-dom.js';
-import type { DatabaseImageUploader } from './database-view.js';
+import type { DatabaseHost, DatabaseImageUploader } from './database-view.js';
 
 export interface DatabasePopoversContext {
   rootElement: HTMLElement;
-  resolveDatabase: DatabaseResolver;
-  databaseTargets(query: string): Promise<readonly DatabaseTarget[]>;
+  host: Pick<DatabaseHost, 'databaseId' | 'pageId' | 'resolveDatabase' | 'databaseTargets'>;
   getEventsSignal(): AbortSignal;
   getReadonly(): boolean;
   getUploadImage(): DatabaseImageUploader | undefined;
@@ -132,7 +132,7 @@ export class DatabasePopoversController {
     title: string,
     items: ReadonlyArray<{ label: string; action: () => void; danger?: boolean }>
   ): HTMLElement {
-    const content = document.createElement('div');
+    const content = el('div');
     content.append(popTitle(title));
     const actions = el('div', 'nb-db-pop-actions');
     for (const item of items) {
@@ -189,7 +189,7 @@ export class DatabasePopoversController {
 
     const layout = el('div', 'nb-db-view-layout');
     const label = el('span', undefined, 'Layout');
-    const buttons = document.createElement('div');
+    const buttons = el('div');
     for (const type of ['table', 'board'] as const) {
       const button = btn('nb-db-view-layout-btn', {
         html: `${type === 'table' ? icon.table : icon.database}<span>${type === 'table' ? 'Table' : 'Board'}</span>`,
@@ -408,9 +408,9 @@ export class DatabasePopoversController {
 
   openRenameView(anchor: HTMLElement): void {
     const view = this.#ctx.activeView();
-    const content = document.createElement('div');
+    const content = el('div');
     const field = el('label', 'nb-db-field');
-    const input = document.createElement('input');
+    const input = el('input');
     input.value = view.name;
     field.append(el('span', undefined, 'Name'), input);
     const actions = el('div', 'nb-db-pop-actions');
@@ -506,7 +506,7 @@ export class DatabasePopoversController {
   ): void {
     const column = this.#ctx.getData().columns.find(item => item.id === columnId);
     if (!column) return;
-    const content = document.createElement('div');
+    const content = el('div');
     content.append(popTitle(`Calculate ${column.name}`));
     const list = el('div', 'nb-db-stat-list');
     const current = this.#ctx.columnStates().find(item => item.column.id === columnId)?.stat;
@@ -698,7 +698,7 @@ export class DatabasePopoversController {
         });
         row.append(select);
       } else {
-        const input = document.createElement('input');
+        const input = el('input');
         if (column.type === 'number') input.type = 'number';
         else if (column.type === 'date') input.type = 'date';
         else input.placeholder = column.type === 'multi-select' ? 'Option, Option' : 'Value';
@@ -825,7 +825,7 @@ export class DatabasePopoversController {
     content.append(select);
 
     const hideEmpty = el('label', 'nb-db-check-row');
-    const hideEmptyInput = document.createElement('input');
+    const hideEmptyInput = el('input');
     hideEmptyInput.type = 'checkbox';
     hideEmptyInput.checked = Boolean(view.hideEmptyGroups);
     hideEmptyInput.addEventListener('change', () => {
@@ -884,7 +884,7 @@ export class DatabasePopoversController {
     if (!ctx) return;
     const { column, row } = ctx;
     const draft = [...(row.cells[columnId]?.values ?? [])];
-    const content = document.createElement('div');
+    const content = el('div');
     content.append(popTitle(column.name));
     const options = [...new Set([...(column.options ?? []), ...draft])];
     if (options.length === 0) {
@@ -894,7 +894,7 @@ export class DatabasePopoversController {
     }
     for (const option of options) {
       const label = el('label', 'nb-db-check-row');
-      const input = document.createElement('input');
+      const input = el('input');
       input.type = 'checkbox';
       input.checked = draft.includes(option);
       input.addEventListener('change', () => {
@@ -936,12 +936,12 @@ export class DatabasePopoversController {
     const files: DatabaseFile[] = (row.cells[columnId]?.files ?? []).map(file => ({
       ...file,
     }));
-    const content = document.createElement('div');
+    const content = el('div');
     content.append(popTitle(column.name));
-    const nameInput = document.createElement('input');
+    const nameInput = el('input');
     nameInput.placeholder = 'File name';
     nameInput.setAttribute('aria-label', 'File name');
-    const urlInput = document.createElement('input');
+    const urlInput = el('input');
     urlInput.type = 'url';
     urlInput.placeholder = 'https://…';
     urlInput.setAttribute('aria-label', 'File URL');
@@ -1008,18 +1008,18 @@ export class DatabasePopoversController {
     if (!ctx) return;
     const { column, row } = ctx;
     const current = safeImageSrc(row.cells[columnId]?.text);
-    const content = document.createElement('div');
+    const content = el('div');
     content.append(popTitle(column.name));
     if (current) {
       const preview = el('div', 'nb-db-img-preview');
-      const img = document.createElement('img');
+      const img = el('img');
       img.src = current;
       img.alt = '';
       img.loading = 'lazy';
       preview.append(img);
       content.append(preview);
     }
-    const urlInput = document.createElement('input');
+    const urlInput = el('input');
     urlInput.type = 'url';
     urlInput.placeholder = 'https://…';
     urlInput.setAttribute('aria-label', 'Image URL');
@@ -1055,7 +1055,7 @@ export class DatabasePopoversController {
     const actions = el('div', 'nb-db-pop-actions');
     const upload = this.#ctx.getUploadImage();
     if (upload) {
-      const fileInput = document.createElement('input');
+      const fileInput = el('input');
       fileInput.type = 'file';
       fileInput.accept = 'image/*';
       fileInput.hidden = true;
@@ -1131,9 +1131,9 @@ export class DatabasePopoversController {
     if (!ctx) return;
     const { column, row } = ctx;
     const existing = row.cells[columnId]?.people ?? [];
-    const content = document.createElement('div');
+    const content = el('div');
     content.append(popTitle(column.name));
-    const input = document.createElement('input');
+    const input = el('input');
     input.value = existing.map(person => person.label).join(', ');
     input.placeholder = 'Ada, Lin';
     input.setAttribute('aria-label', 'People');
@@ -1189,7 +1189,7 @@ export class DatabasePopoversController {
       { value: 'percent', label: 'Percent', selected: (column.data?.format ?? 'number') === 'percent' },
       { value: 'decimal', label: 'Decimal', selected: (column.data?.format ?? 'number') === 'decimal' },
     ]);
-    const decimals = document.createElement('input');
+    const decimals = el('input');
     decimals.type = 'number';
     decimals.min = '0';
     decimals.max = '6';
@@ -1226,6 +1226,7 @@ export class DatabasePopoversController {
     rowId?: string
   ) {
     const ctx = this.#ctx;
+    const { host } = ctx;
     const data = ctx.getData();
     const column = data.columns.find(c => c.id === columnId);
     if (!column || ctx.getReadonly()) return;
@@ -1252,15 +1253,14 @@ export class DatabasePopoversController {
       const button = btn(undefined, { text: label });
       button.addEventListener('click', fn);
       content.append(button);
-      return button;
     };
     if (column.type === 'formula') {
-      const input = document.createElement('textarea');
+      const input = el('textarea');
       input.setAttribute('aria-label', 'Formula expression');
       input.value = formulaNames(
         column.formula?.expression ?? '',
         data,
-        ctx.resolveDatabase,
+        host.resolveDatabase,
         true
       );
       content.append(popTitle('Edit formula'), input);
@@ -1271,7 +1271,7 @@ export class DatabasePopoversController {
             expression: formulaNames(
               input.value,
               ctx.getData(),
-              ctx.resolveDatabase
+              host.resolveDatabase
             ),
           },
         })
@@ -1281,21 +1281,21 @@ export class DatabasePopoversController {
       return;
     }
     const rel = column.relation;
-    const search = document.createElement('input');
+    const search = el('input');
     search.type = 'search';
     const list = el('div', 'nb-db-pop-actions');
     if (rowId && rel) {
       search.setAttribute('aria-label', 'Search rows');
       content.append(popTitle('Linked rows'), search, list);
       const render = () => {
-        const target = ctx.resolveDatabase(rel.databaseId, rel.pageId);
+        const target = host.resolveDatabase(rel.databaseId, rel.pageId);
         const title = target && databaseTitleColumn(target);
         const refs =
           ctx.getData().rows.find(r => r.id === rowId)?.cells[columnId]
             ?.relations ?? [];
         const options = new Map(refs.map(r => [r.rowId, r.label ?? r.rowId]));
         for (const r of target?.rows ?? [])
-          options.set(r.id, (title && r.cells[title.id]?.text) || r.id);
+          options.set(r.id, (title && databaseCellText(r.cells[title.id], title.type)) || r.id);
         list.replaceChildren();
         for (const [id, label] of options) {
           if (!label.toLowerCase().includes(search.value.toLowerCase()))
@@ -1324,9 +1324,9 @@ export class DatabasePopoversController {
       search.focus();
       return;
     }
-    const target = document.createElement('select');
-    const reverse = document.createElement('select');
-    const single = document.createElement('input');
+    const target = el('select');
+    const reverse = el('select');
+    const single = el('input');
     single.type = 'checkbox';
     single.checked = rel?.limit === 1;
     const field = (label: string, control: HTMLElement) => {
@@ -1339,23 +1339,23 @@ export class DatabasePopoversController {
     field('Reverse property', reverse);
     field('Single row', single);
     let targets: readonly DatabaseTarget[] = [];
-    const refreshReverse = () => {
+    const refreshReverse = (selected = rel?.syncedColumnId) => {
       const choice = targets[target.selectedIndex];
       const db =
-        choice && ctx.resolveDatabase(choice.databaseId, choice.pageId);
+        choice && host.resolveDatabase(choice.databaseId, choice.pageId);
       reverse.replaceChildren(new Option('One-way', ''));
       for (const c of db?.columns ?? [])
-        if (c.type === 'relation') {
+        if (c.type === 'relation' && compatibleReverse(c.relation, host.databaseId, columnId, choice?.pageId && host.pageId)) {
           reverse.add(
-            new Option(c.name, c.id, false, c.id === rel?.syncedColumnId)
+            new Option(c.name, c.id, false, c.id === selected)
           );
         }
     };
-    target.onchange = refreshReverse;
+    target.onchange = () => refreshReverse();
     let generation = 0;
     const refresh = async () => {
       const token = ++generation;
-      const results = await ctx.databaseTargets(search.value);
+      const results = await host.databaseTargets(search.value);
       if (token !== generation) return;
       targets = results;
       target.replaceChildren(
@@ -1378,6 +1378,9 @@ export class DatabasePopoversController {
       const choice = targets[target.selectedIndex];
       if (!choice) return;
       const { databaseId, pageId } = choice;
+      const paired = reverse.value;
+      refreshReverse(paired);
+      if (paired !== reverse.value) return;
       save(
         {
           relation: {
@@ -1406,16 +1409,16 @@ export class DatabasePopoversController {
     content.append(popTitle('Column'));
 
     const nameField = el('label', 'nb-db-field');
-    const nameInput = document.createElement('input');
+    const nameInput = el('input');
     nameInput.value = column.name;
     nameInput.disabled = isTitle;
     nameField.append(el('span', undefined, 'Name'), nameInput);
 
     const typeField = el('label', 'nb-db-field');
-    const typeSelect = document.createElement('select');
+    const typeSelect = el('select');
     typeSelect.disabled = isTitle;
     for (const type of COLUMN_TYPES) {
-      const option = document.createElement('option');
+      const option = el('option');
       option.value = type.type;
       option.textContent = type.label;
       option.selected = type.type === column.type;
@@ -1424,7 +1427,7 @@ export class DatabasePopoversController {
     typeField.append(el('span', undefined, 'Type'), typeSelect);
 
     const optionsField = el('label', 'nb-db-field');
-    const optionsInput = document.createElement('input');
+    const optionsInput = el('input');
     optionsInput.value = column.options?.join(', ') ?? 'Todo, In progress, Done';
     optionsField.append(el('span', undefined, 'Options (comma separated)'), optionsInput);
     const { field: numberField, formatSelect, decimals, decimalPatch } =
@@ -1595,7 +1598,7 @@ export class DatabasePopoversController {
     const data = this.#ctx.getData();
     const column = data.columns.find(item => item.id === columnId);
     if (!column) return;
-    const content = document.createElement('div');
+    const content = el('div');
     content.append(popTitle(column.name));
     const current = data.rows.find(row => row.id === rowId)?.cells[columnId]?.text ?? '';
     const options = column.options ?? [];

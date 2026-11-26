@@ -1,4 +1,4 @@
-import { databaseTitleColumn } from './database.js';
+import { databaseCellText, databaseTitleColumn } from './database.js';
 import {
   mapFormulaReferences,
   runFormula,
@@ -109,13 +109,17 @@ export function formulaNames(
   return mapFormulaReferences(source, (key, relation) => {
     const config =
       relation === undefined ? undefined : find(data, relation)?.relation;
-    const col = find(
+    const db =
       relation === undefined
         ? data
-        : config && resolve(config.databaseId, config.pageId),
-      key
-    );
-    return col ? (display ? col.name : col.id) : key;
+        : config && resolve(config.databaseId, config.pageId);
+    const col = find(db, key);
+    if (!col) return key;
+    // Display a label only when parsing it identifies this exact column.
+    return display &&
+      !db?.columns.some((c) => c !== col && (c.id === col.name || c.name === col.name))
+      ? col.name
+      : col.id;
   });
 }
 
@@ -142,7 +146,7 @@ function scalar(
   if (column.type === 'multi-select') return cell?.values ?? [];
   if (column.type === 'people') return cell?.people?.map((p) => p.label) ?? [];
   if (column.type === 'files') return cell?.files?.map((f) => f.name) ?? [];
-  const text = cell?.text ?? '';
+  const text = databaseCellText(cell, 'text');
   if (column.type === 'number' || column.type === 'progress')
     return text && Number.isFinite(Number(text)) ? Number(text) : null;
   return text;

@@ -230,6 +230,9 @@ it('refreshes clock-dependent values and their dependents across midnight', () =
     const cells = context.project(data).rows[0]!.cells;
     expect(cells.copy?.text).toBe('2025-01-02');
     expect(cells.instant?.text).toBe('2025-01-02T00:00:01.000Z');
+    time.mockReturnValue(Date.parse('2025-01-03T00:00:01Z'));
+    const edited = { ...data, rows: data.rows.map(row => ({ ...row })) };
+    expect(context.project(edited).rows[0]?.cells.copy?.text).toBe('2025-01-03');
   } finally {
     time.mockRestore();
   }
@@ -337,4 +340,126 @@ it('keeps a self-paired single relation symmetric after resolving a chain', asyn
         rows.find((r) => r.id === ref.rowId)?.cells.peer?.relations
       ).toEqual([{ rowId: row.id }]);
     }
+});
+
+it('skips a pending forward link displaced by a preceding single-value reverse update', async () => {
+  const { createDoc, createBlock, updateDatabaseRelations, documentDatabases } =
+    await import('../src/index.js');
+  const source = normalizeDatabaseData({
+    columns: [
+      {
+        id: 'tasks',
+        name: 'Tasks',
+        type: 'relation',
+        relation: { databaseId: 'b' },
+      },
+    ],
+    rows: ['a1', 'a2'].map((id) => ({
+      id,
+      cells: { tasks: { relations: [{ rowId: 'b1' }] } },
+    })),
+  });
+  const target = normalizeDatabaseData({
+    columns: [
+      {
+        id: 'owners',
+        name: 'Owner',
+        type: 'relation',
+        relation: { databaseId: 'a', limit: 1 },
+      },
+    ],
+    rows: [{ id: 'b1', cells: { owners: { relations: [{ rowId: 'a2' }] } } }],
+  });
+  const doc = createDoc({
+    blocks: [
+      createBlock('database', { id: 'a', props: { database: source } }),
+      createBlock('database', { id: 'b', props: { database: target } }),
+    ],
+  });
+  const paired = {
+    ...source,
+    columns: source.columns.map((c) => ({
+      ...c,
+      relation: { ...c.relation!, syncedColumnId: 'owners' },
+    })),
+  };
+  const dbs = documentDatabases(
+    updateDatabaseRelations(doc, 'a', source, paired).blocks
+  );
+  const owners = dbs
+    .get('a')!
+    .rows.filter((r) =>
+      r.cells.tasks?.relations?.some((ref) => ref.rowId === 'b1')
+    );
+  expect(owners).toHaveLength(1);
+  expect(dbs.get('b')!.rows[0]!.cells.owners!.relations).toEqual([
+    { rowId: owners[0]!.id },
+  ]);
+});
+
+it('round-trips duplicate labels and name/ID collisions in local and pluck references', () => {
+  const cols = [
+    { id: 'n1', name: 'Hours', type: 'number' },
+    { id: 'n2', name: 'Hours', type: 'number' },
+    { id: 'n3', name: 'n1', type: 'number' },
+    { id: 'n4', name: 'Cost', type: 'number' },
+  ];
+  const target = normalizeDatabaseData({ columns: cols, rows: [] });
+  const source = normalizeDatabaseData({
+    columns: [
+      ...cols,
+      {
+        id: 'rel',
+        name: 'Tasks',
+        type: 'relation',
+        relation: { databaseId: 'target' },
+      },
+    ],
+    rows: [],
+  });
+  const canonical =
+    'prop("n2")+prop("n3")+sum(pluck(prop("rel"),"n2"))+prop("n4")';
+  const display = formulaNames(canonical, source, () => target, true);
+  expect(display).toBe(
+    'prop("n2")+prop("n3")+sum(pluck(prop("Tasks"),"n2"))+prop("Cost")'
+  );
+  expect(formulaNames(display, source, () => target)).toBe(canonical);
+});
+
+it('reads run-only text in unnormalized host snapshots for relation labels and rollups', () => {
+  const target: DatabaseData = {
+    variant: 'database',
+    columns: [{ id: 'name', name: 'Name', type: 'text' }],
+    rows: [
+      {
+        id: 't',
+        cells: {
+          name: {
+            runs: [{ text: 'Task ' }, { text: 'one', marks: { bold: true } }],
+          },
+        },
+      },
+    ],
+  };
+  const source = normalizeDatabaseData({
+    columns: [
+      {
+        id: 'rel',
+        name: 'Tasks',
+        type: 'relation',
+        relation: { databaseId: 'external' },
+      },
+      {
+        id: 'f',
+        name: 'Names',
+        type: 'formula',
+        formula: { expression: 'join(pluck(prop("rel"),"name"),",")' },
+      },
+    ],
+    rows: [{ id: 'p', cells: { rel: { relations: [{ rowId: 't' }] } } }],
+  });
+  const cells = new DatabaseEvalContext(() => target).project(source).rows[0]!
+    .cells;
+  expect(cells.rel?.text).toBe('Task one');
+  expect(cells.f?.text).toBe('Task one');
 });
