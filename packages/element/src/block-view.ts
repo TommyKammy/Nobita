@@ -101,8 +101,8 @@ export class BlockView {
     const gutter = el('div', 'nb-gutter');
     gutter.contentEditable = 'false';
     gutter.append(
-      gutterButton('add', 'Add block below'),
-      gutterButton('drag', 'Drag to move, click for actions', 'Drag to move · click for actions')
+      gutterButton('add', host.t('Add block below')),
+      gutterButton('drag', host.t('Drag to move, click for actions'), host.t('Drag to move · click for actions'))
     );
 
     this.#marker = el('div', 'nb-marker');
@@ -259,6 +259,7 @@ export class BlockView {
       const blockId = this.id;
       const view = new SimpleTableView(
         {
+          t: host.t,
           get readonly() {
             return host.readonly;
           },
@@ -280,6 +281,7 @@ export class BlockView {
       const blockId = this.id;
       const view = new DatabaseView(
         {
+          t: host.t,
           get readonly() {
             return host.readonly;
           },
@@ -328,7 +330,7 @@ export class BlockView {
       const lang = el('select', 'nb-code-lang');
       lang.contentEditable = 'false';
       lang.disabled = this.#host.readonly;
-      lang.setAttribute('aria-label', 'Code language');
+      lang.setAttribute('aria-label', this.#host.t('Code language'));
       for (const language of CODE_LANGUAGES) {
         const option = document.createElement('option');
         option.value = language;
@@ -346,11 +348,11 @@ export class BlockView {
       const tone = el('select', 'nb-callout-tone');
       tone.contentEditable = 'false';
       tone.disabled = this.#host.readonly;
-      tone.setAttribute('aria-label', 'Callout tone');
+      tone.setAttribute('aria-label', this.#host.t('Callout tone'));
       for (const item of CALLOUT_TONES) {
         const option = document.createElement('option');
         option.value = item.value;
-        option.textContent = item.label;
+        option.textContent = this.#host.t(item.label);
         tone.append(option);
       }
       tone.value = block.props.tone ?? 'info';
@@ -381,17 +383,17 @@ export class BlockView {
     const info = pageId ? this.#host.pageInfo(pageId) : null;
     const title =
       (info?.title ?? block.props.pageTitle ?? '').trim() ||
-      (pageId ? 'Untitled page' : 'Missing page');
+      (pageId ? this.#host.t('Untitled page') : this.#host.t('Missing page'));
     const pageIcon = info?.icon ?? block.props.pageIcon;
     if (pageIcon) this.#pageIcon.textContent = pageIcon;
     else this.#pageIcon.innerHTML = icon.page;
     this.#pageLabel.textContent = title;
     this.#pageLink.dataset.pageId = pageId;
     this.#pageLink.dataset.missing = String(!pageId);
-    this.#pageLink.title = pageId ? title : 'Missing page link';
+    this.#pageLink.title = pageId ? title : this.#host.t('Missing page link');
     this.#pageLink.setAttribute(
       'aria-label',
-      pageId ? `Open page: ${title}` : 'Missing page link'
+      pageId ? this.#host.t('Open page: {name}', title) : this.#host.t('Missing page link')
     );
   }
 
@@ -450,7 +452,7 @@ export class BlockView {
         const box = btn('nb-checkbox');
         box.setAttribute('role', 'checkbox');
         box.setAttribute('aria-checked', String(Boolean(block.props.checked)));
-        box.setAttribute('aria-label', block.props.checked ? 'Mark as not done' : 'Mark as done');
+        box.setAttribute('aria-label', block.props.checked ? this.#host.t('Mark as not done') : this.#host.t('Mark as done'));
         box.innerHTML = icon.check;
         box.addEventListener('mousedown', event => event.preventDefault());
         box.addEventListener('click', event => {
@@ -481,11 +483,11 @@ export class BlockView {
       const row = el('div', 'nb-image-placeholder-row');
       const input = el('input', 'nb-image-input');
       input.type = 'url';
-      input.placeholder = 'Paste an image URL…';
-      input.setAttribute('aria-label', 'Image URL');
+      input.placeholder = this.#host.t('Paste an image URL…');
+      input.setAttribute('aria-label', this.#host.t('Image URL'));
       const button = el('button', 'nb-link-apply');
       button.type = 'button';
-      button.textContent = 'Add image';
+      button.textContent = this.#host.t('Add image');
       const commit = (): void => {
         const value = input.value.trim();
         if (!value) return;
@@ -504,7 +506,7 @@ export class BlockView {
       input.addEventListener('mousedown', event => event.stopPropagation());
       row.append(input, button);
       const hint = el('div', 'nb-image-hint');
-      hint.textContent = 'Use a direct image link (https://…/photo.jpg).';
+      hint.textContent = this.#host.t('Use a direct image link (https://…/photo.jpg).');
       wrap.append(row, hint);
       this.#image.append(wrap);
       return;
@@ -519,14 +521,14 @@ export class BlockView {
     img.addEventListener(
       'error',
       () => {
-        img.alt = 'Image failed to load';
+        img.alt = this.#host.t('Image failed to load');
       },
       { once: true }
     );
 
     const caption = el('div', 'nb-caption');
     caption.contentEditable = this.#host.readonly ? 'false' : 'true';
-    caption.dataset.placeholder = 'Write a caption…';
+    caption.dataset.placeholder = this.#host.t('Write a caption…');
     caption.spellcheck = true;
     caption.textContent = block.props.caption ?? '';
     caption.addEventListener('blur', () => {

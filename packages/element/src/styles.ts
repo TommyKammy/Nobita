@@ -2007,7 +2007,7 @@ input, select, textarea { font: inherit; color: inherit; }
   overflow-wrap: anywhere;
 }
 .nb-db-card-title[contenteditable="true"]:focus { outline: 1px solid var(--nb-accent); outline-offset: 2px; border-radius: 3px; }
-.nb-db-card-title:empty::before { content: 'Untitled'; color: var(--nb-text-placeholder); }
+.nb-db-card-title:empty::before { content: attr(data-placeholder); color: var(--nb-text-placeholder); }
 .nb-db-card-fields { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .nb-db-card-field {
   display: inline-flex;

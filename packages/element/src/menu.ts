@@ -1,3 +1,4 @@
+import type { Translate } from './dictionary.js';
 import { el } from './dom.js';
 import { dismissFloating, placeFloating } from './floating.js';
 
@@ -8,6 +9,7 @@ export interface MenuItem {
   icon: string;
   group?: string;
   keywords?: string[];
+  englishLabel?: string;
   shortcut?: string;
   action: () => void;
 }
@@ -25,30 +27,16 @@ function normalize(value: string): string {
   return value.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/gu, '');
 }
 
-function score(label: string, keywords: readonly string[], query: string): number | null {
-  if (!query) return 1;
-  const needle = normalize(query);
+// Labels support ordered subsequences (e.g. "hd1" for "Heading 1").
+function matchesLabel(label: string, needle: string): boolean {
   const plain = normalize(label);
-  if (plain === needle) return 100;
-  if (plain.startsWith(needle)) return 80 - plain.length * 0.01;
-  const wordIndex = plain.split(/\s+/u).findIndex(word => word.startsWith(needle));
-  if (wordIndex >= 0) return 60 - wordIndex;
-  if (plain.includes(needle)) return 40 - plain.indexOf(needle) * 0.01;
-  for (const keyword of keywords) {
-    const candidate = normalize(keyword);
-    if (candidate.startsWith(needle)) return 30;
-    if (candidate.includes(needle)) return 20;
-  }
-  // subsequence match: "h1" matches "heading 1"
   let cursor = 0;
-  let gaps = 0;
   for (const char of needle) {
     const found = plain.indexOf(char, cursor);
-    if (found < 0) return null;
-    gaps += found - cursor;
-    cursor = found + 1;
+    if (found < 0) return false;
+    cursor = found + char.length;
   }
-  return 10 - gaps * 0.1;
+  return true;
 }
 
 export class Menu {
@@ -65,7 +53,7 @@ export class Menu {
   #dismiss: (() => void) | null = null;
   #width = 322;
 
-  constructor(root: ShadowRoot, overlay: HTMLElement) {
+  constructor(root: ShadowRoot, overlay: HTMLElement, private readonly t: Translate, private readonly composing: (event: KeyboardEvent) => boolean) {
     this.#root = root;
     this.#overlay = overlay;
     this.element = el('div', 'nb-menu');
@@ -112,6 +100,7 @@ export class Menu {
     this.#dismiss = dismissFloating({
       element: this.element,
       pointerTarget: this.#root,
+      escape: false,
       scroll: true,
       resize: true,
       onDismiss: () => this.close(),
@@ -165,13 +154,12 @@ export class Menu {
   }
 
   #filter(): void {
-    const scored: { item: MenuItem; score: number; order: number }[] = [];
-    this.#items.forEach((item, order) => {
-      const value = score(item.label, item.keywords ?? [], this.#query);
-      if (value !== null) scored.push({ item, score: value, order });
-    });
-    scored.sort((a, b) => a.order - b.order);
-    this.#filtered = scored.map(entry => entry.item);
+    const query = normalize(this.#query);
+    this.#filtered = query ? this.#items.filter(item =>
+      matchesLabel(item.label, query) ||
+      (item.englishLabel && matchesLabel(item.englishLabel, query)) ||
+      item.keywords?.some(keyword => normalize(keyword).includes(query))
+    ) : this.#items;
     this.#active = Math.min(this.#active, Math.max(0, this.#filtered.length - 1));
     this.#render();
   }
@@ -179,7 +167,7 @@ export class Menu {
   #render(): void {
     const fragment = document.createDocumentFragment();
     if (this.#filtered.length === 0) {
-      fragment.append(el('div', 'nb-menu-empty', 'No results'));
+      fragment.append(el('div', 'nb-menu-empty', this.t('No results')));
       this.element.replaceChildren(fragment);
       return;
     }
@@ -230,7 +218,7 @@ export class Menu {
   }
 
   #onKeyDown = (event: KeyboardEvent): void => {
-    if (!this.#open) return;
+    if (!this.#open || this.composing(event)) return;
     const count = this.#filtered.length;
     switch (event.key) {
       case 'ArrowDown':

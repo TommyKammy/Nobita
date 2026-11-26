@@ -1,3 +1,4 @@
+import type { Translate } from './dictionary.js';
 import {
   createDatabaseRow,
   databaseCellDisplay,
@@ -31,6 +32,7 @@ import {
 import type { DatabaseRichTextController } from './database-rich-text.js';
 
 export interface DatabaseBoardContext {
+  readonly t: Translate;
   rootElement: HTMLElement;
   instanceId: string;
   getReadonly(): boolean;
@@ -149,12 +151,12 @@ export class DatabaseBoardController {
       heading.append(titleWrap);
       if (!readonly) {
         const ops = el('div', 'nb-db-board-group-ops');
-        const add = iconBtn('nb-db-board-group-op', icon.plus, 'Add card');
+        const add = iconBtn('nb-db-board-group-op', icon.plus, this.#ctx.t('Add card'));
         add.addEventListener('click', event => {
           event.stopPropagation();
           this.addCard(view, view.groupBy ? group.key : undefined, 'start');
         }, { signal });
-        const more = iconBtn('nb-db-board-group-op', icon.more, 'Group actions');
+        const more = iconBtn('nb-db-board-group-op', icon.more, this.#ctx.t('Group actions'));
         more.addEventListener('click', event => {
           event.stopPropagation();
           this.openGroupMenu(more, view, group.key, group.rows);
@@ -169,10 +171,10 @@ export class DatabaseBoardController {
         cards.append(this.#renderCard(row, titleColumn, view, columns));
       }
       if (group.rows.length === 0) {
-        cards.append(el('div', 'nb-db-board-empty', 'No cards'));
+        cards.append(el('div', 'nb-db-board-empty', this.#ctx.t('No cards')));
       }
       if (!readonly) {
-        const add = btn('nb-db-board-add', { html: `${icon.plus}<span>Add</span>` });
+        const add = btn('nb-db-board-add', { html: icon.plus, label: this.#ctx.t('Add') });
         add.addEventListener('click', () => {
           this.addCard(view, view.groupBy ? group.key : undefined, 'end');
         }, { signal });
@@ -328,7 +330,8 @@ export class DatabaseBoardController {
         titleColumn.type === 'number' ||
         titleColumn.type === 'date' ||
         titleColumn.type === 'url');
-    title.textContent = value || (editable ? '' : 'Untitled');
+    title.dataset.placeholder = this.#ctx.t('Untitled');
+    title.textContent = value || (editable ? '' : this.#ctx.t('Untitled'));
     if (titleColumn && editable) {
       title.contentEditable = 'true';
       title.spellcheck = false;
@@ -430,12 +433,12 @@ export class DatabaseBoardController {
     if (fields) card.append(fields);
     if (!readonly) {
       const ops = el('div', 'nb-db-card-ops');
-      const expand = iconBtn('nb-db-card-op', icon.expand, 'Open record');
+      const expand = iconBtn('nb-db-card-op', icon.expand, this.#ctx.t('Open record'));
       expand.addEventListener('click', event => {
         event.stopPropagation();
         this.#ctx.openDetailPanel(row.id);
       }, { signal });
-      const more = iconBtn('nb-db-card-op', icon.more, 'Card actions');
+      const more = iconBtn('nb-db-card-op', icon.more, this.#ctx.t('Card actions'));
       more.addEventListener('click', event => {
         event.stopPropagation();
         this.#ctx.openRowPopover(row.id, more);
@@ -547,7 +550,7 @@ export class DatabaseBoardController {
             : databaseCellDisplay(row.cells[titleColumn.id], titleColumn.type)
           : '';
         const nextText =
-          value || (title.contentEditable === 'true' ? '' : 'Untitled');
+          value || (title.contentEditable === 'true' ? '' : this.#ctx.t('Untitled'));
         if (title.textContent !== nextText) title.textContent = nextText;
       }
       const previous = card.querySelector('.nb-db-card-fields');
@@ -624,12 +627,12 @@ export class DatabaseBoardController {
     rows: readonly DatabaseRow[]
   ): void {
     const content = el('div', 'nb-db-pop-actions nb-db-board-group-menu');
-    const add = btn(undefined, { text: 'Add card' });
+    const add = btn(undefined, { text: this.#ctx.t('Add card') });
     add.addEventListener('click', () => {
       this.#ctx.closePopover();
       this.addCard(view, view.groupBy ? groupKey : undefined, 'end');
     });
-    const remove = btn('danger', { text: 'Delete cards' });
+    const remove = btn('danger', { text: this.#ctx.t('Delete cards') });
     remove.addEventListener('click', () => {
       this.#ctx.closePopover();
       const ids = new Set(rows.map(row => row.id));

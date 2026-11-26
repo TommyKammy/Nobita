@@ -1,3 +1,4 @@
+import type { Translate } from './dictionary.js';
 import {
   blocksToHtml, createBlock, buildTableOccupancyGrid, clearTableRange, expandTableRange, tableSpanAt,
   mergeTableCells, unmergeTableCell,
@@ -48,6 +49,7 @@ import { renderInlineRuns } from './inline-dom.js';
 import { parseTsv, tsvCell } from './tsv.js';
 
 export interface TableHost {
+  readonly t: Translate;
   readonly readonly: boolean;
   resolvePage?: (pageId: string) => PageInfo | null;
   commit(data: TableData, options?: { mergeKey?: string }): void;
@@ -87,6 +89,13 @@ function dots(vertical = false): HTMLElement {
     wrap.append(document.createElement('i'));
   }
   return wrap;
+}
+
+function addDragCounts(axis: 'row' | 'column' | 'corner', dx: number, dy: number) {
+  return {
+    rows: axis === 'column' ? 0 : Math.max(1, Math.round(Math.abs(dy) / 39)),
+    columns: axis === 'row' ? 0 : Math.max(1, Math.round(Math.abs(dx) / DEFAULT_COLUMN_WIDTH)),
+  };
 }
 
 export class SimpleTableView {
@@ -142,6 +151,7 @@ export class SimpleTableView {
     this.element.contentEditable = 'false';
     this.element.dataset.readonly = String(this.#readonly);
     this.#richText = new DatabaseRichTextController({
+      t: host.t,
       rootElement: this.element,
       isReadonly: () => this.#readonly,
       getSignal: () => this.#events.signal,
@@ -315,7 +325,7 @@ export class SimpleTableView {
         cell.dataset.multiline = 'true';
         cell.dataset.richText = 'true';
         cell.setAttribute('role', 'textbox');
-        cell.setAttribute('aria-label', `Row ${rowIndex + 1}, column ${columnIndex + 1}`);
+        cell.setAttribute('aria-label', this.#host.t('Row {row}, column {column}').replaceAll('{row}', String(rowIndex + 1)).replaceAll('{column}', String(columnIndex + 1)));
         this.#renderCellContent(cell, row.cells[column.id]);
         if (!this.#readonly) {
           this.#richText.attachRichTextHandlers(cell, this.#events.signal);
@@ -377,13 +387,13 @@ export class SimpleTableView {
         if (!this.#readonly && rowIndex === 0) {
           for (let c = columnIndex; c <= (span?.columnEnd ?? columnIndex); c++) {
             const id = this.#data.columns[c]!.id;
-            td.append(makeHandle('column', id, `Column ${c + 1} actions`, false, c, this.#colHandles));
+            td.append(makeHandle('column', id, this.#host.t('Column {count} actions', c + 1), false, c, this.#colHandles));
           }
         }
         if (!this.#readonly && columnIndex === 0) {
           for (let r = rowIndex; r <= (span?.rowEnd ?? rowIndex); r++) {
             const id = this.#data.rows[r]!.id;
-            td.append(makeHandle('row', id, `Row ${r + 1} actions`, true, r, this.#rowHandles));
+            td.append(makeHandle('row', id, this.#host.t('Row {count} actions', r + 1), true, r, this.#rowHandles));
           }
         }
         this.#createCellResizer(td, this.#data.columns[span?.columnEnd ?? columnIndex]!.id);
@@ -521,15 +531,15 @@ export class SimpleTableView {
         );
         return button;
       };
-      const addColumn = makeAddBtn('nb-table-add-column', 'Add column', 'column', () =>
+      const addColumn = makeAddBtn('nb-table-add-column', this.#host.t('Add column'), 'column', () =>
         this.#addColumn()
       );
-      const addRow = makeAddBtn('nb-table-add-row', 'Add row', 'row', () =>
+      const addRow = makeAddBtn('nb-table-add-row', this.#host.t('Add row'), 'row', () =>
         this.#addRow()
       );
       const addCorner = makeAddBtn(
         'nb-table-add-corner',
-        'Add row and column',
+        this.#host.t('Add row and column'),
         'corner',
         () => this.#addCorner()
       );
@@ -1043,12 +1053,7 @@ export class SimpleTableView {
         window.setTimeout(() => {
           this.#suppressAddClick = false;
         }, 0);
-        const rows = axis === 'row' || axis === 'corner'
-          ? Math.max(1, Math.round(Math.abs(dy) / 39))
-          : 0;
-        const columns = axis === 'column' || axis === 'corner'
-          ? Math.max(1, Math.round(Math.abs(dx) / DEFAULT_COLUMN_WIDTH))
-          : 0;
+        const { rows, columns } = addDragCounts(axis, dx, dy);
         this.#addCounts(rows, columns);
       },
       () => this.#removeAddTip()
@@ -1062,17 +1067,12 @@ export class SimpleTableView {
       (this.element.getRootNode() as ShadowRoot).append(tip);
       this.#addTip = tip;
     }
-    const rows = axis === 'row' || axis === 'corner'
-      ? Math.max(1, Math.round(Math.abs(y - startY) / 39))
-      : 0;
-    const columns = axis === 'column' || axis === 'corner'
-      ? Math.max(1, Math.round(Math.abs(x - startX) / DEFAULT_COLUMN_WIDTH))
-      : 0;
-    tip.textContent = rows > 0 && columns > 0
-      ? `+${rows} row${rows === 1 ? '' : 's'}, +${columns} column${columns === 1 ? '' : 's'}`
-      : rows > 0
-        ? `+${rows} row${rows === 1 ? '' : 's'}`
-        : `+${columns} column${columns === 1 ? '' : 's'}`;
+    const { rows, columns } = addDragCounts(axis, x - startX, y - startY);
+    const { t } = this.#host;
+    tip.textContent = [
+      rows && '+' + t(rows === 1 ? '{count} row' : '{count} rows', rows),
+      columns && '+' + t(columns === 1 ? '{count} column' : '{count} columns', columns),
+    ].filter(Boolean).join(', ');
     tip.style.left = `${x + 14}px`;
     tip.style.top = `${y + 14}px`;
   }
@@ -1404,11 +1404,11 @@ export class SimpleTableView {
 
   #addColors(content: HTMLElement, current: string | undefined, select: (color: string | undefined) => void): void {
     const section = el('div', 'nb-table-menu-colors');
-    section.append(el('span', 'nb-table-menu-label', 'Background color'));
+    section.append(el('span', 'nb-table-menu-label', this.#host.t('Background color')));
     const colors = el('div', 'nb-table-color-list');
     const defaultButton = btn('nb-table-color nb-table-color-default', {
-      title: 'Default',
-      ariaLabel: 'Default background',
+      title: this.#host.t('Default'),
+      ariaLabel: this.#host.t('Default background'),
     });
     defaultButton.addEventListener('click', () => {
       select(undefined);
@@ -1417,8 +1417,8 @@ export class SimpleTableView {
     colors.append(defaultButton);
     for (const item of TABLE_COLORS) {
       const button = btn('nb-table-color', {
-        title: item.name,
-        ariaLabel: `${item.name} background`,
+        title: this.#host.t(item.name),
+        ariaLabel: this.#host.t(`${item.name} background`),
         dataset: { active: String(item.color === current) },
       });
       button.style.background = item.color;
@@ -1440,13 +1440,14 @@ export class SimpleTableView {
     danger = false,
     iconMarkup?: string
   ): void {
+    const text = this.#host.t(label);
     const button = btn(danger ? 'danger' : undefined, { disabled });
     if (iconMarkup) {
       const glyph = el('span');
       glyph.innerHTML = iconMarkup;
-      button.append(glyph, el('span', undefined, label));
+      button.append(glyph, el('span', undefined, text));
     } else {
-      button.textContent = label;
+      button.textContent = text;
     }
     button.addEventListener('click', () => {
       this.#closePopover();
@@ -1503,7 +1504,7 @@ export class SimpleTableView {
       this.#addMenuItem(actions, 'Merge cells', () => {
         const next = mergeTableCells(this.#data, bounds);
         if (next === this.#data) {
-          window.alert('Merged cell text exceeds the 10,000 character limit.');
+          window.alert(this.#host.t('Merged cell text exceeds the 10,000 character limit.'));
           return;
         }
         this.#host.commit(next);
@@ -1791,7 +1792,7 @@ export class SimpleTableView {
     const resizer = el('span', 'nb-table-resizer');
     resizer.setAttribute('role', 'separator');
     resizer.setAttribute('aria-orientation', 'vertical');
-    resizer.setAttribute('aria-label', 'Resize column');
+    resizer.setAttribute('aria-label', this.#host.t('Resize column'));
     resizer.addEventListener(
       'pointerdown',
       event => this.#startColumnResize(event, columnId),

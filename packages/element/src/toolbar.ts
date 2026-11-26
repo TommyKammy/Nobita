@@ -1,3 +1,5 @@
+import type { Translate } from './dictionary.js';
+import { formattingControls } from './formatting-controls.js';
 import { btn } from './database-dom.js';
 import { el } from './dom.js';
 import { PALETTE_COLORS, TURN_INTO_TYPES } from '@nobita/core';
@@ -15,14 +17,6 @@ import { PopoverList, type PopoverRow } from './popover.js';
 
 export type ToolbarMark = BooleanMarkKey;
 
-const BUTTONS: readonly { key: ToolbarMark; label: string; icon: string; shortcut: string }[] = [
-  { key: 'bold', label: 'Bold', icon: icon.bold, shortcut: 'B' },
-  { key: 'italic', label: 'Italic', icon: icon.italic, shortcut: 'I' },
-  { key: 'underline', label: 'Underline', icon: icon.underline, shortcut: 'U' },
-  { key: 'strike', label: 'Strikethrough', icon: icon.strike, shortcut: 'S' },
-  { key: 'code', label: 'Inline code', icon: icon.inlineCode, shortcut: 'E' },
-];
-
 const INLINE_ORDER: readonly (ToolbarMark | 'link')[] = [
   'bold',
   'code',
@@ -32,10 +26,10 @@ const INLINE_ORDER: readonly (ToolbarMark | 'link')[] = [
   'underline',
 ];
 
-const ALIGN_BUTTONS: readonly { align: TextAlign; label: string; icon: string; shortcut: string }[] = [
-  { align: 'left', label: 'Align left', icon: icon.alignLeft, shortcut: '⇧L' },
-  { align: 'center', label: 'Align center', icon: icon.alignCenter, shortcut: '⇧E' },
-  { align: 'right', label: 'Align right', icon: icon.alignRight, shortcut: '⇧R' },
+const ALIGN_BUTTONS: readonly { align: TextAlign; label: string; icon: string }[] = [
+  { align: 'left', label: 'Align left', icon: icon.alignLeft },
+  { align: 'center', label: 'Align center', icon: icon.alignCenter },
+  { align: 'right', label: 'Align right', icon: icon.alignRight },
 ];
 
 const capitalize = (value: string): string =>
@@ -71,11 +65,13 @@ function labeledRow<T>(
   const button = btn('nb-popover-row');
   button.setAttribute('role', 'menuitemradio');
   button.setAttribute('aria-label', label);
-  button.innerHTML = `<span class="nb-align-icon">${iconMarkup}</span><span class="nb-align-label">${label}</span><span class="nb-popover-check">${icon.check}</span>`;
+  button.innerHTML = `<span class="nb-align-icon">${iconMarkup}</span><span class="nb-align-label"></span><span class="nb-popover-check">${icon.check}</span>`;
+  button.querySelector('.nb-align-label')!.textContent = label;
   return { key, value, element: button };
 }
 
 function colorRow(
+  t: Translate,
   kind: ColorKind,
   color: PaletteColor | null,
   fallbackLabel: string,
@@ -86,7 +82,7 @@ function colorRow(
   button.setAttribute(
     'aria-label',
     color
-      ? `${capitalize(color)} ${kind === 'color' ? 'text color' : 'background'}`
+      ? t(`${capitalize(color)} ${kind === 'color' ? 'text color' : 'background'}`)
       : fallbackLabel
   );
 
@@ -99,7 +95,7 @@ function colorRow(
   }
 
   const text = el('span', 'nb-color-label');
-  text.textContent = color ? capitalize(color) : fallbackLabel;
+  text.textContent = fallbackLabel;
   button.append(sample, text);
   return {
     key: `${kind}:${color ?? 'default'}`,
@@ -109,18 +105,18 @@ function colorRow(
   };
 }
 
-function createColorPopover(overlay: HTMLElement): PopoverList<ColorPick> {
+function createColorPopover(overlay: HTMLElement, t: Translate): PopoverList<ColorPick> {
   const rows: PopoverRow<ColorPick>[] = [];
   for (const section of COLOR_SECTIONS) {
     for (const color of [null, ...PALETTE_COLORS] as (PaletteColor | null)[]) {
       const label = color
         ? capitalize(color)
         : section.defaultLabel;
-      rows.push(colorRow(section.kind, color, label, section.title));
+      rows.push(colorRow(t, section.kind, color, t(label), t(section.title)));
     }
   }
   return new PopoverList(overlay, {
-    ariaLabel: 'Color and highlight',
+    ariaLabel: t('Color and highlight'),
     className: 'nb-color-popover',
     rows,
   });
@@ -130,13 +126,13 @@ function alignKey(align: TextAlign): string {
   return `align:${align}`;
 }
 
-function createAlignPopover(overlay: HTMLElement): PopoverList<TextAlign> {
+function createAlignPopover(overlay: HTMLElement, t: Translate): PopoverList<TextAlign> {
   return new PopoverList(overlay, {
-    ariaLabel: 'Alignment',
+    ariaLabel: t('Alignment'),
     className: 'nb-align-popover',
     selectable: true,
     rows: ALIGN_BUTTONS.map(item =>
-      labeledRow(item.align, alignKey(item.align), item.label, item.icon)
+      labeledRow(item.align, alignKey(item.align), t(item.label), item.icon)
     ),
   });
 }
@@ -146,17 +142,17 @@ function turnIntoKey(type: BlockType, level: HeadingLevel | undefined): string {
 }
 
 function createTurnIntoPopover(
-  overlay: HTMLElement
+  overlay: HTMLElement, t: Translate
 ): PopoverList<TurnIntoValue> {
   return new PopoverList(overlay, {
-    ariaLabel: 'Turn into',
+    ariaLabel: t('Turn into'),
     className: 'nb-align-popover nb-turninto-popover',
     selectable: true,
     rows: TURN_INTO_TYPES.map(entry =>
       labeledRow(
         { type: entry.type, level: entry.level },
         turnIntoKey(entry.type, entry.level),
-        entry.label,
+        t(entry.label),
         blockIcon(entry.type, entry.level)
       )
     ),
@@ -186,6 +182,7 @@ export class Toolbar {
   #visible = false;
 
   constructor(
+    private readonly t: Translate,
     overlay: HTMLElement,
     onToggle: (key: ToolbarMark) => void,
     onLink: () => void,
@@ -203,15 +200,15 @@ export class Toolbar {
     this.#onTextColor = onTextColor;
     this.element = el('div', 'nb-toolbar');
     this.element.setAttribute('role', 'toolbar');
-    this.element.setAttribute('aria-label', 'Text formatting');
+    this.element.setAttribute('aria-label', t('Text formatting'));
     this.element.style.visibility = 'hidden';
 
     const turnInto = btn('nb-tool nb-tool-dropdown');
     turnInto.dataset.key = 'turn-into';
-    turnInto.setAttribute('aria-label', 'Turn into');
+    turnInto.setAttribute('aria-label', t('Turn into'));
     turnInto.setAttribute('aria-haspopup', 'menu');
     turnInto.setAttribute('aria-expanded', 'false');
-    turnInto.title = 'Turn into';
+    turnInto.title = t('Turn into');
     turnInto.innerHTML = `${icon.turnInto}<span class="nb-chev">${icon.chevron}</span>`;
     turnInto.addEventListener('pointerdown', event => event.preventDefault());
     turnInto.addEventListener('click', event => {
@@ -223,10 +220,10 @@ export class Toolbar {
 
     const align = btn('nb-tool nb-tool-dropdown nb-tool-group-start');
     align.dataset.key = 'align';
-    align.setAttribute('aria-label', 'Alignment: Left');
+    align.setAttribute('aria-label', t('Alignment: Left'));
     align.setAttribute('aria-haspopup', 'menu');
     align.setAttribute('aria-expanded', 'false');
-    align.title = 'Alignment';
+    align.title = t('Alignment');
     align.innerHTML = `${icon.alignLeft}<span class="nb-chev">${icon.chevron}</span>`;
     align.addEventListener('pointerdown', event => event.preventDefault());
     align.addEventListener('click', event => {
@@ -240,8 +237,8 @@ export class Toolbar {
       if (key === 'link') {
         const link = btn('nb-tool');
         link.dataset.key = 'link';
-        link.setAttribute('aria-label', 'Add link');
-        link.title = 'Link · K';
+        link.setAttribute('aria-label', t('Add link'));
+        link.title = t('Link · K');
         link.innerHTML = icon.link;
         link.addEventListener('pointerdown', event => event.preventDefault());
         link.addEventListener('click', event => {
@@ -252,15 +249,15 @@ export class Toolbar {
         this.element.append(link);
         continue;
       }
-      const button = BUTTONS.find(item => item.key === key);
+      const button = formattingControls.find(item => item.key === key);
       if (!button) continue;
       const element = document.createElement('button');
       element.type = 'button';
       element.className =
         key === 'bold' ? 'nb-tool nb-tool-group-start' : 'nb-tool';
       element.dataset.key = button.key;
-      element.setAttribute('aria-label', `${button.label} (${button.shortcut})`);
-      element.title = `${button.label} · ${button.shortcut}`;
+      element.setAttribute('aria-label', `${t(button.label)} (${button.shortcut})`);
+      element.title = `${t(button.label)} · ${button.shortcut}`;
       element.innerHTML = button.icon;
       element.addEventListener('pointerdown', event => event.preventDefault());
       element.addEventListener('click', event => {
@@ -273,10 +270,10 @@ export class Toolbar {
 
     const color = btn('nb-tool nb-tool-dropdown nb-tool-group-start');
     color.dataset.key = 'color';
-    color.setAttribute('aria-label', 'Highlight');
+    color.setAttribute('aria-label', t('Highlight'));
     color.setAttribute('aria-haspopup', 'menu');
     color.setAttribute('aria-expanded', 'false');
-    color.title = 'Highlight';
+    color.title = t('Highlight');
     color.innerHTML = `${icon.highlight}<span class="nb-chev">${icon.chevron}</span>`;
     color.addEventListener('pointerdown', event => event.preventDefault());
     color.addEventListener('click', event => {
@@ -293,7 +290,7 @@ export class Toolbar {
 
   #ensureTurnInto(): PopoverList<TurnIntoValue> {
     if (!this.#turnIntoPopover) {
-      const popover = createTurnIntoPopover(this.#overlay);
+      const popover = createTurnIntoPopover(this.#overlay, this.t);
       popover.onHide = () => {
         this.#turnIntoButton.setAttribute('aria-expanded', 'false');
       };
@@ -304,7 +301,7 @@ export class Toolbar {
 
   #ensureAlign(): PopoverList<TextAlign> {
     if (!this.#alignPopover) {
-      const popover = createAlignPopover(this.#overlay);
+      const popover = createAlignPopover(this.#overlay, this.t);
       popover.onHide = () => {
         this.#alignButton.setAttribute('aria-expanded', 'false');
       };
@@ -315,7 +312,7 @@ export class Toolbar {
 
   #ensureColor(): PopoverList<ColorPick> {
     if (!this.#colorPopover) {
-      const popover = createColorPopover(this.#overlay);
+      const popover = createColorPopover(this.#overlay, this.t);
       popover.onHide = () => {
         this.#colorButton.setAttribute('aria-expanded', 'false');
       };
@@ -392,7 +389,7 @@ export class Toolbar {
     this.#alignButton.innerHTML = `${markup}<span class="nb-chev">${icon.chevron}</span>`;
     this.#alignButton.setAttribute(
       'aria-label',
-      `Alignment: ${align.charAt(0).toUpperCase()}${align.slice(1)}`
+      this.t(`Alignment: ${align.charAt(0).toUpperCase()}${align.slice(1)}`)
     );
   }
 
@@ -459,16 +456,16 @@ export class LinkPopover {
   #visible = false;
   #dismiss: (() => void) | null = null;
 
-  constructor(overlay: HTMLElement) {
+  constructor(overlay: HTMLElement, t: Translate) {
     this.#overlay = overlay;
     this.element = el('div', 'nb-link-popover');
     this.element.style.visibility = 'hidden';
     this.#input = el('input', 'nb-link-input');
     this.#input.type = 'url';
-    this.#input.placeholder = 'Paste or type a link…';
-    this.#input.setAttribute('aria-label', 'Link URL');
+    this.#input.placeholder = t('Paste or type a link…');
+    this.#input.setAttribute('aria-label', t('Link URL'));
     const apply = btn('nb-link-apply');
-    apply.textContent = 'Apply';
+    apply.textContent = t('Apply');
     apply.addEventListener('pointerdown', event => event.preventDefault());
     apply.addEventListener('click', () => this.#finish(this.#input.value.trim() || null));
     this.#input.addEventListener('keydown', event => {

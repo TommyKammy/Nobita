@@ -1,3 +1,4 @@
+import type { Translate } from './dictionary.js';
 import {
   applyMarkPatch,
   BOOLEAN_MARK_KEYS,
@@ -12,7 +13,7 @@ import {
 import type { InlineMark, MarkPatch, PageInfo } from '@nobita/core';
 import { nativeSelection } from './dom.js';
 import { placeFloating } from './floating.js';
-import { icon } from './icons.js';
+import { formattingControls } from './formatting-controls.js';
 import {
   TAG_TO_MARK,
   el,
@@ -26,6 +27,7 @@ import {
 } from './database-dom.js';
 
 export interface DatabaseRichTextContext {
+  readonly t: Translate;
   rootElement: HTMLElement;
   getDetailElement?: () => HTMLElement | null;
   isReadonly: () => boolean;
@@ -153,17 +155,10 @@ export class DatabaseRichTextController {
     if (this.#cellToolbar?.isConnected) return this.#cellToolbar;
     const toolbar = el('div', 'nb-db-inline-toolbar');
     toolbar.setAttribute('role', 'toolbar');
-    toolbar.setAttribute('aria-label', 'Text formatting');
+    toolbar.setAttribute('aria-label', this.#ctx.t('Text formatting'));
     toolbar.hidden = true;
-    const commands: Array<{ tag: string; label: string; glyph: string }> = [
-      { tag: 'strong', label: 'Bold', glyph: icon.bold },
-      { tag: 'em', label: 'Italic', glyph: icon.italic },
-      { tag: 'u', label: 'Underline', glyph: icon.underline },
-      { tag: 's', label: 'Strikethrough', glyph: icon.strike },
-      { tag: 'code', label: 'Inline code', glyph: icon.inlineCode },
-    ];
-    for (const command of commands) {
-      const button = iconBtn('nb-db-inline-tool', command.glyph, command.label, {
+    for (const command of formattingControls) {
+      const button = iconBtn('nb-db-inline-tool', command.icon, this.#ctx.t(command.label), {
         dataset: { tag: command.tag },
       });
       const signal = this.#ctx.getSignal();

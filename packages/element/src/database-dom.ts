@@ -1,3 +1,4 @@
+import type { Translate } from './dictionary.js';
 import {
   databaseCellText,
   normalizeMark,
@@ -123,6 +124,8 @@ export { el } from './dom.js';
 export interface ButtonOptions {
   text?: string;
   html?: string;
+  label?: string;
+  labelClass?: string;
   title?: string;
   ariaLabel?: string;
   disabled?: boolean;
@@ -143,6 +146,7 @@ export function btn(
   if (className) button.className = className;
   if (options.html !== undefined) button.innerHTML = options.html;
   else if (options.text !== undefined) button.textContent = options.text;
+  if (options.label !== undefined) button.append(el('span', options.labelClass, options.label));
   if (options.title) button.title = options.title;
   if (options.ariaLabel) button.setAttribute('aria-label', options.ariaLabel);
   if (options.disabled !== undefined) button.disabled = options.disabled;
@@ -485,6 +489,7 @@ export function withText(cell: DatabaseCell | undefined, value: string): Databas
 }
 
 export function applySelectLabel(
+  t: Translate,
   button: HTMLButtonElement,
   value: string,
   options: string[] = [],
@@ -496,7 +501,7 @@ export function applySelectLabel(
   }
   if (!value) {
     button.classList.add('is-empty');
-    button.append(el('span', undefined, 'Select…'));
+    button.append(el('span', undefined, t('Select…')));
     return;
   }
   button.classList.remove('is-empty');
@@ -514,6 +519,7 @@ export function applySelectLabel(
 }
 
 export function applyMultiLabel(
+  t: Translate,
   button: HTMLButtonElement,
   values: string[],
   columnName?: string
@@ -527,7 +533,7 @@ export function applyMultiLabel(
   }
   button.classList.toggle('is-empty', values.length === 0);
   if (values.length === 0) {
-    button.append(el('span', undefined, 'Select…'));
+    button.append(el('span', undefined, t('Select…')));
     return;
   }
   for (const value of values.slice(0, 3)) {
@@ -577,6 +583,7 @@ export function applyProgressState(
 }
 
 export function applyImageLabel(
+  t: Translate,
   button: HTMLButtonElement,
   rawSrc: string | undefined,
   columnName?: string
@@ -585,7 +592,7 @@ export function applyImageLabel(
   button.replaceChildren();
   button.classList.toggle('is-empty', !src);
   if (columnName) {
-    button.setAttribute('aria-label', src ? `${columnName}: image` : columnName);
+    button.setAttribute('aria-label', src ? t('{name}: image', columnName) : columnName);
   }
   if (src) {
     const img = el('img', 'nb-db-thumb');
@@ -596,10 +603,11 @@ export function applyImageLabel(
     button.append(img);
     return;
   }
-  button.append(el('span', 'nb-db-image-empty', 'Add image…'));
+  button.append(el('span', 'nb-db-image-empty', t('Add image…')));
 }
 
 export function applyFilesLabel(
+  t: Translate,
   button: HTMLButtonElement,
   files: DatabaseFile[],
   columnName?: string
@@ -611,14 +619,15 @@ export function applyFilesLabel(
       ? ''
       : files.length === 1
         ? files[0]!.name
-        : `${files.length} files`;
+        : t('{count} files', files.length);
   if (columnName) {
     button.setAttribute('aria-label', summary ? `${columnName}: ${summary}` : columnName);
   }
-  button.append(el('span', undefined, summary || 'Add file…'));
+  button.append(el('span', undefined, summary || t('Add file…')));
 }
 
 export function applyPeopleLabel(
+  t: Translate,
   button: HTMLButtonElement,
   people: DatabasePerson[],
   columnName?: string
@@ -629,7 +638,7 @@ export function applyPeopleLabel(
   if (columnName) {
     button.setAttribute('aria-label', summary ? `${columnName}: ${summary}` : columnName);
   }
-  button.append(el('span', undefined, summary || 'Add people…'));
+  button.append(el('span', undefined, summary || t('Add people…')));
 }
 
 export function convertCell(

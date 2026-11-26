@@ -17,6 +17,9 @@ export default defineConfig({
     alias: {
       '@nobita/core/collab-runtime': fileURLToPath(new URL('../../packages/core/src/collab-runtime.ts',import.meta.url)),
       '@nobita/core': core,
+      '@nobita/element/locales/ja': fileURLToPath(new URL(
+        process.env.NOBITA_TEST_BUNDLE === '1' ? '../../packages/element/dist/locales/ja.js' : '../../packages/element/src/locales/ja.ts', import.meta.url
+      )),
       '@nobita/element': element,
     },
   },

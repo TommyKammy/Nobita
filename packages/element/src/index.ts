@@ -5,6 +5,7 @@
  * modules (menus, toolbar, block views, popovers) are intentionally not
  * re-exported here.
  */
+export type { NobitaDictionary } from './dictionary.js';
 export { NobitaEditor } from './editor.js';
 export type { CustomBlockRenderer } from './block-view.js';
 export type {

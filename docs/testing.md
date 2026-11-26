@@ -66,8 +66,8 @@ The report measures raw bytes and level-9 gzip for the bundled core public entry
 | Artifact | Gzip limit |
 | --- | --- |
 | Artifacts with a baseline entry | 110% of baseline, rounded down to a whole byte |
-| Standalone editor ESM | Also subject to an absolute cap of 114,089 B |
-| Demo main JavaScript | The greater of its baseline-derived limit and 131,905 B |
+| Standalone editor ESM | Also subject to an absolute cap of 114,672 B |
+| Demo main JavaScript | The greater of its baseline-derived limit and 132,653 B |
 | Collaboration module | Reported separately. It currently has no baseline entry. |
 
 `pnpm size --strict` fails on a budget overrun. The default report warns on overruns. Missing required build artifacts also fail the report. Use `pnpm size --write` to record an intentional baseline update. [Size report implementation](../scripts/size-report.mjs)
@@ -96,6 +96,22 @@ BENCH=1 NOBITA_TEST_BUNDLE=1 pnpm test:ci
 ```
 
 The script runs type checking, unit and collaboration tests, the production build, Playwright and the strict size check, in that order. `BENCH=1` adds the strict performance check. To reproduce CI locally, install Chromium using the command above and use the same two environment variables. [Workflow](../.github/workflows/ci.yml) · [CI script](../scripts/ci.sh)
+
+## Dictionary benchmark
+
+Build each revision and serve its production browser fixture on a separate port.
+For example, run `NOBITA_TEST_BUNDLE=1 pnpm exec vite --config tests/browser/vite.config.ts --port 4196`
+in the baseline checkout and the same command with port 4197 in the changed checkout.
+From the changed checkout run:
+
+```bash
+node scripts/benchmark-dictionary.mjs http://127.0.0.1:4196 http://127.0.0.1:4197
+```
+
+The benchmark rotates the baseline, English and Japanese configurations over nine runs.
+Each run discards three warmups and measures 15 mounts of a 40-row, four-column
+database and its block menu. Both timings include synchronous layout. The reported
+value is the median of the nine run medians. Locale download time is excluded.
 
 ## Baseline policy
 

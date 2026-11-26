@@ -8,6 +8,8 @@ const baselinePath = join(root, 'benchmarks', 'size-baseline.json');
 const strict = process.argv.includes('--strict');
 const write = process.argv.includes('--write');
 const threshold = 0.10;
+const editorGzipLimit = 114_672;
+const demoGzipLimit = 132_653;
 
 async function bundleCore(entry) {
   const result = await build({
@@ -69,13 +71,13 @@ for (const { name, path } of artifacts()) {
   console.log(
     `${name.padEnd(12)} ${(name === 'core' ? 'core public entry (bundled ESM)' : path).padEnd(38)} ${String(raw).padStart(8)} raw ${String(gzip).padStart(8)} gzip  ${change}`
   );
-  if (name === 'element' && gzip > Math.min(115_147,113_089+1_000)) {
-    console.warn('  warning: standalone ESM exceeds the Phase 4 budget (main + 1,000 and cumulative 115,147 gzip bytes)');
+  if (name === 'element' && gzip > editorGzipLimit) {
+    console.warn(`  warning: standalone ESM exceeds the ${editorGzipLimit} byte gzip budget`);
     if (strict) failed = true;
   }
   if (before) {
     const baselineLimit = Math.floor(before.gzip * (1 + threshold));
-    const limit = name === 'demo' ? Math.max(baselineLimit, 131_905) : baselineLimit;
+    const limit = name === 'demo' ? Math.max(baselineLimit, demoGzipLimit) : baselineLimit;
     if (gzip > limit) {
       console.warn(`  warning: ${name} exceeds the ${limit} byte gzip budget`);
       if (strict) failed = true;
