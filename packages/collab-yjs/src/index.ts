@@ -1,3 +1,4 @@
+import diffText from 'fast-diff';
 import * as Y from 'yjs';
 import type { Doc, InlineRun, PeerPresence } from '@nobita/core';
 import {
@@ -8,6 +9,7 @@ import {
 } from '@nobita/core/collab-runtime';
 
 class YBackend implements Backend {
+  readonly diffText = diffText;
   offsets: OffsetMap = (_, i) => i;
   captureOffsets(tx: Y.Transaction) {
     const deltas = new Map<Y.Text, Y.YTextEvent['delta']>();

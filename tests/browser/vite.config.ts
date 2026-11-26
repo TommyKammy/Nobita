@@ -11,7 +11,7 @@ const core = fileURLToPath(
 
 export default defineConfig({
   root,
-  optimizeDeps:{include:['yjs']},
+  optimizeDeps:{include:['yjs'],entries:['*.html','peers.ts']},
   resolve: {
     conditions: ['nobita-source'],
     alias: {

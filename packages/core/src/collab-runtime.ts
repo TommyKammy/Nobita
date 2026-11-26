@@ -22,6 +22,10 @@ export type Fields = Record<string, unknown>;
 export type OffsetMap = (key: string, offset: number) => number;
 export interface Backend {
   offsets: OffsetMap;
+  diffText(
+    previous: string,
+    next: string
+  ): readonly (readonly [-1 | 0 | 1, string])[];
   actor: string;
   read(key: string): Fields;
   field(key: string, name: string, value: unknown): void;
@@ -58,27 +62,6 @@ function fields(store: Backend, path: string, before: Fields, next: Fields) {
   for (const name of new Set([...Object.keys(before), ...Object.keys(next)]))
     if (!equal(before[name], next[name])) store.field(path, name, next[name]);
 }
-export function textEdit(a: string, b: string) {
-  // Compare code points; the resulting offsets are UTF-16 for DOM and both backends.
-  let from = 0,
-    endA = a.length,
-    endB = b.length;
-  while (
-    from < endA &&
-    from < endB &&
-    a.codePointAt(from) === b.codePointAt(from)
-  )
-    from += a.codePointAt(from)! > 0xffff ? 2 : 1;
-  while (endA > from && endB > from && a[endA - 1] === b[endB - 1]) {
-    endA--;
-    endB--;
-  }
-  if (endA < a.length && endA > from && /[\uDC00-\uDFFF]/u.test(a[endA]!)) {
-    endA++;
-    endB++;
-  }
-  return { from, removed: endA - from, inserted: b.slice(from, endB) };
-}
 function writeText(
   store: Backend,
   path: string,
@@ -86,11 +69,14 @@ function writeText(
   next: InlineRun[]
 ) {
   store.ensureText(path);
-  const { from, removed, inserted } = textEdit(
-    plainText(before),
-    plainText(next)
-  );
-  if (removed || inserted) store.splice(path, from, removed, inserted);
+  let offset = 0;
+  for (const [op, text] of store.diffText(plainText(before), plainText(next))) {
+    if (op === -1) store.splice(path, offset, text.length, '');
+    else {
+      if (op === 1) store.splice(path, offset, 0, text);
+      offset += text.length;
+    }
+  }
   // Align existing and desired mark spans without replacing unchanged characters.
   const actual = store.runs(path);
   let pos = 0,

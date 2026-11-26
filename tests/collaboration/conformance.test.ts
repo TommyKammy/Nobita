@@ -207,23 +207,27 @@ for (const engine of ['automerge', 'yjs'])
   });
 
 for (const engine of ['automerge', 'yjs']) {
-  it(engine + ' remaps a caret between disjoint offline edits', () => {
-    const { a, b, send } = pair(engine, seed);
-    let offsets: number[] = [];
-    a.subscribe((u) => {
-      offsets = [0, 1, 2].map(
-        (offset) => u.remapPoint!({ blockId: 'a', offset })!.offset
-      );
-    });
-    edit(b, (d) => {
-      d.blocks[0]!.text = [{ text: 'Xab' }];
-    });
-    edit(b, (d) => {
-      d.blocks[0]!.text = [{ text: 'XabY' }];
-    });
-    send();
-    expect(offsets).toEqual([1, 2, 4]);
-  });
+  it.each([false, true])(
+    engine + ' remaps disjoint offline edits (single batch=%s)',
+    (singleBatch) => {
+      const { a, b, send } = pair(engine, seed);
+      let offsets: number[] = [];
+      a.subscribe((u) => {
+        offsets = [0, 1, 2].map(
+          (offset) => u.remapPoint!({ blockId: 'a', offset })!.offset
+        );
+      });
+      if (!singleBatch)
+        edit(b, (d) => {
+          d.blocks[0]!.text = [{ text: 'Xab' }];
+        });
+      edit(b, (d) => {
+        d.blocks[0]!.text = [{ text: 'XabY' }];
+      });
+      send();
+      expect(offsets).toEqual([1, 2, 4]);
+    }
+  );
   it(engine + ' syncs a rotated ancestor chain', () => {
     const initial = structuredClone(seed),
       [a, b, c, d] = initial.blocks;

@@ -1,3 +1,4 @@
+import diffText from 'fast-diff';
 import * as A from '@automerge/automerge';
 import type { Doc, InlineRun } from '@nobita/core';
 import {
@@ -22,6 +23,7 @@ function payload(value: string | undefined) {
 }
 
 class AutomergeBackend implements Backend {
+  readonly diffText = diffText;
   doc: A.Doc<State>;
   offsets: OffsetMap = (_, i) => i;
   captureOffsets(before: A.Doc<State>, after: A.Doc<State>) {
