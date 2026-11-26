@@ -46,6 +46,7 @@ these files directly. The core `DatabaseView` type is exported from
 | `autofocus` | `boolean` | Focus after mount |
 | `spellcheck` | `boolean` | Native spellcheck |
 | `historyLimit` | `number` | Undo history limit |
+| `virtualize` | `boolean \| { threshold?: number; overscanPx?: number }` | Window top-level blocks starting at 300 blocks, with 800 px overscan by default |
 | `onChange` | `(doc, { source }) => void` | Document change callback |
 | `onSelectionChange` | `(selection \| null) => void` | Selection change callback |
 | `mentionProvider` | `MentionProvider` | Host directory used by the `@` mention picker |
@@ -80,7 +81,7 @@ owns loading and routing.
 
 `getDoc()`, `getJSON(pretty?)`, `getMarkdown()`, `getHTML()`, `setDoc(doc, { history? })`,
 `getSelection()`, `getSelectedBlockIds()`, `selectBlocks(ids)`, `clearBlockSelection()`,
-`focus(blockId?, offset?)`, `focusTitle()`, `blur()`, `setTitle(title)`,
+`focus(blockId?, offset?)`, `scrollToBlock(blockId): boolean`, `focusTitle()`, `blur()`, `setTitle(title)`,
 `setReadonly(value)`, `setTheme(theme)`, `setPlaceholder(value)`, `undo()`, `redo()`,
 `insertMarkdown(markdown)`, `insertPageLink(page, { afterBlockId? })`,
 `insertInlinePageLink(page)`, `refreshPageLinks()`,

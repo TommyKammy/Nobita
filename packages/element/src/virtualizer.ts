@@ -1,7 +1,12 @@
 import type { Block } from '@nobita/core';
 
 /** Negative entries represent omitted height, positive/zero entries are document indices. */
-export function windowLayout(offsets: Float64Array, first: number, end: number, pins: number[]): number[] {
+export function windowLayout(
+  offsets: Float64Array,
+  first: number,
+  end: number,
+  pins: number[]
+): number[] {
   const indices = new Set(pins);
   for (let i = first; i < end; i++) indices.add(i);
   const layout: number[] = [];
@@ -11,18 +16,34 @@ export function windowLayout(offsets: Float64Array, first: number, end: number, 
     layout.push(i);
     cursor = i + 1;
   }
-  if (cursor < offsets.length - 1) layout.push(offsets[cursor]! - offsets[offsets.length - 1]!);
+  if (cursor < offsets.length - 1)
+    layout.push(offsets[cursor]! - offsets[offsets.length - 1]!);
   return layout;
 }
 
 function scrollParent(body: HTMLElement): HTMLElement | Window {
-  for (let node: Node | null = body.parentNode; node; node = node instanceof ShadowRoot ? node.host : node.parentNode) {
-    if (node instanceof HTMLElement && /^(auto|scroll)$/.test(getComputedStyle(node).overflowY)) return node;
+  for (
+    let node: Node | null = body.parentNode;
+    node;
+    node = node instanceof ShadowRoot ? node.host : node.parentNode
+  ) {
+    if (
+      node !== document.body &&
+      node !== document.documentElement &&
+      node instanceof HTMLElement &&
+      /^(auto|scroll)$/.test(getComputedStyle(node).overflowY)
+    )
+      return node;
   }
   return window;
 }
 
-const estimates: Partial<Record<Block['type'], number>> = { heading: 44, code: 120, table: 240, database: 240 };
+const estimates: Partial<Record<Block['type'], number>> = {
+  heading: 44,
+  code: 120,
+  table: 240,
+  database: 240,
+};
 
 export class Virtualizer {
   #parent;
@@ -34,21 +55,32 @@ export class Virtualizer {
   #offsets = new Float64Array(1);
   #frame = 0;
   #schedule = () => {
-    if (!this.#frame) this.#frame = requestAnimationFrame(() => {
-      this.#frame = 0;
-      this.refresh();
-    });
+    if (!this.#frame)
+      this.#frame = requestAnimationFrame(() => {
+        this.#frame = 0;
+        this.refresh();
+      });
   };
-  constructor(private body: HTMLElement, private overscan: number, private refresh: () => void) {
+  constructor(
+    private body: HTMLElement,
+    private overscan: number,
+    private refresh: () => void
+  ) {
     this.#parent = scrollParent(body);
     this.#parent.addEventListener('scroll', this.#schedule, { passive: true });
     window.addEventListener('resize', this.#schedule);
-    this.#observer = new ResizeObserver(entries => {
+    this.#observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        if (entry.target === this.#parent) { this.#schedule(); continue; }
+        if (entry.target === this.#parent) {
+          this.#schedule();
+          continue;
+        }
         const el = entry.target as HTMLElement;
         const style = getComputedStyle(el);
-        const height = (entry.borderBoxSize[0]?.blockSize ?? el.offsetHeight) + parseFloat(style.marginTop) + parseFloat(style.marginBottom);
+        const height =
+          (entry.borderBoxSize[0]?.blockSize ?? el.offsetHeight) +
+          parseFloat(style.marginTop) +
+          parseFloat(style.marginBottom);
         const id = el.dataset.blockId!;
         if (height > 0 && this.#heights.get(id) !== height) {
           this.#pending.set(id, height);
@@ -56,11 +88,42 @@ export class Virtualizer {
         }
       }
     });
-    if (this.#parent instanceof HTMLElement) this.#observer.observe(this.#parent);
+    if (this.#parent instanceof HTMLElement)
+      this.#observer.observe(this.#parent);
     this.body.style.overflowAnchor = 'none';
   }
-  observe(el: HTMLElement) { this.#observer.observe(el); }
-  unobserve(el: HTMLElement) { this.#observer.unobserve(el); }
+  anchor(views: Iterable<{ element: HTMLElement }>) {
+    const top =
+      this.#parent instanceof HTMLElement
+        ? this.#parent.getBoundingClientRect().top
+        : 0;
+    const bottom =
+      top +
+      (this.#parent instanceof HTMLElement
+        ? this.#parent.clientHeight
+        : innerHeight);
+    for (const { element } of views) {
+      const rect = element.getBoundingClientRect();
+      if (rect.bottom > top && rect.top < bottom) {
+        return () => {
+          if (element.isConnected)
+            this.#parent.scrollBy(
+              0,
+              element.getBoundingClientRect().top - rect.top
+            );
+        };
+      }
+    }
+  }
+  has(id: string) {
+    return this.#indices.has(id);
+  }
+  observe(el: HTMLElement) {
+    this.#observer.observe(el);
+  }
+  unobserve(el: HTMLElement) {
+    this.#observer.unobserve(el);
+  }
   destroy() {
     this.#observer.disconnect();
     this.#parent.removeEventListener('scroll', this.#schedule);
@@ -69,7 +132,8 @@ export class Virtualizer {
     this.body.style.overflowAnchor = '';
   }
   #at(y: number) {
-    let left = 0, right = this.#blocks.length;
+    let left = 0,
+      right = this.#blocks.length;
     while (left < right) {
       const mid = (left + right) >>> 1;
       if (this.#offsets[mid + 1]! <= y) left = mid + 1;
@@ -79,14 +143,27 @@ export class Virtualizer {
   }
   layout(blocks: readonly Block[], pins: (string | null | undefined)[]) {
     const parent = this.#parent;
-    const top = (parent instanceof HTMLElement ? parent.getBoundingClientRect().top + parent.clientTop : 0) - this.body.getBoundingClientRect().top;
-    const height = parent instanceof HTMLElement ? parent.clientHeight : window.innerHeight;
+    const top =
+      (parent instanceof HTMLElement
+        ? parent.getBoundingClientRect().top + parent.clientTop
+        : 0) - this.body.getBoundingClientRect().top;
+    const height =
+      parent instanceof HTMLElement ? parent.clientHeight : window.innerHeight;
     const changed = blocks !== this.#blocks;
     const anchor = this.#at(top);
-    const before = this.#offsets[anchor]!;
+
     let delta = 0;
     if (changed || this.#pending.size) {
-      for (const [id, h] of this.#pending) this.#heights.set(id, h);
+      for (const [id, h] of this.#pending) {
+        const previous = this.#heights.get(id);
+        if (
+          !changed &&
+          previous !== undefined &&
+          this.#indices.get(id)! < anchor
+        )
+          delta += h - previous;
+        this.#heights.set(id, h);
+      }
       this.#pending.clear();
       if (changed) {
         this.#blocks = blocks;
@@ -96,13 +173,16 @@ export class Virtualizer {
           for (const child of b.children) index(child, i);
         };
         blocks.forEach(index);
-        for (const id of this.#heights.keys()) if (!this.#indices.has(id)) this.#heights.delete(id);
+        for (const id of this.#heights.keys())
+          if (!this.#indices.has(id)) this.#heights.delete(id);
         this.#offsets = new Float64Array(blocks.length + 1);
       }
       blocks.forEach((b, i) => {
-        this.#offsets[i + 1] = this.#offsets[i]! + (this.#heights.get(b.id) ?? ((estimates[b.type] ?? 32) + b.children.length * 32));
+        this.#offsets[i + 1] =
+          this.#offsets[i]! +
+          (this.#heights.get(b.id) ??
+            (estimates[b.type] ?? 32) + b.children.length * 32);
       });
-      if (!changed) delta = this.#offsets[anchor]! - before;
     }
     if (delta) parent.scrollBy(0, delta);
     const fixed: number[] = [];
@@ -110,6 +190,14 @@ export class Virtualizer {
       const i = id && this.#indices.get(id);
       if (typeof i === 'number') fixed.push(i);
     }
-    return windowLayout(this.#offsets, this.#at(top + delta - this.overscan), Math.min(blocks.length, this.#at(top + delta + height + this.overscan) + 1), fixed);
+    return windowLayout(
+      this.#offsets,
+      this.#at(top + delta - this.overscan),
+      Math.min(
+        blocks.length,
+        this.#at(top + delta + height + this.overscan) + 1
+      ),
+      fixed
+    );
   }
 }

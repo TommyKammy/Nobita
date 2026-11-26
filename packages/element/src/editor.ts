@@ -1842,8 +1842,8 @@ export class NobitaEditor implements BlockHost {
       }
     }
     if (change.source !== 'replace' && this.#selectedBlockIds.size > 0) {
-      for (const id of [...this.#selectedBlockIds]) {
-        if (!this.#findView(id) && !findBlock(change.doc.blocks, id)) {
+      for (const id of this.#selectedBlockIds) {
+        if (!this.#findView(id) && !(this.#virtual?.has(id) ?? findBlock(change.doc.blocks, id))) {
           this.#selectedBlockIds.delete(id);
         }
       }
@@ -1898,6 +1898,7 @@ export class NobitaEditor implements BlockHost {
       this.#virtual = undefined;
       this.#layout = [];
     }
+    const restoreAnchor = unchanged && this.#virtual?.anchor(this.#views.values());
     for (const gap of this.#gaps) gap.remove();
     this.#gaps.length = 0;
     if (this.#views.size) {
@@ -1941,6 +1942,7 @@ export class NobitaEditor implements BlockHost {
         this.#gaps.push(gap);
       }
     }
+    if (restoreAnchor) restoreAnchor();
     if (this.#selectedBlockIds.size) this.#syncBlockSelection();
   }
 
@@ -2070,7 +2072,7 @@ export class NobitaEditor implements BlockHost {
     }
     if (!preventScroll) {
       const rect = focusView.element.getBoundingClientRect();
-      if (rect.top < 8 || rect.bottom > window.innerHeight - 8) {
+      if (this.#virtual || rect.top < 8 || rect.bottom > window.innerHeight - 8) {
         focusView.element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       }
     }
@@ -2624,9 +2626,10 @@ export class NobitaEditor implements BlockHost {
 
   #syncBlockSelection(): void {
     const nextEls = new Set<HTMLElement>();
-    for (const id of this.#selectedBlockIds) {
-      const el = this.#findView(id)?.element;
-      if (el) nextEls.add(el);
+    if (this.#selectedBlockIds.size) {
+      for (const [id, view] of this.#viewIndex) {
+        if (this.#selectedBlockIds.has(id)) nextEls.add(view.element);
+      }
     }
     for (const el of this.#selectedBlockEls) {
       if (!nextEls.has(el)) {
@@ -2662,6 +2665,7 @@ export class NobitaEditor implements BlockHost {
         this.#body.focus({ preventScroll: true });
       }
       if (focusId) {
+        if (this.#virtual && !this.#findView(focusId)) this.scrollToBlock(focusId);
         const el = this.#findView(focusId)?.element;
         if (el) {
           const rect = el.getBoundingClientRect();

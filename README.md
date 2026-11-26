@@ -92,6 +92,9 @@ editor.focus();
 editor.insertMarkdown('## Pasted markdown\n\n- becomes\n- blocks');
 ```
 
+Documents with at least 300 top-level blocks render the visible window plus 800 px of overscan on each side. Pass `virtualize: { threshold, overscanPx }` to `createEditor` to tune the window, or `virtualize: false` to render every block. Search the document model and use `editor.scrollToBlock(id)` to reveal a result.
+
+
 ### React
 
 ```tsx
@@ -273,7 +276,8 @@ See [docs/public-api.md](docs/public-api.md) for the stable import surface, edit
 | `getSelection()` | Current block/offset selection or `null` |
 | `getSelectedBlockIds()` | Currently selected block IDs (block selection mode) |
 | `selectBlocks(ids)` / `clearBlockSelection()` | Programmatically set or clear block selection |
-| `focus(blockId?, offset?)` | Focus the editor or a block |
+| `focus(blockId?, offset?)` | Focus the editor or a block, mounting it if needed |
+| `scrollToBlock(blockId)` | Reveal a block without moving the caret. Returns whether it was found |
 | `focusTitle()` / `blur()` | Focus control |
 | `undo()` / `redo()` | History |
 | `setReadonly(value)` / `setTheme(theme)` / `setPlaceholder(value)` | Runtime configuration |

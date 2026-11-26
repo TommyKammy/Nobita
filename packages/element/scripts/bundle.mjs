@@ -1,27 +1,19 @@
 import { minify } from 'terser';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import esbuild from 'esbuild';
+import { editorStylesPath, minifiedEditorStyles } from './minify-styles.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const minifyStylesPlugin = {
   name: 'minify-styles-ts',
   setup(build) {
-    const stylesPath = path.join(root, 'src', 'styles.ts');
     build.onLoad({ filter: /[/\\]styles\.ts$/ }, async args => {
-      if (path.resolve(args.path) !== stylesPath) return null;
-      const source = await readFile(args.path, 'utf8');
-      const match = source.match(
-        /export const styles(?:\s*:\s*string)?\s*=\s*(?:\/\*[\s\S]*?\*\/\s*)?`([\s\S]*)`;\s*$/
-      );
-      if (!match) {
-        throw new Error(`Could not extract CSS template literal from ${args.path}`);
-      }
-      const minified = (await esbuild.transform(match[1], { loader: 'css', minify: true })).code.trim();
+      if (path.resolve(args.path) !== editorStylesPath) return null;
       return {
-        contents: `export const styles: string = ${JSON.stringify(minified)};\n`,
+        contents: await minifiedEditorStyles(),
         loader: 'ts',
       };
     });

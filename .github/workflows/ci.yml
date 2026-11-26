@@ -19,13 +19,4 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
-      - run: pnpm test:browser
-      - run: pnpm size --strict
-      - if: github.event_name != 'workflow_dispatch'
-        run: pnpm bench
-        continue-on-error: true
-      - if: github.event_name == 'workflow_dispatch'
-        run: pnpm bench --strict
+      - run: BENCH=1 NOBITA_TEST_BUNDLE=1 pnpm test:ci

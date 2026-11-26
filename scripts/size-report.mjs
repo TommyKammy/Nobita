@@ -50,8 +50,8 @@ for (const { name, path } of artifacts()) {
   console.log(
     `${name.padEnd(12)} ${path.padEnd(38)} ${String(raw).padStart(8)} raw ${String(gzip).padStart(8)} gzip  ${change}`
   );
-  if (name === 'element' && gzip > 111_547) {
-    console.warn('  warning: standalone ESM exceeds the Phase 2 budget of 111,547 gzip bytes');
+  if (name === 'element' && gzip > 114_147) {
+    console.warn('  warning: standalone ESM exceeds the Phase 3 budget of 114,147 gzip bytes');
     if (strict) failed = true;
   }
   if (before && gzipDelta > threshold) {

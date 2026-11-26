@@ -8,7 +8,8 @@ const url = 'http://127.0.0.1:4174';
 const baselinePath = join(root, 'benchmarks', 'perf-baseline.json');
 const strict = process.argv.includes('--strict');
 const write = process.argv.includes('--write');
-const counts = [200, 1_000, 3_000];
+const limits = { 200: 2.6, 1000: 10, 3000: 12, 10000: 15 };
+const counts = Object.keys(limits).map(Number);
 const samples = 5;
 const threshold = 0.5;
 
@@ -58,6 +59,44 @@ for (const count of counts) {
   );
 }
 
+// Time the browser work within a frame, including layout but excluding the wait for vsync.
+const interaction = await page.evaluate(async () => {
+  const host = window.__host;
+  const body = host.shadowRoot.querySelector('.nb-body');
+  const nextFrame = () => new Promise(requestAnimationFrame);
+  const input = [], scroll = [];
+  let mounted = 0;
+  for (let i = 1; i <= 15; i++) {
+    await nextFrame();
+    let start;
+    requestAnimationFrame(() => { start = performance.now(); });
+    window.scrollTo(0, document.documentElement.scrollHeight * i / 16);
+    window.dispatchEvent(new Event('scroll'));
+    await nextFrame();
+    const nodes = body.querySelectorAll(':scope > .nb-block');
+    mounted = Math.max(mounted, nodes.length);
+    body.getBoundingClientRect();
+    scroll.push(performance.now() - start);
+    const block = [...nodes].find(el => {
+      const y = el.getBoundingClientRect().top;
+      return y >= 0 && y < innerHeight;
+    });
+    if (!block) throw new Error('Viewport has no mounted block');
+    host.editor.focus(block.dataset.blockId, 0);
+    await nextFrame();
+    start = performance.now();
+    body.dispatchEvent(new InputEvent('beforeinput', {
+      inputType: 'insertText', data: 'x', bubbles: true, cancelable: true,
+    }));
+    body.getBoundingClientRect();
+    input.push(performance.now() - start);
+    if (!block.querySelector('.nb-text').textContent.startsWith('x')) throw new Error('Input was not committed');
+  }
+  return { scroll, input, mounted };
+});
+const interactionMax = Math.max(...interaction.scroll, ...interaction.input);
+console.log(`10k blocks, 15 frames: input max ${Math.max(...interaction.input).toFixed(2)} ms, scroll max ${Math.max(...interaction.scroll).toFixed(2)} ms, ${interaction.mounted} mounted blocks max`);
+
 const formulas = [];
 for (let i = 0; i < 15; i++) formulas.push(await page.evaluate(() => window.__benchFormulas()));
 const formulaMedian = formulas.sort((a,b) => a-b)[7];
@@ -68,9 +107,13 @@ if (server) server.kill();
 const baseline = existsSync(baselinePath)
   ? JSON.parse(readFileSync(baselinePath, 'utf8'))
   : {};
-let failed = strict && formulaMedian >= 2;
+let failed = strict && (formulaMedian >= 2 || interactionMax > 16.6 || interaction.mounted >= 150);
 if (formulaMedian >= 2) console.warn('  warning: formula evaluation reached the 2 ms limit');
 for (const count of counts) {
+  if (result[count] > limits[count]) {
+    console.warn(`  warning: ${count} blocks exceeded ${limits[count]} ms`);
+    if (strict) failed = true;
+  }
   const before = baseline[count];
   if (before === undefined) continue;
   const delta = (result[count] - before) / before;
