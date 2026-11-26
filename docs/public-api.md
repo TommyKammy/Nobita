@@ -11,6 +11,7 @@ Use the package entry points declared in each package’s `exports` map. The cor
 | `@nobita/element` | `@nobita/element/styles` | Named `styles` CSS string for host integrations |
 | `@nobita/react` | `@nobita/react` | React wrapper around `<nobita-editor>` |
 | `@nobita/storage` | `@nobita/storage` | Optional persistence adapters |
+| `@nobita/storage` | `@nobita/storage/sql` | SQL document store, schema and driver types |
 | `@nobita/core` | `@nobita/core/collab-runtime` | Shared adapter implementation and backend/presence contracts |
 | `@nobita/collab-yjs` | `@nobita/collab-yjs` | Yjs adapter and awareness binding |
 | `@nobita/collab-automerge` | `@nobita/collab-automerge` | Automerge adapter |
