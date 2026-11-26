@@ -6,6 +6,7 @@ import {
   icon,
   plainTextToBlocks,
   readClipboardPayload,
+  type CustomBlockRenderer,
   type NobitaChangeDetail,
   type NobitaOptions,
   type NobitaPageOpenDetail,
@@ -37,7 +38,9 @@ import {
   partitionTrashedPages,
   resolveRestoreParentId,
   searchWorkspacePages,
+  type CustomBlockType,
   type Doc,
+  type JsonValue,
   type EditorSelection,
   type PageInfo,
   type TableData,
@@ -80,6 +83,15 @@ export function publicApiFixture(host: HTMLElement): void {
     } satisfies PageProvider,
   };
   const editor = createEditor(host, options);
+  const type: CustomBlockType = 'custom:issue';
+  const data: JsonValue = { id: 42, tags: ['open'] };
+  const card = createBlock(type, { props: { data } });
+  const render: CustomBlockRenderer = block => JSON.stringify(block.props.data);
+  editor.registerCustomBlock(type, render);
+  editor.setDoc(createDoc({ blocks: [card] }));
+  editor.registerCustomBlock(type, null);
+  // @ts-expect-error - built-in renderers cannot be replaced by host registration
+  editor.registerCustomBlock('paragraph', render);
   editor.scrollToBlock(doc.blocks[0]!.id);
   void editor.insertPageLink({ id: 'p1', title: 'Page' });
   void editor.insertInlinePageLink({ id: 'p1', title: 'Page' });

@@ -533,13 +533,11 @@ function renderTree(): void {
           Boolean(entry[1]) && (!needle || titleOf(entry[1]!).toLowerCase().includes(needle))
       );
     if (items.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'sidebar-empty';
-      empty.textContent =
+      showEmptyTree(
         trashed.length === 0
           ? 'Trash is empty. Deleted pages appear here until you restore or remove them.'
-          : 'No matching pages in Trash.';
-      pageTree.append(empty);
+          : 'No matching pages in Trash.'
+      );
       return;
     }
     for (const [id, record] of items) pageTree.append(trashedPageRow(id, record));
@@ -551,10 +549,7 @@ function renderTree(): void {
       .filter(([, record]) => !isTrashed(record) && record.favorite)
       .sort((a, b) => b[1].updatedAt - a[1].updatedAt);
     if (favorites.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'sidebar-empty';
-      empty.textContent = 'No favorites yet. Star a page to keep it close.';
-      pageTree.append(empty);
+      showEmptyTree('No favorites yet. Star a page to keep it close.');
       return;
     }
     for (const [id, record] of favorites) pageTree.append(pageRow(id, record, 0, false, false));
@@ -573,23 +568,18 @@ function renderTree(): void {
   renderNodes(tree);
 
   if (pageTree.childElementCount === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'sidebar-empty';
-    empty.textContent = 'No pages yet. Press ⌘N or + to create one.';
-    pageTree.append(empty);
+    showEmptyTree('No pages yet. Press ⌘N or + to create one.');
   }
 }
 
-function trashedPageRow(id: string, record: PageRecord): HTMLElement {
-  const row = document.createElement('div');
-  row.className = 'page-row is-trashed';
-  row.dataset.active = String(state.activeId === id);
-  row.dataset.pageId = id;
-  row.style.paddingLeft = '8px';
-  row.tabIndex = 0;
-  row.setAttribute('role', 'treeitem');
-  row.setAttribute('aria-selected', String(state.activeId === id));
+function showEmptyTree(message: string): void {
+  const empty = document.createElement('div');
+  empty.className = 'sidebar-empty';
+  empty.textContent = message;
+  pageTree.append(empty);
+}
 
+function pageRowContent(record: PageRecord) {
   const iconElement = document.createElement('span');
   iconElement.className = 'page-icon';
   iconElement.innerHTML = iconFor(record);
@@ -600,30 +590,45 @@ function trashedPageRow(id: string, record: PageRecord): HTMLElement {
 
   const actions = document.createElement('span');
   actions.className = 'page-actions';
+  return { iconElement, title, actions };
+}
 
-  const restore = document.createElement('button');
-  restore.type = 'button';
-  restore.className = 'page-action';
-  restore.title = 'Restore page';
-  restore.setAttribute('aria-label', 'Restore page');
-  restore.innerHTML = demoIcon.restore;
-  restore.addEventListener('click', event => {
+function pageAction(label: string, markup: string, activate: (button: HTMLButtonElement) => void, danger = false) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = danger ? 'page-action danger' : 'page-action';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.innerHTML = markup;
+  button.addEventListener('click', event => {
     event.stopPropagation();
-    restoreFromTrash(id);
+    activate(button);
   });
+  return button;
+}
 
-  const remove = document.createElement('button');
-  remove.type = 'button';
-  remove.className = 'page-action danger';
-  remove.title = 'Delete permanently';
-  remove.setAttribute('aria-label', 'Delete permanently');
-  remove.innerHTML = icon.trash;
-  remove.addEventListener('click', event => {
-    event.stopPropagation();
-    deletePermanently(id);
-  });
+function treeRow(id: string, padding: string): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'page-row';
+  row.dataset.active = String(state.activeId === id);
+  row.dataset.pageId = id;
+  row.style.paddingLeft = padding;
+  row.tabIndex = 0;
+  row.setAttribute('role', 'treeitem');
+  row.setAttribute('aria-selected', String(state.activeId === id));
 
-  actions.append(restore, remove);
+  return row;
+}
+
+function trashedPageRow(id: string, record: PageRecord): HTMLElement {
+  const row = treeRow(id, '8px');
+  row.classList.add('is-trashed');
+  const { iconElement, title, actions } = pageRowContent(record);
+
+  actions.append(
+    pageAction('Restore page', demoIcon.restore, () => restoreFromTrash(id)),
+    pageAction('Delete permanently', icon.trash, () => deletePermanently(id), true)
+  );
   row.append(iconElement, title, actions);
   row.addEventListener('click', () => openPage(id));
   row.addEventListener('keydown', event => {
@@ -647,14 +652,7 @@ function pageRow(
   showTree: boolean,
   hasChildren: boolean
 ): HTMLElement {
-  const row = document.createElement('div');
-  row.className = 'page-row';
-  row.dataset.active = String(state.activeId === id);
-  row.dataset.pageId = id;
-  row.style.paddingLeft = `${4 + depth * 13}px`;
-  row.tabIndex = 0;
-  row.setAttribute('role', 'treeitem');
-  row.setAttribute('aria-selected', String(state.activeId === id));
+  const row = treeRow(id, `${4 + depth * 13}px`);
   if (showTree) row.draggable = true;
 
   const chevron = document.createElement('button');
@@ -674,41 +672,14 @@ function pageRow(
     });
   }
 
-  const iconElement = document.createElement('span');
-  iconElement.className = 'page-icon';
-  iconElement.innerHTML = iconFor(record);
-
-  const title = document.createElement('span');
-  title.className = `page-title${record.doc.title.trim() ? '' : ' is-empty'}`;
-  title.textContent = titleOf(record);
-
-  const actions = document.createElement('span');
-  actions.className = 'page-actions';
+  const { iconElement, title, actions } = pageRowContent(record);
   if (showTree) {
-    const add = document.createElement('button');
-    add.type = 'button';
-    add.className = 'page-action';
-    add.title = 'Add nested page';
-    add.setAttribute('aria-label', 'Add nested page');
-    add.innerHTML = icon.plus;
-    add.addEventListener('click', event => {
-      event.stopPropagation();
+    actions.append(pageAction('Add nested page', icon.plus, () => {
       collapsed.delete(id);
       newPage(id);
-    });
-    actions.append(add);
+    }));
   }
-  const menu = document.createElement('button');
-  menu.type = 'button';
-  menu.className = 'page-action';
-  menu.title = 'Page actions';
-  menu.setAttribute('aria-label', 'Page actions');
-  menu.innerHTML = icon.more;
-  menu.addEventListener('click', event => {
-    event.stopPropagation();
-    openPageMenu(id, menu);
-  });
-  actions.append(menu);
+  actions.append(pageAction('Page actions', icon.more, button => openPageMenu(id, button)));
 
   row.append(chevron, iconElement, title, actions);
   row.addEventListener('click', () => openPage(id));
@@ -725,6 +696,11 @@ function pageRow(
     }
   });
   if (showTree) {
+    const dropMode = (event: DragEvent) => {
+      const rect = row.getBoundingClientRect();
+      const ratio = (event.clientY - rect.top) / Math.max(1, rect.height);
+      return ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'inside';
+    };
     row.addEventListener('dragstart', event => {
       draggedPageId = id;
       row.classList.add('is-dragging');
@@ -740,21 +716,13 @@ function pageRow(
     });
     row.addEventListener('dragover', event => {
       if (!draggedPageId || draggedPageId === id) return;
-      const rect = row.getBoundingClientRect();
-      const ratio = (event.clientY - rect.top) / Math.max(1, rect.height);
-      const mode = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'inside';
+      const mode = dropMode(event);
       const targetParent = mode === 'inside' ? id : record.parentId;
       if (!canReparentPage(treeInputs(), draggedPageId, targetParent)) return;
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
       clearRowDropClasses(row);
-      row.classList.add(
-        mode === 'before'
-          ? 'is-drop-before'
-          : mode === 'after'
-            ? 'is-drop-after'
-            : 'is-drop-inside'
-      );
+      row.classList.add(`is-drop-${mode}`);
     });
     row.addEventListener('dragleave', () => {
       clearRowDropClasses(row);
@@ -763,9 +731,7 @@ function pageRow(
       const sourceId = draggedPageId;
       clearRowDropClasses(row);
       if (!sourceId || sourceId === id) return;
-      const rect = row.getBoundingClientRect();
-      const ratio = (event.clientY - rect.top) / Math.max(1, rect.height);
-      const mode = ratio < 0.25 ? 'before' : ratio > 0.75 ? 'after' : 'inside';
+      const mode = dropMode(event);
       const targetParent = mode === 'inside' ? id : record.parentId;
       if (!canReparentPage(treeInputs(), sourceId, targetParent)) return;
       event.preventDefault();

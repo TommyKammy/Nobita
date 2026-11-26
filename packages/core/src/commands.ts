@@ -18,6 +18,7 @@ import type {
   InlineRun,
 } from './types.js';
 import { normalizeRuns, plainText } from './text.js';
+import { isCustomBlockType } from './types.js';
 import { createId } from './id.js';
 
 function propsForType(type: BlockType, current: BlockProps, extra: Partial<BlockProps> = {}): BlockProps {
@@ -62,6 +63,10 @@ function propsForType(type: BlockType, current: BlockProps, extra: Partial<Block
       break;
     }
     default:
+      if (isCustomBlockType(type)) {
+        const data = extra.data === undefined ? current.data : extra.data;
+        if (data !== undefined) next.data = data;
+      }
       break;
   }
   return next;

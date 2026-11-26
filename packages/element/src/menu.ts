@@ -1,3 +1,4 @@
+import { el } from './dom.js';
 import { dismissFloating, placeFloating } from './floating.js';
 
 export interface MenuItem {
@@ -67,8 +68,7 @@ export class Menu {
   constructor(root: ShadowRoot, overlay: HTMLElement) {
     this.#root = root;
     this.#overlay = overlay;
-    this.element = document.createElement('div');
-    this.element.className = 'nb-menu';
+    this.element = el('div', 'nb-menu');
     this.element.setAttribute('role', 'menu');
     this.element.tabIndex = -1;
     this.element.addEventListener('mousemove', event => {
@@ -179,10 +179,7 @@ export class Menu {
   #render(): void {
     const fragment = document.createDocumentFragment();
     if (this.#filtered.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'nb-menu-empty';
-      empty.textContent = 'No results';
-      fragment.append(empty);
+      fragment.append(el('div', 'nb-menu-empty', 'No results'));
       this.element.replaceChildren(fragment);
       return;
     }
@@ -190,41 +187,26 @@ export class Menu {
     this.#filtered.forEach((item, index) => {
       if (item.group && item.group !== currentGroup) {
         currentGroup = item.group;
-        const group = document.createElement('div');
-        group.className = 'nb-menu-group';
-        group.textContent = item.group;
-        fragment.append(group);
+        fragment.append(el('div', 'nb-menu-group', item.group));
       }
-      const row = document.createElement('div');
-      row.className = 'nb-menu-item';
+      const row = el('div', 'nb-menu-item');
       row.dataset.index = String(index);
       row.dataset.active = String(index === this.#active);
       row.setAttribute('role', 'menuitem');
       row.id = `nb-menu-item-${index}`;
 
-      const icon = document.createElement('span');
-      icon.className = 'nb-menu-icon';
+      const icon = el('span', 'nb-menu-icon');
       icon.innerHTML = item.icon;
 
-      const copy = document.createElement('span');
-      copy.className = 'nb-menu-copy';
-      const label = document.createElement('span');
-      label.className = 'nb-menu-label';
-      label.textContent = item.label;
-      copy.append(label);
+      const copy = el('span', 'nb-menu-copy');
+      copy.append(el('span', 'nb-menu-label', item.label));
       if (item.description) {
-        const description = document.createElement('span');
-        description.className = 'nb-menu-desc';
-        description.textContent = item.description;
-        copy.append(description);
+        copy.append(el('span', 'nb-menu-desc', item.description));
       }
 
       row.append(icon, copy);
       if (item.shortcut) {
-        const shortcut = document.createElement('span');
-        shortcut.className = 'nb-menu-key';
-        shortcut.textContent = item.shortcut;
-        row.append(shortcut);
+        row.append(el('span', 'nb-menu-key', item.shortcut));
       }
       fragment.append(row);
     });

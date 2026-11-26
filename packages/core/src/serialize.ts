@@ -14,6 +14,7 @@ import type {
   InlineRun,
   TextAlign,
 } from './types.js';
+import { isCustomBlockType } from './types.js';
 import { safeImageSrc } from './url.js';
 
 const BLOCK_TYPES: readonly BlockType[] = [
@@ -80,11 +81,18 @@ function parseBlock(value: unknown, seen: Set<string>): Block | null {
   }
   seen.add(id);
   const rawType = typeof value.type === 'string' ? value.type : 'paragraph';
-  const type = (BLOCK_TYPES as readonly string[]).includes(rawType)
+  const type = (BLOCK_TYPES as readonly string[]).includes(rawType) || isCustomBlockType(rawType)
     ? (rawType as BlockType)
     : 'paragraph';
   const text = parseInlineRuns(value.text);
   const props = parseProps(value.props);
+  if (isCustomBlockType(type) && isRecord(value.props) && value.props.data !== undefined) {
+    try {
+      props.data = JSON.parse(JSON.stringify(value.props.data));
+    } catch {
+      // Programmatic inputs can contain cycles or other non-JSON values.
+    }
+  }
   if (type === 'database') {
     const rawProps = isRecord(value.props) ? value.props : {};
     props.database = normalizeDatabaseData(rawProps.database, 'database');
@@ -153,6 +161,7 @@ function cloneBlockList(blocks: readonly Block[]): Block[] {
     text: cloneRuns(block.text),
     props: {
       ...block.props,
+      ...(block.props.data !== undefined && { data: structuredClone(block.props.data) }),
       ...(block.props.database ? { database: cloneDatabaseData(block.props.database) } : {}),
       ...(block.props.table ? { table: cloneTableData(block.props.table) } : {}),
     },

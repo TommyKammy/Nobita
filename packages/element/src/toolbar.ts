@@ -1,3 +1,5 @@
+import { btn } from './database-dom.js';
+import { el } from './dom.js';
 import { PALETTE_COLORS, TURN_INTO_TYPES } from '@nobita/core';
 import type {
   BlockType,
@@ -66,9 +68,7 @@ function labeledRow<T>(
   label: string,
   iconMarkup: string
 ): PopoverRow<T> {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'nb-popover-row';
+  const button = btn('nb-popover-row');
   button.setAttribute('role', 'menuitemradio');
   button.setAttribute('aria-label', label);
   button.innerHTML = `<span class="nb-align-icon">${iconMarkup}</span><span class="nb-align-label">${label}</span><span class="nb-popover-check">${icon.check}</span>`;
@@ -81,9 +81,7 @@ function colorRow(
   fallbackLabel: string,
   section: string
 ): PopoverRow<ColorPick> {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'nb-popover-row';
+  const button = btn('nb-popover-row');
   button.setAttribute('role', 'menuitem');
   button.setAttribute(
     'aria-label',
@@ -92,8 +90,7 @@ function colorRow(
       : fallbackLabel
   );
 
-  const sample = document.createElement('span');
-  sample.className = 'nb-color-a';
+  const sample = el('span', 'nb-color-a');
   sample.textContent = 'A';
   sample.dataset.kind = kind;
   if (color) {
@@ -101,8 +98,7 @@ function colorRow(
     else sample.style.background = `var(--nb-hl-${color})`;
   }
 
-  const text = document.createElement('span');
-  text.className = 'nb-color-label';
+  const text = el('span', 'nb-color-label');
   text.textContent = color ? capitalize(color) : fallbackLabel;
   button.append(sample, text);
   return {
@@ -205,15 +201,12 @@ export class Toolbar {
     this.#onTurnInto = onTurnInto;
     this.#onHighlight = onHighlight;
     this.#onTextColor = onTextColor;
-    this.element = document.createElement('div');
-    this.element.className = 'nb-toolbar';
+    this.element = el('div', 'nb-toolbar');
     this.element.setAttribute('role', 'toolbar');
     this.element.setAttribute('aria-label', 'Text formatting');
     this.element.style.visibility = 'hidden';
 
-    const turnInto = document.createElement('button');
-    turnInto.type = 'button';
-    turnInto.className = 'nb-tool nb-tool-dropdown';
+    const turnInto = btn('nb-tool nb-tool-dropdown');
     turnInto.dataset.key = 'turn-into';
     turnInto.setAttribute('aria-label', 'Turn into');
     turnInto.setAttribute('aria-haspopup', 'menu');
@@ -228,9 +221,7 @@ export class Toolbar {
     this.#turnIntoButton = turnInto;
     this.element.append(turnInto);
 
-    const align = document.createElement('button');
-    align.type = 'button';
-    align.className = 'nb-tool nb-tool-dropdown nb-tool-group-start';
+    const align = btn('nb-tool nb-tool-dropdown nb-tool-group-start');
     align.dataset.key = 'align';
     align.setAttribute('aria-label', 'Alignment: Left');
     align.setAttribute('aria-haspopup', 'menu');
@@ -247,9 +238,7 @@ export class Toolbar {
 
     for (const key of INLINE_ORDER) {
       if (key === 'link') {
-        const link = document.createElement('button');
-        link.type = 'button';
-        link.className = 'nb-tool';
+        const link = btn('nb-tool');
         link.dataset.key = 'link';
         link.setAttribute('aria-label', 'Add link');
         link.title = 'Link · K';
@@ -282,9 +271,7 @@ export class Toolbar {
       this.element.append(element);
     }
 
-    const color = document.createElement('button');
-    color.type = 'button';
-    color.className = 'nb-tool nb-tool-dropdown nb-tool-group-start';
+    const color = btn('nb-tool nb-tool-dropdown nb-tool-group-start');
     color.dataset.key = 'color';
     color.setAttribute('aria-label', 'Highlight');
     color.setAttribute('aria-haspopup', 'menu');
@@ -474,17 +461,13 @@ export class LinkPopover {
 
   constructor(overlay: HTMLElement) {
     this.#overlay = overlay;
-    this.element = document.createElement('div');
-    this.element.className = 'nb-link-popover';
+    this.element = el('div', 'nb-link-popover');
     this.element.style.visibility = 'hidden';
-    this.#input = document.createElement('input');
-    this.#input.className = 'nb-link-input';
+    this.#input = el('input', 'nb-link-input');
     this.#input.type = 'url';
     this.#input.placeholder = 'Paste or type a link…';
     this.#input.setAttribute('aria-label', 'Link URL');
-    const apply = document.createElement('button');
-    apply.type = 'button';
-    apply.className = 'nb-link-apply';
+    const apply = btn('nb-link-apply');
     apply.textContent = 'Apply';
     apply.addEventListener('pointerdown', event => event.preventDefault());
     apply.addEventListener('click', () => this.#finish(this.#input.value.trim() || null));

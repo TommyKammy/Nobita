@@ -4,6 +4,8 @@ export type {
   BlockPosition,
   BlockProps,
   BlockType,
+  CustomBlockType,
+  JsonValue,
   CalloutTone,
   DatabaseFormulaConfig, DatabaseRelationConfig, DatabaseRelationRef, DatabaseTarget, DatabaseResolver,
   DatabaseCell,
@@ -54,6 +56,7 @@ export {
   isListBlock,
   isTextColor,
   isTextualBlock,
+  isCustomBlockType,
 } from './types.js';
 
 export * from './database.js';

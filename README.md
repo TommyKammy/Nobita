@@ -293,6 +293,7 @@ See [docs/public-api.md](docs/public-api.md) for the stable import surface, edit
 | `getJSON(pretty?)` | Serialize the document |
 | `getMarkdown()` / `getHTML()` | Export helpers |
 | `setDoc(doc, { history? })` | Replace the document |
+| `registerCustomBlock(type, renderer)` | Register an editor-local renderer for a `custom:` block. Clients without the renderer retain its JSON payload. [Usage](docs/public-api.md#host-defined-blocks) |
 | `setTitle(title)` | Update only the title |
 | `getSelection()` | Current block/offset selection or `null` |
 | `getSelectedBlockIds()` | Currently selected block IDs (block selection mode) |

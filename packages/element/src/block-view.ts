@@ -1,9 +1,10 @@
-import type { Block } from '@nobita/core';
-import { createDatabaseData, createTableData, safeImageSrc } from '@nobita/core';
+import { btn } from './database-dom.js';
+import type { Block, CustomBlockType } from '@nobita/core';
+import { createDatabaseData, createTableData, isCustomBlockType, safeImageSrc } from '@nobita/core';
 import type { BlockHost } from './bridge.js';
 import { DatabaseView, type DatabaseHost } from './database-view.js';
 import { SimpleTableView } from './table-view.js';
-import { domPointToOffset, nativeSelection } from './dom.js';
+import { el, domPointToOffset, nativeSelection } from './dom.js';
 import { icon } from './icons.js';
 import { renderInlineRuns } from './inline-dom.js';
 
@@ -32,19 +33,19 @@ const CALLOUT_TONES = [
   { value: 'danger', label: 'Danger' },
 ] as const;
 
-let plusIconNode: Node | null = null;
-let dragIconNode: Node | null = null;
+const gutterIcons = new Map<string, Node>();
 
-function cloneIcon(cache: 'plus' | 'drag'): Node {
-  let template = cache === 'plus' ? plusIconNode : dragIconNode;
+function gutterButton(kind: 'add' | 'drag', label: string, title = label): HTMLButtonElement {
+  const button = btn(`nb-gutter-btn nb-${kind}`, { ariaLabel: label, title });
+  let template = gutterIcons.get(kind);
   if (!template) {
-    const host = document.createElement('span');
-    host.innerHTML = cache === 'plus' ? icon.plus : icon.drag;
-    template = host.firstChild ?? document.createTextNode('');
-    if (cache === 'plus') plusIconNode = template;
-    else dragIconNode = template;
+    button.innerHTML = kind === 'add' ? icon.plus : icon.drag;
+    template = button.firstChild!;
+    gutterIcons.set(kind, template.cloneNode(true));
+  } else {
+    button.append(template.cloneNode(true));
   }
-  return template.cloneNode(true);
+  return button;
 }
 
 export interface BlockRenderContext {
@@ -54,7 +55,10 @@ export interface BlockRenderContext {
   number: number;
 }
 
+export type CustomBlockRenderer = (block: Readonly<Block>, readonly: boolean) => Node | string;
+
 export interface BlockDisplayState {
+  custom: Map<CustomBlockType, CustomBlockRenderer>;
   databases: Map<string, DatabaseView['localState']>;
   revealed: WeakSet<Block['props']>;
 }
@@ -89,39 +93,24 @@ export class BlockView {
     this.id = block.id;
     host.registerView(this);
 
-    this.element = document.createElement('div');
-    this.element.className = 'nb-block';
+    this.element = el('div', 'nb-block');
     this.element.dataset.blockId = block.id;
 
-    this.#row = document.createElement('div');
-    this.#row.className = 'nb-row';
+    this.#row = el('div', 'nb-row');
 
-    const gutter = document.createElement('div');
-    gutter.className = 'nb-gutter';
+    const gutter = el('div', 'nb-gutter');
     gutter.contentEditable = 'false';
-    const add = document.createElement('button');
-    add.type = 'button';
-    add.className = 'nb-gutter-btn nb-add';
-    add.setAttribute('aria-label', 'Add block below');
-    add.title = 'Add block below';
-    add.append(cloneIcon('plus'));
-    const drag = document.createElement('button');
-    drag.type = 'button';
-    drag.className = 'nb-gutter-btn nb-drag';
-    drag.setAttribute('aria-label', 'Drag to move, click for actions');
-    drag.title = 'Drag to move · click for actions';
-    drag.append(cloneIcon('drag'));
-    gutter.append(add, drag);
+    gutter.append(
+      gutterButton('add', 'Add block below'),
+      gutterButton('drag', 'Drag to move, click for actions', 'Drag to move · click for actions')
+    );
 
-    this.#marker = document.createElement('div');
-    this.#marker.className = 'nb-marker';
+    this.#marker = el('div', 'nb-marker');
     this.#marker.contentEditable = 'false';
-    this.#content = document.createElement('div');
-    this.#content.className = 'nb-content';
+    this.#content = el('div', 'nb-content');
 
     this.#row.append(gutter, this.#marker, this.#content);
-    this.#children = document.createElement('div');
-    this.#children.className = 'nb-children';
+    this.#children = el('div', 'nb-children');
     this.element.append(this.#row, this.#children);
 
     this.update(block, context, true);
@@ -169,6 +158,8 @@ export class BlockView {
       this.#table.update(block.props.table ?? createTableData());
     }
 
+    if (!rebuild && previous !== block && isCustomBlockType(block.type)) this.renderCustomBlock();
+
     if (this.#text) {
       if (rebuild || previous.text !== block.text) {
         this.#renderRuns();
@@ -198,6 +189,22 @@ export class BlockView {
     }
   }
 
+  renderCustomBlock(): void {
+    const block = this.block;
+    if (!isCustomBlockType(block.type)) return;
+    const render = this.display.custom.get(block.type);
+    const widget = el('div', 'nb-custom', block.type);
+    widget.contentEditable = 'false';
+    if (render) {
+      try {
+        widget.replaceChildren(render(block, this.#host.readonly));
+      } catch {
+        // Keep the type label when the host cannot render a newer payload.
+      }
+    }
+    this.#content.replaceChildren(widget);
+  }
+
   #buildContent(block: Block): void {
     this.#database?.destroy();
     this.#database = null;
@@ -212,19 +219,19 @@ export class BlockView {
     this.#image = null;
     this.#caption = null;
     this.#content.replaceChildren();
+    if (isCustomBlockType(block.type)) {
+      this.renderCustomBlock();
+      return;
+    }
 
     if (block.type === 'page') {
-      const link = document.createElement('div');
-      link.className = 'nb-page-link';
+      const link = el('div', 'nb-page-link');
       link.contentEditable = 'false';
       link.tabIndex = 0;
       link.setAttribute('role', 'link');
-      const pageIcon = document.createElement('span');
-      pageIcon.className = 'nb-page-icon';
-      const label = document.createElement('span');
-      label.className = 'nb-page-label';
-      const arrow = document.createElement('span');
-      arrow.className = 'nb-page-arrow';
+      const pageIcon = el('span', 'nb-page-icon');
+      const label = el('span', 'nb-page-label');
+      const arrow = el('span', 'nb-page-arrow');
       arrow.setAttribute('aria-hidden', 'true');
       arrow.textContent = '↗';
       link.append(pageIcon, label, arrow);
@@ -300,8 +307,7 @@ export class BlockView {
     }
 
     if (block.type === 'divider') {
-      const line = document.createElement('div');
-      line.className = 'nb-divider';
+      const line = el('div', 'nb-divider');
       line.contentEditable = 'false';
       this.#content.append(line);
       return;
@@ -314,14 +320,12 @@ export class BlockView {
       return;
     }
 
-    const text = document.createElement('div');
-    text.className = 'nb-text';
+    const text = el('div', 'nb-text');
     this.#text = text;
     this.#content.append(text);
 
     if (block.type === 'code') {
-      const lang = document.createElement('select');
-      lang.className = 'nb-code-lang';
+      const lang = el('select', 'nb-code-lang');
       lang.contentEditable = 'false';
       lang.disabled = this.#host.readonly;
       lang.setAttribute('aria-label', 'Code language');
@@ -339,8 +343,7 @@ export class BlockView {
       this.#syncCodeLanguage(block.props.language ?? 'text');
     }
     if (block.type === 'callout') {
-      const tone = document.createElement('select');
-      tone.className = 'nb-callout-tone';
+      const tone = el('select', 'nb-callout-tone');
       tone.contentEditable = 'false';
       tone.disabled = this.#host.readonly;
       tone.setAttribute('aria-label', 'Callout tone');
@@ -439,15 +442,12 @@ export class BlockView {
         break;
       }
       case 'numbered': {
-        const number = document.createElement('span');
-        number.className = 'nb-number';
+        const number = el('span', 'nb-number');
         number.textContent = String(context.number);
         this.#marker.append(number);
         break;
       }      case 'todo': {
-        const box = document.createElement('button');
-        box.type = 'button';
-        box.className = 'nb-checkbox';
+        const box = btn('nb-checkbox');
         box.setAttribute('role', 'checkbox');
         box.setAttribute('aria-checked', String(Boolean(block.props.checked)));
         box.setAttribute('aria-label', block.props.checked ? 'Mark as not done' : 'Mark as done');
@@ -476,18 +476,14 @@ export class BlockView {
     this.#caption = null;
     const src = block.props.src ?? '';
     if (!src) {
-      const wrap = document.createElement('div');
-      wrap.className = 'nb-image-placeholder';
+      const wrap = el('div', 'nb-image-placeholder');
       wrap.contentEditable = 'false';
-      const row = document.createElement('div');
-      row.className = 'nb-image-placeholder-row';
-      const input = document.createElement('input');
-      input.className = 'nb-image-input';
+      const row = el('div', 'nb-image-placeholder-row');
+      const input = el('input', 'nb-image-input');
       input.type = 'url';
       input.placeholder = 'Paste an image URL…';
       input.setAttribute('aria-label', 'Image URL');
-      const button = document.createElement('button');
-      button.className = 'nb-link-apply';
+      const button = el('button', 'nb-link-apply');
       button.type = 'button';
       button.textContent = 'Add image';
       const commit = (): void => {
@@ -507,16 +503,14 @@ export class BlockView {
       });
       input.addEventListener('mousedown', event => event.stopPropagation());
       row.append(input, button);
-      const hint = document.createElement('div');
-      hint.className = 'nb-image-hint';
+      const hint = el('div', 'nb-image-hint');
       hint.textContent = 'Use a direct image link (https://…/photo.jpg).';
       wrap.append(row, hint);
       this.#image.append(wrap);
       return;
     }
 
-    const img = document.createElement('img');
-    img.className = 'nb-image';
+    const img = el('img', 'nb-image');
     img.src = safeImageSrc(src) ?? '';
     img.alt = block.props.alt ?? '';
     img.loading = 'lazy';
@@ -530,8 +524,7 @@ export class BlockView {
       { once: true }
     );
 
-    const caption = document.createElement('div');
-    caption.className = 'nb-caption';
+    const caption = el('div', 'nb-caption');
     caption.contentEditable = this.#host.readonly ? 'false' : 'true';
     caption.dataset.placeholder = 'Write a caption…';
     caption.spellcheck = true;
@@ -618,6 +611,7 @@ export class BlockView {
   }
 
   setReadonly(readonly: boolean): void {
+    this.renderCustomBlock();
     this.#table?.setReadonly(readonly);
     if (this.#codeLang) this.#codeLang.disabled = readonly;
     if (this.#toneSelect) this.#toneSelect.disabled = readonly;

@@ -22,4 +22,6 @@ editor.focus();
 
 Use `getDoc()` to read the current document, `setDoc(doc)` to replace it and `destroy()` when disposing of the host. For declarative markup, importing `@nobita/element` in a browser registers `<nobita-editor>`. Its `doc` property accepts a document or JSON string and its `nobita-change` event carries `detail.doc`. The `@nobita/element/styles` entry exports the editor CSS as the string `styles`.
 
+Register a renderer for a host-defined block with `editor.registerCustomBlock()`. Clients without that renderer preserve the block’s type and JSON data. See [host-defined blocks](../../docs/public-api.md#host-defined-blocks) for an example.
+
 See the [public API](../../docs/public-api.md) for editor options, events and methods.

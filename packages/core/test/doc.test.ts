@@ -15,7 +15,7 @@ import {
   selectedTopLevelBlocks,
   splitBlock,
 } from '../src/doc.js';
-import { cloneDoc } from '../src/serialize.js';
+import { cloneDoc, parseDoc } from '../src/serialize.js';
 
 function doc() {
   return createDoc({
@@ -28,6 +28,21 @@ function doc() {
 }
 
 describe('block tree', () => {
+  it('preserves opaque custom data through parsing, cloning and duplication', () => {
+    const input = createDoc({ blocks: [createBlock('custom:issue', {
+      id: 'a', props: { data: { ids: [0, null, false] } },
+    })] });
+    const parsed = parseDoc(input);
+    const clone = cloneDoc(parsed);
+    const copy = duplicateBlocks(parsed, new Set(['a'])).doc.blocks[1]!;
+    for (const block of [clone.blocks[0]!, copy]) {
+      expect(block.type).toBe('custom:issue');
+      expect(block.props).toEqual(input.blocks[0]!.props);
+      expect(block.props.data).not.toBe(parsed.blocks[0]!.props.data);
+    }
+    expect(parsed.blocks[0]!.props.data).not.toBe(input.blocks[0]!.props.data);
+  });
+
   it('finds blocks with parents', () => {
     const base = doc();
     const location = locateBlock(base.blocks, 'b');
