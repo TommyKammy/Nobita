@@ -30,7 +30,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Inline | Bold, italic, underline, strikethrough, inline code, links, mentions, `[[` inline page chips, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo, block selection (`Escape`, gutter `Shift`/`Cmd`-click, staged `Cmd/Ctrl+A`, `Shift+Arrow`, batch delete / duplicate / copy / paste / drag across text & non-text blocks) |
 | Data views | Multiple named table and board views per database, AFFiNE-style view settings (`⋯`), per-view column order/widths/visibility, nested AND/OR filters, multi-sort, container-aware expandable search (auto-hidden below `560px`), footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state; rich-text cells (`B`/`I`/`U`/`S`/code toolbar & shortcuts, highlight/color rendering, IME & plain-text paste safe), editable record pages (`row.page.content`), board card covers (`coverColumnId`), board card add/open/drag-reorder/group actions (preserving multi-select tags), drag cell selection & fill, TSV copy/paste, readonly view switching & record-page viewing; 11 typed columns (`text`, `number`, `progress`, `select`, `multi-select`, `date`, `checkbox`, `url`, `image`, `files`, `people`) |
-| Menus | Slash menu with fuzzy search and block/page actions (move/copy/link/new page), block handle menu, selection toolbar with Turn into / Align / format / Color, link popover, `@` mention picker, `[[` page link picker |
+| Menus | Slash menu with fuzzy search and block/page actions (move/copy/link/new page), block handle & right-click context menus (single/multi-block, simple tables, database rows/columns/board cards, `Shift+Right-click` for native menu), selection toolbar with Turn into / Align / format / Color, link popover, `@` mention picker, `[[` page link picker |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
 | Clipboard | Rich HTML, Markdown, plain text, a private `application/x-nobita+json` format, and image paste through an upload adapter |
@@ -321,7 +321,7 @@ pageCache.set('p1', { id: 'p1', title: 'Product roadmap' });
 editor.refreshPageLinks();
 ```
 
-`@nobita/core` also exports pure, DOM-free workspace helpers (`extractPageLinks`, `buildBacklinkIndex`, `getBacklinks`, `buildPageTree`, `getPageBreadcrumbs`, `canReparentPage`, `searchWorkspacePages`) so hosts can build backlinks panels, drag-and-drop page trees and full-text search without coupling them to the editor bundle.
+`@nobita/core` also exports pure, DOM-free workspace helpers (`extractPageLinks`, `buildBacklinkIndex`, `getBacklinks`, `buildPageTree`, `getPageBreadcrumbs`, `canReparentPage`, `isTrashedPage`, `partitionTrashedPages`, `collectTrashTargetIds`, `resolveRestoreParentId`, `collectRestoreTargetIds`, `searchWorkspacePages`) so hosts can build backlinks panels, drag-and-drop page trees, Trash workflows, and full-text search without coupling them to the editor bundle.
 
 The placeholder behaves like AFFiNE: it appears only on the **focused empty paragraph** (or heading, which shows “Heading 1/2/3/4/5/6”), and disappears as soon as text exists or focus leaves the body. It is not shown while the page title is focused. The default is `Type '/' for commands`; set `placeholder` to override the paragraph text.
 

@@ -13,6 +13,7 @@ import type {
   DatabaseView as DatabaseViewConfig,
 } from '@nobita/core';
 import { handleHistoryKey, placeCaret } from './dom.js';
+import { pointAnchor, type FloatingAnchor } from './floating.js';
 import { icon } from './icons.js';
 import {
   TYPE_ICON,
@@ -50,8 +51,8 @@ export interface DatabaseBoardContext {
   history(redo: boolean): void;
   render(): void;
   openDetailPanel(rowId: string): void;
-  openRowPopover(rowId: string, anchor: HTMLElement): void;
-  showPopover(anchor: HTMLElement, content: HTMLElement): void;
+  openRowPopover(rowId: string, anchor: HTMLElement | FloatingAnchor): void;
+  showPopover(anchor: HTMLElement | FloatingAnchor, content: HTMLElement): void;
   closePopover(): void;
   richText: DatabaseRichTextController;
 }
@@ -300,6 +301,12 @@ export class DatabaseBoardController {
       const target = event.target as HTMLElement;
       if (target.closest('.nb-db-card-title, .nb-db-card-ops')) return;
       this.#ctx.openDetailPanel(row.id);
+    }, { signal });
+    card.addEventListener('contextmenu', event => {
+      if (readonly || event.shiftKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.#ctx.openRowPopover(row.id, pointAnchor(event.clientX, event.clientY));
     }, { signal });
     const coverSrc = this.#coverSrc(row, view);
     if (coverSrc) {

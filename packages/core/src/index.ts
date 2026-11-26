@@ -203,11 +203,16 @@ export {
   buildBacklinkIndex,
   buildPageTree,
   canReparentPage,
+  collectRestoreTargetIds,
+  collectTrashTargetIds,
   extractPageLinks,
   flattenPageTree,
   getBacklinks,
   getPageBreadcrumbs,
   getPageDescendantIds,
+  isTrashedPage,
+  partitionTrashedPages,
+  resolveRestoreParentId,
   searchWorkspacePages,
 } from './workspace.js';
 export type {

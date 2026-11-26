@@ -22,6 +22,7 @@ export interface PageRecord {
   favorite: boolean;
   order?: number;
   updatedAt: number;
+  deletedAt?: number | null;
 }
 
 export interface DemoState {
@@ -412,7 +413,14 @@ export function loadState(): DemoState {
     const parsed = JSON.parse(raw) as {
       pages?: Record<
         string,
-        { doc?: unknown; parentId?: string | null; favorite?: boolean; order?: number; updatedAt?: number }
+        {
+          doc?: unknown;
+          parentId?: string | null;
+          favorite?: boolean;
+          order?: number;
+          updatedAt?: number;
+          deletedAt?: number | null;
+        }
       >;
       activeId?: string | null;
       theme?: string;
@@ -429,13 +437,20 @@ export function loadState(): DemoState {
           ? { order: record.order }
           : {}),
         updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : Date.now(),
+        ...(typeof record.deletedAt === 'number' && Number.isFinite(record.deletedAt)
+          ? { deletedAt: record.deletedAt }
+          : {}),
       };
     }
     if (Object.keys(pages).length === 0) return createSeedState();
+    const firstActiveId = Object.keys(pages).find(id => {
+      const value = pages[id]?.deletedAt;
+      return !(typeof value === 'number' && Number.isFinite(value));
+    });
     const activeId =
       typeof parsed.activeId === 'string' && pages[parsed.activeId]
         ? parsed.activeId
-        : (Object.keys(pages)[0] ?? null);
+        : (firstActiveId ?? null);
     return {
       pages,
       activeId,

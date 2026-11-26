@@ -128,9 +128,11 @@ Stable exports include:
   `moveTableColumn`, `moveTableColumnTo`, `clearTableRow`, `clearTableColumn`,
   `setTableCellText`, `setTableCellRuns`, `setTableColumnWidth`,
   `setTableRowColor`, `setTableColumnColor`
-- Workspace graph & tree helpers: `extractPageLinks`, `buildBacklinkIndex`,
+- Workspace graph, tree & trash helpers: `extractPageLinks`, `buildBacklinkIndex`,
   `getBacklinks`, `buildPageTree`, `flattenPageTree`, `getPageBreadcrumbs`,
-  `getPageDescendantIds`, `canReparentPage`, `searchWorkspacePages`
+  `getPageDescendantIds`, `canReparentPage`, `isTrashedPage`,
+  `partitionTrashedPages`, `collectTrashTargetIds`, `resolveRestoreParentId`,
+  `collectRestoreTargetIds`, `searchWorkspacePages`
 - Store: `EditorStore`
 - Validation/URL helpers: `parseInlineRuns`, `safeHref`, `safeImageSrc`
 

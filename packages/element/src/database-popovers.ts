@@ -24,7 +24,7 @@ import type {
   DatabaseView as DatabaseViewConfig,
   DatabaseViewColumn,
 } from '@nobita/core';
-import { openAnchoredPopover } from './floating.js';
+import { openAnchoredPopover, type FloatingAnchor } from './floating.js';
 import { icon } from './icons.js';
 import {
   COLUMN_TYPES,
@@ -82,6 +82,7 @@ export interface DatabasePopoversContext {
   insertRow(anchorId: string | null, after: boolean): void;
   duplicateRow(rowId: string): void;
   deleteRow(rowId: string): void;
+  openDetailPanel(rowId: string): void;
 }
 
 /** Manages floating popovers for views, queries, columns, rows, and cell pickers. */
@@ -93,7 +94,7 @@ export class DatabasePopoversController {
     this.#ctx = ctx;
   }
 
-  showPopover(anchor: HTMLElement, content: HTMLElement): void {
+  showPopover(anchor: HTMLElement | FloatingAnchor, content: HTMLElement): void {
     this.closePopover();
     const { element, cleanup } = openAnchoredPopover({
       host: this.#ctx.rootElement,
@@ -121,7 +122,7 @@ export class DatabasePopoversController {
   }
 
   #openMenuPopover(
-    anchor: HTMLElement,
+    anchor: HTMLElement | FloatingAnchor,
     title: string,
     items: ReadonlyArray<{ label: string; action: () => void; danger?: boolean }>
   ): HTMLElement {
@@ -544,7 +545,7 @@ export class DatabasePopoversController {
     this.showPopover(anchor, content);
   }
 
-  openFilterPopover(anchor: HTMLElement): void {
+  openFilterPopover(anchor: HTMLElement | FloatingAnchor): void {
     const data = this.#ctx.getData();
     const view = this.#ctx.activeView();
     const root = JSON.parse(
@@ -1204,7 +1205,7 @@ export class DatabasePopoversController {
     return { field, formatSelect, decimals, decimalPatch };
   }
 
-  openColumnPopover(columnId: string, anchor: HTMLElement): void {
+  openColumnPopover(columnId: string, anchor: HTMLElement | FloatingAnchor): void {
     if (this.#ctx.getReadonly()) return;
     const data = this.#ctx.getData();
     const column = data.columns.find(item => item.id === columnId);
@@ -1379,9 +1380,10 @@ export class DatabasePopoversController {
     }
   }
 
-  openRowPopover(rowId: string, anchor: HTMLElement): void {
+  openRowPopover(rowId: string, anchor: HTMLElement | FloatingAnchor): void {
     if (this.#ctx.getReadonly()) return;
     const actions = this.#openMenuPopover(anchor, 'Row', [
+      { label: 'Open record', action: () => this.#ctx.openDetailPanel(rowId) },
       { label: 'Insert above', action: () => this.#ctx.insertRow(rowId, false) },
       { label: 'Insert below', action: () => this.#ctx.insertRow(rowId, true) },
       { label: 'Duplicate', action: () => this.#ctx.duplicateRow(rowId) },

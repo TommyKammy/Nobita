@@ -41,6 +41,14 @@ export interface BlockMenuContext {
   deleteBlock(): void;
 }
 
+export interface MultiBlockMenuContext {
+  count: number;
+  copyBlocks(): void;
+  copyMarkdown(): void;
+  duplicateBlocks(): void;
+  deleteBlocks(): void;
+}
+
 function shortcutLabel(mod: boolean, key: string): string {
   return `${mod ? '⌘' : ''}${key}`;
 }
@@ -408,4 +416,41 @@ export function buildBlockMenuItems(context: BlockMenuContext): MenuItem[] {
     }
   );
   return items;
+}
+
+export function buildMultiBlockMenuItems(context: MultiBlockMenuContext): MenuItem[] {
+  const label = `${context.count} blocks`;
+  return [
+    {
+      id: 'multi-copy',
+      label: `Copy ${label}`,
+      icon: icon.copy,
+      group: `Selected (${label})`,
+      shortcut: '⌘C',
+      action: () => context.copyBlocks(),
+    },
+    {
+      id: 'multi-copy-md',
+      label: 'Copy as Markdown',
+      icon: icon.copy,
+      group: `Selected (${label})`,
+      action: () => context.copyMarkdown(),
+    },
+    {
+      id: 'multi-duplicate',
+      label: `Duplicate ${label}`,
+      icon: icon.duplicate,
+      group: `Selected (${label})`,
+      shortcut: '⌘D',
+      action: () => context.duplicateBlocks(),
+    },
+    {
+      id: 'multi-delete',
+      label: `Delete ${label}`,
+      icon: icon.trash,
+      group: `Selected (${label})`,
+      shortcut: '⌫',
+      action: () => context.deleteBlocks(),
+    },
+  ];
 }

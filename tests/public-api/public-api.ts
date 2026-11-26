@@ -19,14 +19,19 @@ import {
   buildBacklinkIndex,
   buildPageTree,
   canReparentPage,
+  collectRestoreTargetIds,
+  collectTrashTargetIds,
   createBlock,
   createDoc,
   createTableData,
   extractPageLinks,
   getBacklinks,
   getPageBreadcrumbs,
+  isTrashedPage,
   markdownToBlocks,
   parseDoc,
+  partitionTrashedPages,
+  resolveRestoreParentId,
   searchWorkspacePages,
   type Doc,
   type EditorSelection,
@@ -76,6 +81,11 @@ export function publicApiFixture(host: HTMLElement): void {
   void buildPageTree([{ id: 'p1', title: 'Page', parentId: null }]);
   void getPageBreadcrumbs([{ id: 'p1', title: 'Page', parentId: null }], 'p1');
   void canReparentPage([{ id: 'p1', title: 'Page', parentId: null }], 'p1', null);
+  void isTrashedPage({ deletedAt: null });
+  void partitionTrashedPages([{ id: 'p1', title: 'Page', parentId: null, deletedAt: 1 }]);
+  void collectTrashTargetIds([{ id: 'p1', title: 'Page', parentId: null }], 'p1');
+  void resolveRestoreParentId([{ id: 'p1', title: 'Page', parentId: null, deletedAt: 1 }], 'p1');
+  void collectRestoreTargetIds([{ id: 'p1', title: 'Page', parentId: null, deletedAt: 1 }], 'p1');
   void searchWorkspacePages([doc], 'Hello');
   const table: TableData = createTableData({ rows: 2, columns: 2 });
   void table;

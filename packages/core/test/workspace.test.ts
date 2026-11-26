@@ -3,6 +3,8 @@ import {
   buildBacklinkIndex,
   buildPageTree,
   canReparentPage,
+  collectRestoreTargetIds,
+  collectTrashTargetIds,
   createBlock,
   createDatabaseColumn,
   createDatabaseRow,
@@ -13,7 +15,10 @@ import {
   getBacklinks,
   getPageBreadcrumbs,
   getPageDescendantIds,
+  isTrashedPage,
   parseDoc,
+  partitionTrashedPages,
+  resolveRestoreParentId,
   searchWorkspacePages,
   setTableCellRuns,
 } from '../src/index.js';
@@ -258,5 +263,52 @@ describe('workspace page tree and search', () => {
         blockId: 'p1',
       }),
     ]);
+  });
+
+  it('partitions trashed pages, excludes them from active trees, and resolves safe restore targets', () => {
+    const pages = [
+      { id: 'home', title: 'Home', parentId: null, deletedAt: null },
+      { id: 'folder', title: 'Folder', parentId: 'home', deletedAt: 200 },
+      { id: 'doc-together', title: 'Trashed with folder', parentId: 'folder', deletedAt: 200 },
+      { id: 'doc-earlier', title: 'Trashed earlier', parentId: 'folder', deletedAt: 100 },
+      { id: 'standalone', title: 'Standalone trashed', parentId: 'home', deletedAt: 300 },
+      { id: 'orphan-trashed', title: 'Orphan trashed', parentId: 'gone', deletedAt: 150 },
+    ];
+
+    expect(isTrashedPage(pages[0]!)).toBe(false);
+    expect(isTrashedPage(pages[1]!)).toBe(true);
+
+    const { active, trashed } = partitionTrashedPages(pages);
+    expect(active.map(p => p.id)).toEqual(['home']);
+    expect(trashed.map(p => p.id)).toEqual([
+      'standalone',
+      'folder',
+      'doc-together',
+      'orphan-trashed',
+      'doc-earlier',
+    ]);
+
+    // Active page tree excludes trashed pages.
+    expect(flattenPageTree(buildPageTree(pages)).map(n => n.id)).toEqual(['home']);
+    expect(canReparentPage(pages, 'home', 'folder')).toBe(false);
+
+    // Trashing an active subtree collects only active descendants.
+    const activeSet = [
+      { id: 'p', title: 'Parent', parentId: null },
+      { id: 'c1', title: 'Child active', parentId: 'p' },
+      { id: 'c2', title: 'Child already trashed', parentId: 'p', deletedAt: 50 },
+    ];
+    expect(collectTrashTargetIds(activeSet, 'p')).toEqual(new Set(['p', 'c1']));
+
+    // Restore parent resolution keeps active parent or falls back to root.
+    expect(resolveRestoreParentId(pages, 'standalone')).toBe('home');
+    expect(resolveRestoreParentId(pages, 'doc-together')).toBeNull();
+    expect(resolveRestoreParentId(pages, 'orphan-trashed')).toBeNull();
+
+    // Restoring folder restores descendants trashed at/after folder.deletedAt, keeping earlier ones in Trash.
+    expect(collectRestoreTargetIds(pages, 'folder')).toEqual(new Set(['folder', 'doc-together']));
+    expect(
+      collectRestoreTargetIds(pages, 'folder', { includeAllDescendants: true })
+    ).toEqual(new Set(['folder', 'doc-together', 'doc-earlier']));
   });
 });
