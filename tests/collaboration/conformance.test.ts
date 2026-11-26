@@ -5,6 +5,7 @@ import { AutomergeCollaborationAdapter } from '../../packages/collab-automerge/s
 import {
   diffDocs,
   splitBlock,
+  moveBlock,
   insertTextAt,
   mergeBlockWithPrevious,
   mergeBlockWithNext,
@@ -675,6 +676,33 @@ for (const engine of ['automerge', 'yjs']) {
         { text: '!' },
         { text: 'cXd', marks: { bold: true } },
       ]);
+    }
+  );
+  it.each(['', 'cXb'])(
+    engine + ' edits reordered native slices to produce %j',
+    (replacement) => {
+      const initial = { ...seed, blocks: [block('a', 'abcd')] };
+      const { a, b, send } = pair(engine, initial);
+      const apply = (change: (doc: Doc) => Doc) => {
+        const previous = a.getDoc(),
+          doc = change(previous);
+        a.applyLocalChange(
+          { previous, doc, source: 'input', selection: null },
+          diffDocs(previous, doc)
+        );
+      };
+      apply((doc) => splitBlock(doc, 'a', 2, 'suffix').doc);
+      apply((doc) => moveBlock(doc, 'suffix', 'a', 'before'));
+      apply((doc) => mergeBlockWithNext(doc, 'suffix')!);
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual([{ text: 'cdab' }]);
+      const expected = replacement ? [{ text: replacement }] : [];
+      edit(b, (doc) => {
+        doc.blocks[0]!.text = expected;
+      });
+      send();
+      expect(a.getDoc().blocks[0]!.text).toEqual(expected);
+      expect(a.getDoc()).toEqual(b.getDoc());
     }
   );
   it(

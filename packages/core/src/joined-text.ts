@@ -211,8 +211,14 @@ export class JoinedText implements TextBackend {
       return;
     }
     const anchor = this.at(path, i);
-    for (const range of this.ranges(path, i, n).reverse())
+    // Logical slices can visit the same native text out of order. Descending
+    // native offsets keep every remaining deletion valid within its own path.
+    const ranges = this.ranges(path, i, n).sort((a, b) => b.i - a.i);
+    for (const range of ranges) {
       this.store.splice(range.path, range.i, range.length, '');
+      if (text && range.path === anchor.path && range.i < anchor.offset)
+        anchor.offset -= Math.min(range.length, anchor.offset - range.i);
+    }
     if (text) this.store.splice(anchor.path, anchor.offset, 0, text);
   }
   format(path: string, i: number, n: number, name: string, value: unknown) {
