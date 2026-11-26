@@ -1,3 +1,4 @@
+import type { DatabaseData } from '@nobita/core';
 import { expect, test, type Page } from '@playwright/test';
 import { getDoc, openDatabaseViewSetting, openFixture } from './helpers';
 
@@ -95,6 +96,30 @@ test('drags across cells to select and copy a range', async ({ page }) => {
     return data.getData('text/plain');
   });
   expect(copied).toBe('One\tTodo\nTwo\tDone');
+});
+
+test('cuts a cell range, clears checkboxes, and leaves other rows intact', async ({ page }) => {
+  await openFixture(page);
+  await setDoc(page);
+  await dragCells(
+    page,
+    '.nb-db-cell[data-row-id="r1"][data-column-id="status"]',
+    '.nb-db-cell[data-row-id="r2"][data-column-id="done"]'
+  );
+  const text = await page.locator('.nb-db').evaluate(database => {
+    const clipboard = new DataTransfer();
+    database.dispatchEvent(new ClipboardEvent('cut', { bubbles: true, clipboardData: clipboard }));
+    return clipboard.getData('text/plain');
+  });
+  expect(text).toContain('Todo');
+  expect(text).toContain('Done');
+  const doc = await getDoc(page);
+  const { rows } = doc.blocks[0]!.props.database as DatabaseData;
+  expect(rows.map(row => row.cells)).toEqual([
+    { name: { text: 'One' }, done: { checked: false } },
+    { name: { text: 'Two' }, done: { checked: false } },
+    { name: { text: 'Three' }, status: { text: 'Todo' } },
+  ]);
 });
 
 test('supports row selection, clipboard and delete', async ({ page }) => {
@@ -2809,6 +2834,24 @@ test('hides groups emptied by search', async ({ page }) => {
   await page.getByLabel('Search rows').fill('Three');
   await expect(page.locator('.nb-db-group')).toHaveCount(1);
   await expect(page.locator('.nb-db-group-label')).toHaveText(['Todo']);
+});
+
+test('keeps unmatched text groups and the saved row order during search', async ({ page }) => {
+  await openFixture(page);
+  const doc = v2Doc();
+  const database = doc.blocks[0]!.props.database;
+  database.columns[1]!.type = 'text';
+  Object.assign(database.views[0]!, {
+    groupBy: 'status',
+    sorts: [{ columnId: 'name', direction: 'desc' }],
+  });
+  await setDoc(page, doc);
+  await page.locator('.nb-db-search-toggle').click();
+  await page.getByLabel('Search rows').fill('Todo');
+  await expect(page.locator('.nb-db-group-label')).toHaveText(['Done', 'Todo']);
+  await expect(page.locator('.nb-db-group[data-group="Done"] .nb-db-cell')).toHaveCount(0);
+  const names = page.locator('.nb-db-group[data-group="Todo"] .nb-db-cell[data-column-id="name"]');
+  await expect(names).toHaveText(['Three', 'One']);
 });
 
 test('preserves group order when collapsing a group', async ({ page }) => {

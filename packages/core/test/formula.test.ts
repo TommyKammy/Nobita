@@ -238,6 +238,33 @@ it('refreshes clock-dependent values and their dependents across midnight', () =
   }
 });
 
+it('updates a single reverse link without indexing unrelated target rows', async () => {
+  const { createDoc, createBlock, updateDatabaseRelations, documentDatabases } =
+    await import('../src/index.js');
+  const source = normalizeDatabaseData({
+    columns: [{ id: 'link', name: 'Link', type: 'relation',
+      relation: { databaseId: 'b', syncedColumnId: 'back' } }],
+    rows: [{ id: 'a1', cells: {} }],
+  });
+  const target = normalizeDatabaseData({
+    columns: [{ id: 'back', name: 'Back', type: 'relation',
+      relation: { databaseId: 'a', syncedColumnId: 'link' } }],
+    rows: [{ id: 'b1', cells: {} }, { id: 'b2', cells: {} }],
+  });
+  const doc = createDoc({ blocks: [
+    createBlock('database', { id: 'a', props: { database: source } }),
+    createBlock('database', { id: 'b', props: { database: target } }),
+  ] });
+  const targetRows = documentDatabases(doc.blocks).get('b')!.rows;
+  const readUnrelatedId = vi.fn(() => 'b2');
+  Object.defineProperty(targetRows[1]!, 'id', { get: readUnrelatedId });
+  const after = { ...source, rows: [{ id: 'a1', cells: { link: { relations: [{ rowId: 'b1' }] } } }] };
+  const result = documentDatabases(updateDatabaseRelations(doc, 'a', source, after).blocks);
+  expect(readUnrelatedId).not.toHaveBeenCalled();
+  expect(result.get('b')!.rows[0]!.cells.back?.relations).toEqual([{ rowId: 'a1' }]);
+  expect(targetRows[0]!.cells).toEqual({});
+});
+
 it('keeps the forward single-value choice when pairing existing asymmetric links', async () => {
   const { createDoc, createBlock, updateDatabaseRelations, documentDatabases } =
     await import('../src/index.js');
@@ -330,9 +357,12 @@ it('keeps a self-paired single relation symmetric after resolving a chain', asyn
       createBlock('database', { id: 'self', props: { database: before } }),
     ],
   });
+  const originalRows = structuredClone(after.rows);
   const rows = documentDatabases(
     updateDatabaseRelations(doc, 'self', before, after).blocks
   ).get('self')!.rows;
+  expect(after.rows).toEqual(originalRows);
+  expect(documentDatabases(doc.blocks).get('self')!.rows).toEqual(originalRows);
   expect(rows.filter((r) => r.cells.peer?.relations?.length)).toHaveLength(2);
   for (const row of rows)
     for (const ref of row.cells.peer?.relations ?? []) {
