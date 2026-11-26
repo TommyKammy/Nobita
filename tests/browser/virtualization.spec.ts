@@ -145,6 +145,128 @@ test('finds a scroll parent across the shadow boundary and reveals nested blocks
   expect(await page.locator(mounted).count()).toBeLessThan(150);
 });
 
+test('updates nested pins after an equal-length swap of distant subtrees', async ({ page }) => {
+  await setup(page, 1000);
+  const parents = await page.evaluate(() => {
+    const editor = window.__host.editor!;
+    const blocks = editor.doc.blocks.slice();
+    const left = blocks[200]!;
+    const right = blocks[800]!;
+    blocks[200] = { ...left, children: [{ ...left, id: 'child-a' }] };
+    blocks[800] = { ...right, children: [{ ...right, id: 'child-b' }] };
+    editor.store.update(doc => ({ ...doc, blocks }));
+    const parentOfChild = () => {
+      if (!editor.scrollToBlock('child-a')) return null;
+      return editor.root.querySelector('[data-block-id="child-a"]')?.parentElement
+        ?.closest<HTMLElement>('.nb-block')?.dataset.blockId;
+    };
+    const before = parentOfChild();
+    editor.store.update(doc => {
+      const next = doc.blocks.slice();
+      next[200] = { ...next[200]!, children: blocks[800]!.children };
+      next[800] = { ...next[800]!, children: blocks[200]!.children };
+      return { ...doc, blocks: next };
+    });
+    const moved = parentOfChild();
+    editor.undo();
+    return [before, moved, parentOfChild()];
+  });
+  expect(parents).toEqual(['bench-200', 'bench-800', 'bench-200']);
+});
+
+test('reindexes a bulk replacement without walking the discarded tree', async ({ page }) => {
+  await setup(page, 1000);
+  const result = await page.evaluate(() => {
+    const editor = window.__host.editor!;
+    const current = editor.doc.blocks.slice();
+    const original = current[300]!;
+    let oldChildReads = 0;
+    current[300] = {
+      ...original,
+      get children() {
+        oldChildReads++;
+        return original.children;
+      },
+    };
+    editor.store.update(doc => ({ ...doc, blocks: current }));
+
+    const replacement = structuredClone(current);
+    const moved = replacement[990]!;
+    replacement[990] = replacement[950]!;
+    replacement[950] = moved;
+    oldChildReads = 0;
+    editor.store.update(doc => ({ ...doc, blocks: replacement }));
+    const readsDuringReplacement = oldChildReads;
+    return { readsDuringReplacement, revealed: editor.scrollToBlock(moved.id) };
+  });
+  expect(result).toEqual({ readsDuringReplacement: 0, revealed: true });
+  await expect(page.locator('[data-block-id="bench-990"]')).toBeInViewport();
+});
+
+test('adjusts the trailing spacer when an unmeasured block changes type', async ({ page }) => {
+  await setup(page, 1000);
+  const sizes = await page.evaluate(async () => {
+    const editor = window.__host.editor!;
+    // Let initial ResizeObserver measurements settle before comparing spacers.
+    for (let i = 0; i < 4; i++) await new Promise(requestAnimationFrame);
+    const gapHeight = () => parseFloat(editor.root.querySelector<HTMLElement>(
+      '.nb-body > [aria-hidden="true"]:last-child'
+    )!.style.height);
+    const before = gapHeight();
+    editor.store.update(doc => {
+      const blocks = doc.blocks.slice();
+      blocks[500] = { ...blocks[500]!, type: 'heading', props: { level: 1 } };
+      return { ...doc, blocks };
+    });
+    const heading = gapHeight();
+    editor.undo();
+    return { before, heading, restored: gapHeight() };
+  });
+  expect(sizes.heading).toBeGreaterThan(sizes.before);
+  expect(sizes.restored).toBe(sizes.before);
+});
+
+test('preserves measured wrapped height after eviction and restores it on undo', async ({ page }) => {
+  await setup(page, 1000);
+  const sizes = await page.evaluate(async () => {
+    const editor = window.__host.editor!;
+    // Keep measurements of newly visited neighbors equal to their initial estimate.
+    const style = document.createElement('style');
+    style.textContent = '.nb-body > .nb-block:not([data-block-id="bench-0"]) { box-sizing: border-box; height: 32px; min-height: 0; margin: 0; }';
+    editor.root.append(style);
+    const body = editor.root.querySelector<HTMLElement>('.nb-body')!;
+    const settle = async () => {
+      for (let i = 0; i < 4; i++) await new Promise(requestAnimationFrame);
+    };
+    const atEnd = async () => {
+      editor.scrollToBlock('bench-999');
+      await settle();
+      if (body.querySelector('[data-block-id="bench-0"]')) throw Error('First block still mounted');
+      return body.scrollHeight;
+    };
+    const atStart = async () => {
+      editor.scrollToBlock('bench-0');
+      await settle();
+    };
+    await atStart();
+    const before = await atEnd();
+    await atStart();
+    editor.store.update(doc => {
+      const blocks = doc.blocks.slice();
+      blocks[0] = { ...blocks[0]!, text: [{ text: 'wrapped text '.repeat(2000) }] };
+      return { ...doc, blocks };
+    });
+    await settle();
+    const grown = await atEnd();
+    await atStart();
+    editor.undo();
+    await settle();
+    return [before, grown, await atEnd()];
+  });
+  expect(sizes[1]! - sizes[0]!).toBeGreaterThan(1000);
+  expect(Math.abs(sizes[2]! - sizes[0]!)).toBeLessThan(5);
+});
+
 test('copies and deletes a text selection spanning an unmounted interval', async ({
   page,
 }) => {
