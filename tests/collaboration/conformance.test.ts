@@ -4,6 +4,8 @@ import { YjsCollaborationAdapter } from '../../packages/collab-yjs/src/index';
 import { AutomergeCollaborationAdapter } from '../../packages/collab-automerge/src/index';
 import {
   diffDocs,
+  insertTextAt,
+  type InlineMark,
   type Block,
   type Doc,
   type CollaborationAdapter,
@@ -481,4 +483,57 @@ for (const engine of ['yjs', 'automerge']) {
       }
     );
   }
+}
+
+for (const engine of ['automerge', 'yjs']) {
+  it.each([0, 1, 2])(
+    `${engine} IME inherits ordinary insertion marks at offset %i`,
+    (offset) => {
+      const doc = structuredClone(seed);
+      const runs = (doc.blocks[0]!.text = [
+        {
+          text: 'ab',
+          marks: { bold: true, link: 'https://example.com', color: 'blue' },
+        },
+        { text: 'c' },
+      ]);
+      const expected = insertTextAt(runs, offset, '日');
+      const { a, b, send } = pair(engine, doc);
+      a.beginComposition({ blockId: 'a', from: offset, to: offset });
+      expect(a.commitComposition('日').doc.blocks[0]!.text).toEqual(expected);
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual(expected);
+      a.undo();
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual(runs);
+      a.redo();
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual(expected);
+    }
+  );
+  it.each([false, true])(
+    `${engine} IME inherits non-atomic chip styling (toggle bold off=%s)`,
+    (toggle) => {
+      const doc = structuredClone(seed),
+        styling: InlineMark = { bold: true, color: 'blue' };
+      const chip = {
+        text: 'Ada',
+        marks: { ...styling, mention: { id: 'm', label: 'Ada' } },
+      };
+      doc.blocks[0]!.text = [chip];
+      const { a, b, send } = pair(engine, doc);
+      a.beginComposition({
+        blockId: 'a',
+        from: 3,
+        to: 3,
+        ...(toggle && { pendingMarks: {} }),
+      });
+      a.commitComposition('日');
+      send();
+      expect(b.getDoc().blocks[0]!.text).toEqual([
+        chip,
+        { text: '日', marks: toggle ? { color: 'blue' } : styling },
+      ]);
+    }
+  );
 }

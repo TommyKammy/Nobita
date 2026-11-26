@@ -64,6 +64,22 @@ function fields(store: Backend, path: string, before: Fields, next: Fields) {
   for (const name of new Set([...Object.keys(before), ...Object.keys(next)]))
     if (!equal(before[name], next[name])) store.field(path, name, next[name]);
 }
+function applyMarkChanges(
+  store: Backend,
+  path: string,
+  from: number,
+  length: number,
+  actual: InlineMark | undefined,
+  desired: InlineMark | undefined
+) {
+  for (const name of new Set([
+    ...Object.keys(actual ?? {}),
+    ...Object.keys(desired ?? {}),
+  ]) as Set<keyof InlineMark>) {
+    if (!equal(actual?.[name], desired?.[name]))
+      store.format(path, from, length, name, desired?.[name]);
+  }
+}
 function writeText(
   store: Backend,
   path: string,
@@ -89,12 +105,7 @@ function writeText(
     while (left > 0 && ai < actual.length) {
       const span = actual[ai]!,
         n = Math.min(left, span.text.length - used);
-      for (const k of new Set([
-        ...Object.keys(span.marks ?? {}),
-        ...Object.keys(run.marks ?? {}),
-      ]) as Set<keyof InlineMark>)
-        if (!equal(span.marks?.[k], run.marks?.[k]))
-          store.format(path, pos, n, k, run.marks?.[k]);
+      applyMarkChanges(store, path, pos, n, span.marks, run.marks);
       pos += n;
       left -= n;
       used += n;
@@ -652,6 +663,15 @@ export class SharedAdapter implements CollaborationAdapter {
       else ranges.push({ start: at, length: char.length });
     }
     let from = start;
+    const desired = { ...marksAt(this.store.runs(comp.path), start) };
+    delete desired.mention;
+    delete desired.page;
+    if (comp.target.pendingMarks) {
+      for (const name of BOOLEAN_MARK_KEYS) {
+        if (comp.target.pendingMarks[name]) desired[name] = true;
+        else delete desired[name];
+      }
+    }
     this.store.transact(() => {
       for (const range of ranges.reverse()) {
         this.store.splice(comp.path, range.start, range.length, '');
@@ -659,19 +679,15 @@ export class SharedAdapter implements CollaborationAdapter {
       }
       this.store.splice(comp.path, from, 0, text);
       if (!text.length) return;
-      const inherited = marksAt(this.store.runs(comp.path), from + text.length);
-      for (const mark of ['mention', 'page'] as const)
-        if (inherited?.[mark])
-          this.store.format(comp.path, from, text.length, mark, undefined);
-      if (comp.target.pendingMarks)
-        for (const name of BOOLEAN_MARK_KEYS)
-          this.store.format(
-            comp.path,
-            from,
-            text.length,
-            name,
-            comp.target.pendingMarks[name]
-          );
+      const actual = marksAt(this.store.runs(comp.path), from + text.length);
+      applyMarkChanges(
+        this.store,
+        comp.path,
+        from,
+        text.length,
+        actual,
+        desired
+      );
     });
     this.#snapshot = this.#read();
     return {
