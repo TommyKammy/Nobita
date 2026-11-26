@@ -189,7 +189,11 @@ function unit(v: FormulaValue | undefined) {
       return fail('TYPE');
   }
 }
-function apply(op: string, args: FormulaValue[], now: number): FormulaValue {
+function apply(
+  op: string,
+  args: FormulaValue[],
+  now: () => string
+): FormulaValue {
   const [a, b, c] = args;
   switch (op) {
     case 'unary!':
@@ -278,9 +282,9 @@ function apply(op: string, args: FormulaValue[], now: number): FormulaValue {
     case 'unique':
       return [...new Set(Array.isArray(a) ? a : args)];
     case 'now':
-      return new Date(now).toISOString();
+      return now();
     case 'today':
-      return new Date(now).toISOString().slice(0, 10);
+      return now().slice(0, 10);
     case 'dateBetween':
       return Math.trunc((Date.parse(str(a)) - Date.parse(str(b))) / unit(c));
     case 'dateAdd':
@@ -305,7 +309,7 @@ export function runFormula(
   prop: (id: string) => FormulaValue,
   pluck: (relation: string, column: string) => FormulaValue[],
   step: () => void,
-  now: number
+  now: () => string
 ): FormulaValue {
   const evaluate = (node: Node): FormulaValue => {
     step();

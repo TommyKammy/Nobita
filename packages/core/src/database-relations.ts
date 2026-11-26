@@ -1,4 +1,9 @@
-import type { DatabaseData, DatabaseRelationConfig, Doc } from './types.js';
+import type {
+  DatabaseData,
+  DatabaseRelationConfig,
+  DatabaseRow,
+  Doc,
+} from './types.js';
 import { documentDatabases } from './database-eval.js';
 import { updateBlock } from './doc.js';
 
@@ -9,6 +14,10 @@ export interface RelationChange {
   target: DatabaseRelationConfig;
   targetRowId: string;
   linked: boolean;
+}
+
+function rowLinks(row: DatabaseRow | undefined, columnId: string) {
+  return row?.cells[columnId]?.relations ?? [];
 }
 
 function sameBinding(
@@ -45,10 +54,10 @@ export function relationChanges(
       const other = to?.columns.find((c) => c.id === col.id)?.relation;
       const same = sameBinding(other, target);
       for (const row of from.rows) {
-        const refs = row.cells[col.id]?.relations;
-        if (!refs?.length) continue;
+        const refs = rowLinks(row, col.id);
+        if (!refs.length) continue;
         const previous = same
-          ? others.get(row.id)?.cells[col.id]?.relations
+          ? rowLinks(others.get(row.id), col.id)
           : undefined;
         if (previous === refs) continue;
         const ids = new Set(previous?.map((r) => r.rowId));
@@ -95,8 +104,11 @@ export function updateDatabaseRelations(
       if (column?.type !== 'relation') return;
       const rows = data.rows.map((row) => {
         if (row.id !== rowId) return row;
-        const refs = row.cells[columnId]?.relations ?? [];
-        const next = refs.filter((r) => r.rowId !== ref);
+        const refs = rowLinks(row, columnId);
+        const next =
+          add && column.relation?.limit === 1
+            ? []
+            : refs.filter((r) => r.rowId !== ref);
         if (add) next.push({ rowId: ref });
         const cells = { ...row.cells };
         if (next.length) cells[columnId] = { relations: next };
@@ -145,16 +157,20 @@ export function updateDatabaseRelations(
       if (!binding || !syncedColumnId) return;
       const { target, reverse } = binding;
       if (change.linked && reverse.relation?.limit === 1) {
-        const row = target.rows.find((r) => r.id === change.targetRowId);
-        for (const old of row?.cells[syncedColumnId]?.relations ?? [])
+        const links = (id: string) =>
+          rowLinks(
+            target.rows.find((r) => r.id === id),
+            syncedColumnId
+          );
+        // In a self-paired column an earlier displacement can remove a pending forward edge.
+        if (
+          sourceId === databaseId &&
+          change.columnId === syncedColumnId &&
+          !links(change.sourceRowId).some((r) => r.rowId === change.targetRowId)
+        )
+          return;
+        for (const old of links(change.targetRowId))
           if (old.rowId !== change.sourceRowId) {
-            write(
-              databaseId,
-              change.targetRowId,
-              syncedColumnId,
-              old.rowId,
-              false
-            );
             write(
               sourceId,
               old.rowId,
@@ -186,7 +202,37 @@ export function updateDatabaseRelations(
             !rel.pageId &&
             !sameBinding(to.columns.find((c) => c.id === col.id)?.relation, rel)
           ) {
-            bind(rel, col.id, attach);
+            const binding = bind(rel, col.id, attach);
+            if (!attach || !binding) continue;
+            // Preserve forward choices for a single-value property. Otherwise import
+            // reverse-only edges in target row order before applying forward deltas.
+            const links = new Map(
+              from.rows.map(
+                (row) =>
+                  [
+                    row.id,
+                    new Set(rowLinks(row, col.id).map((ref) => ref.rowId)),
+                  ] as const
+              )
+            );
+            for (const row of binding.target.rows) {
+              for (const ref of rowLinks(row, rel.syncedColumnId)) {
+                const existing = links.get(ref.rowId);
+                if (!existing || existing.has(row.id)) continue;
+                if (rel.limit && existing.size) {
+                  write(
+                    rel.databaseId,
+                    row.id,
+                    rel.syncedColumnId,
+                    ref.rowId,
+                    false
+                  );
+                } else {
+                  write(sourceId, ref.rowId, col.id, row.id, true);
+                  existing.add(row.id);
+                }
+              }
+            }
           }
         }
       };

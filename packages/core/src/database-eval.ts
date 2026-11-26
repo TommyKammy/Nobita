@@ -1,3 +1,4 @@
+import { databaseTitleColumn } from './database.js';
 import {
   mapFormulaReferences,
   runFormula,
@@ -12,7 +13,10 @@ import type {
   DatabaseRow,
 } from './types.js';
 
-const projectedRows = new WeakMap<DatabaseRow, { row: DatabaseRow; columns: DatabaseColumn[] }>();
+const projectedRows = new WeakMap<
+  DatabaseRow,
+  { row: DatabaseRow; columns: DatabaseColumn[] }
+>();
 const projections = new WeakSet<DatabaseData>();
 const displays = new WeakMap<DatabaseCell, string>();
 
@@ -146,6 +150,7 @@ function scalar(
 
 /** One context per consumer. All computed cells live in its transient query projection. */
 export class DatabaseEvalContext {
+  #clock: number | undefined;
   #source?: DatabaseData;
   #result?: DatabaseData;
   #deps = new Map<
@@ -162,9 +167,12 @@ export class DatabaseEvalContext {
 
   project(data: DatabaseData): DatabaseData {
     if (projections.has(data)) return data;
-    const stable = [...this.#deps].every(
-      ([r, target]) => this.resolve(r.databaseId, r.pageId) === target
-    );
+    const now = Date.now();
+    const stable =
+      (this.#clock === undefined || this.#clock === now) &&
+      [...this.#deps].every(
+        ([r, target]) => this.resolve(r.databaseId, r.pageId) === target
+      );
     if (stable && this.#source === data) return this.#result!;
     const { order: derived, inputs } = planFor(data);
     const previous =
@@ -177,6 +185,7 @@ export class DatabaseEvalContext {
     if (!stable || this.#source?.columns !== data.columns) {
       this.#rows = new WeakMap();
       this.#deps.clear();
+      this.#clock = undefined;
     }
     this.#source = data;
     if (!derived.length) return (this.#result = data);
@@ -187,7 +196,9 @@ export class DatabaseEvalContext {
         this.#deps.set(rel, this.resolve(rel.databaseId, rel.pageId));
       return this.#deps.get(rel);
     };
-    const now = Date.now();
+    let timestamp: string;
+    const clock = () =>
+      (timestamp ??= new Date((this.#clock = now)).toISOString());
     const active = new Map<DatabaseRow, Set<DatabaseColumn>>();
     const memo = new Map<DatabaseRow, Map<DatabaseColumn, FormulaValue>>();
     let steps = 0;
@@ -218,10 +229,7 @@ export class DatabaseEvalContext {
         let value: FormulaValue;
         if (col.type === 'relation') {
           const target = targetFor(col);
-          const title =
-            target &&
-            (index(target).columns.get(target.titleColumnId ?? '') ??
-              target.columns[0]);
+          const title = target && databaseTitleColumn(target);
           value = (cell?.relations ?? []).flatMap((ref) => {
             tick();
             if (!target) return [ref.label ?? ref.rowId];
@@ -253,7 +261,7 @@ export class DatabaseEvalContext {
               return values;
             },
             tick,
-            now
+            clock
           );
         }
         if (Array.isArray(value)) {

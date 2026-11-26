@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import {
   DatabaseEvalContext,
   duplicateDatabaseData,
@@ -30,7 +30,7 @@ it.each([
       () => 3,
       () => [1, 2, 2],
       () => {},
-      now
+      () => new Date(now).toISOString()
     )
   ).toEqual(expected);
 });
@@ -195,4 +195,146 @@ it('retains unrelated formula cells and invalidates transitive dependents on an 
   expect(updated.constant).toBe(initial.constant);
   expect(initial.double?.text).toBe('4');
   expect(updated.double?.text).toBe('6');
+});
+
+it('refreshes clock-dependent values and their dependents across midnight', () => {
+  const time = vi.spyOn(Date, 'now');
+  try {
+    const data = normalizeDatabaseData({
+      columns: [
+        {
+          id: 'day',
+          name: 'Day',
+          type: 'formula',
+          formula: { expression: 'today()' },
+        },
+        {
+          id: 'instant',
+          name: 'Instant',
+          type: 'formula',
+          formula: { expression: 'now()' },
+        },
+        {
+          id: 'copy',
+          name: 'Copy',
+          type: 'formula',
+          formula: { expression: 'prop("day")' },
+        },
+      ],
+      rows: [{ id: 'r', cells: {} }],
+    });
+    const context = new DatabaseEvalContext();
+    time.mockReturnValue(Date.parse('2025-01-01T23:59:59Z'));
+    expect(context.project(data).rows[0]?.cells.copy?.text).toBe('2025-01-01');
+    time.mockReturnValue(Date.parse('2025-01-02T00:00:01Z'));
+    const cells = context.project(data).rows[0]!.cells;
+    expect(cells.copy?.text).toBe('2025-01-02');
+    expect(cells.instant?.text).toBe('2025-01-02T00:00:01.000Z');
+  } finally {
+    time.mockRestore();
+  }
+});
+
+it('keeps the forward single-value choice when pairing existing asymmetric links', async () => {
+  const { createDoc, createBlock, updateDatabaseRelations, documentDatabases } =
+    await import('../src/index.js');
+  const forward = normalizeDatabaseData({
+    columns: [
+      {
+        id: 'dest',
+        name: 'Tasks',
+        type: 'relation',
+        relation: { databaseId: 'b', limit: 1 },
+      },
+    ],
+    rows: [
+      { id: 'a1', cells: { dest: { relations: [{ rowId: 'b1' }] } } },
+      { id: 'a2', cells: {} },
+    ],
+  });
+  const reverse = normalizeDatabaseData({
+    columns: [
+      {
+        id: 'src',
+        name: 'Projects',
+        type: 'relation',
+        relation: { databaseId: 'a' },
+      },
+    ],
+    rows: [
+      { id: 'b1', cells: {} },
+      {
+        id: 'b2',
+        cells: { src: { relations: [{ rowId: 'a1' }, { rowId: 'a2' }] } },
+      },
+    ],
+  });
+  const doc = createDoc({
+    blocks: [
+      createBlock('database', { id: 'a', props: { database: forward } }),
+      createBlock('database', { id: 'b', props: { database: reverse } }),
+    ],
+  });
+  const paired = {
+    ...forward,
+    columns: forward.columns.map((col) => ({
+      ...col,
+      relation: { ...col.relation!, syncedColumnId: 'src' },
+    })),
+  };
+  const result = documentDatabases(
+    updateDatabaseRelations(doc, 'a', forward, paired).blocks
+  );
+  expect(result.get('a')!.rows.map((r) => r.cells.dest?.relations)).toEqual([
+    [{ rowId: 'b1' }],
+    [{ rowId: 'b2' }],
+  ]);
+  expect(result.get('b')!.rows.map((r) => r.cells.src?.relations)).toEqual([
+    [{ rowId: 'a1' }],
+    [{ rowId: 'a2' }],
+  ]);
+});
+
+it('keeps a self-paired single relation symmetric after resolving a chain', async () => {
+  const { createDoc, createBlock, updateDatabaseRelations, documentDatabases } =
+    await import('../src/index.js');
+  const before = normalizeDatabaseData({
+    columns: [
+      {
+        id: 'peer',
+        name: 'Peer',
+        type: 'relation',
+        relation: { databaseId: 'self', limit: 1 },
+      },
+    ],
+    rows: ['a', 'b', 'c'].map((id, i) => ({
+      id,
+      cells:
+        i === 2
+          ? {}
+          : { peer: { relations: [{ rowId: i === 0 ? 'b' : 'c' }] } },
+    })),
+  });
+  const after = {
+    ...before,
+    columns: before.columns.map((c) => ({
+      ...c,
+      relation: { ...c.relation!, syncedColumnId: 'peer' },
+    })),
+  };
+  const doc = createDoc({
+    blocks: [
+      createBlock('database', { id: 'self', props: { database: before } }),
+    ],
+  });
+  const rows = documentDatabases(
+    updateDatabaseRelations(doc, 'self', before, after).blocks
+  ).get('self')!.rows;
+  expect(rows.filter((r) => r.cells.peer?.relations?.length)).toHaveLength(2);
+  for (const row of rows)
+    for (const ref of row.cells.peer?.relations ?? []) {
+      expect(
+        rows.find((r) => r.id === ref.rowId)?.cells.peer?.relations
+      ).toEqual([{ rowId: row.id }]);
+    }
 });

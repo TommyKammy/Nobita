@@ -36,7 +36,12 @@ export class NobitaEditorElement extends Base {
   #uploadImage: ImageUploadHandler | undefined;
   databaseProvider?: NobitaOptions['databaseProvider'];
   resolveDatabase?: NobitaOptions['resolveDatabase'];
-  onRelationSync?: NobitaOptions['onRelationSync'];
+  #onRelationSync: NobitaOptions['onRelationSync'];
+  get onRelationSync() { return this.#onRelationSync; }
+  set onRelationSync(callback: NobitaOptions['onRelationSync']) {
+    this.#onRelationSync = callback;
+    this.#editor?.setRelationSync(callback);
+  }
   #onOpenPage: ((pageId: string) => void) | undefined;
   #resolvePage: ((pageId: string) => PageInfo | null) | undefined;
 
@@ -48,7 +53,6 @@ export class NobitaEditorElement extends Base {
   connectedCallback(): void {
     if (this.#editor) return;
     const doc = this.#pendingDoc ?? this.#lastDoc ?? this.getAttribute('doc') ?? undefined;
-    const host = this;
     this.#editor = new NobitaEditor(this, {
       ...(doc === undefined ? {} : { doc }),
       readonly: this.hasAttribute('readonly'),
@@ -90,7 +94,7 @@ export class NobitaEditorElement extends Base {
       },
       databaseProvider: query => this.databaseProvider?.(query) ?? [],
       resolveDatabase: (id,page) => this.resolveDatabase?.(id,page),
-      get onRelationSync() { return host.onRelationSync; },
+      onRelationSync: this.onRelationSync,
       resolvePage: pageId => this.#resolvePage?.(pageId) ?? null,
     });
     this.#applyMinHeight();

@@ -148,6 +148,14 @@ test('edit a formula, configure paired properties, link a row and undo both ends
   await page.evaluate(
     ({ tasks, projects }) => {
       delete projects.view;
+      tasks.columns = [tasks.columns[1]!, tasks.columns[0]!, tasks.columns[2]!];
+      tasks.view = {
+        type: 'table',
+        filters: [],
+        header: { titleColumnId: 'name' },
+      };
+      tasks.columns[2]!.relation = { databaseId: 'projects' };
+      tasks.rows[0]!.cells.back = { relations: [{ rowId: 'p1' }] };
       delete projects.columns[1]!.relation;
       projects.rows.forEach((r) => delete r.cells.tasks);
       const host = document.querySelector(
@@ -184,6 +192,10 @@ test('edit a formula, configure paired properties, link a row and undo both ends
   await page.getByLabel('Target database').selectOption('tasks');
   await page.getByLabel('Reverse property').selectOption('back');
   await page.getByRole('button', { name: 'Save relation' }).click();
+  const imported = page.locator(
+    'td[data-row-id="p1"][data-column-id="tasks"] button'
+  );
+  await expect(imported).toHaveText('Task 0');
   await relation.click();
   await page
     .locator('.nb-db-popover')
@@ -202,6 +214,16 @@ test('edit a formula, configure paired properties, link a row and undo both ends
   );
   await expect(back).toHaveText('Select…');
   await expect(relation).toHaveText('Select…');
+  await expect(imported).toHaveText('Task 0');
+  await page.evaluate(() =>
+    (
+      document.querySelector('nobita-editor') as NobitaEditorElement
+    ).editor!.undoDatabase()
+  );
+  await expect(imported).toHaveText('Select…');
+  await expect(
+    page.locator('td[data-row-id="t0"][data-column-id="back"] button')
+  ).toHaveText('B');
 });
 
 test('notifies the external host of paired edits and undo', async ({
@@ -213,8 +235,9 @@ test('notifies the external host of paired edits and undo', async ({
       const host = document.querySelector(
         'nobita-editor'
       ) as NobitaEditorElement;
-      const observed: boolean[] = [];
-      host.onRelationSync = (change) => observed.push(change.linked);
+      host.setTheme('light');
+      const observed: string[] = [];
+      host.onRelationSync = (change) => observed.push('first:' + change.linked);
       host.resolveDatabase = () => tasks;
       projects.columns[1]!.relation = {
         databaseId: 'tasks',
@@ -241,10 +264,15 @@ test('notifies the external host of paired edits and undo', async ({
           i ? r : { ...r, cells: { ...r.cells, tasks: { relations: [] } } }
         ),
       });
+      editor.setTheme('dark');
+      host.onRelationSync = (change) =>
+        observed.push('second:' + change.linked);
       editor.undoDatabase();
+      host.onRelationSync = undefined;
+      editor.redoDatabase();
       return observed;
     },
     { tasks, projects }
   );
-  expect(changes).toEqual([false, true]);
+  expect(changes).toEqual(['first:false', 'second:true']);
 });

@@ -201,9 +201,7 @@ export class DatabaseView {
     this.#source = data;
     this.#evaluation = new DatabaseEvalContext(host.resolveDatabase);
     this.#data = this.#evaluation.project(data);
-    this.#unobserve = host.observeDatabases(() => {
-      if (this.#source.columns.some(c=>c.type === 'relation')) this.update(this.#source);
-    });
+    this.#unobserve = host.observeDatabases(() => this.update(this.#source));
     this.#readonly = host.readonly;
     this.element = el('div', 'nb-db');
     this.element.contentEditable = 'false';

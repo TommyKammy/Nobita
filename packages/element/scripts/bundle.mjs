@@ -39,6 +39,7 @@ const controllerMethods = [
   'getReadonly', 'getUploadImage', 'currentCell', 'commitCell', 'commitTextRuns', 'commitRowPage',
   'commitColumnFields', 'commitDeletedRows', 'setPendingBoardFocus', 'addColumnOfType',
   'addFilterForColumn', 'setGroupProperty', 'setFilterTree', 'defaultGroupColumn', 'patchViewColumn',
+  'activeView', 'titleColumn', 'syncValues', 'closePopover',
   'updateActiveView', 'groupsFor', 'columnStates', 'viewColumns', 'navigationRows', 'visibleColumns',
   'openAddPropertyMenu', 'openDetailPanel', 'openComputed', 'openColumnPopover', 'openRowPopover',
   'openPeoplePopover', 'openMultiSelectPopover', 'openSelectPopover', 'openFilesPopover', 'openImagePopover',

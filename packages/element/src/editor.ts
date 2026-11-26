@@ -227,7 +227,7 @@ export class NobitaEditor implements BlockHost {
   readonly store: EditorStore;
   #placeholderValue: string;
   readonly #hostElement: HTMLElement;
-  #options: NobitaOptions;
+  #options: { [K in keyof NobitaOptions]: NobitaOptions[K] | undefined };
   #readonly: boolean;
   #page!: HTMLElement;
   #title!: HTMLElement;
@@ -305,7 +305,7 @@ export class NobitaEditor implements BlockHost {
 
   constructor(host: HTMLElement, options: NobitaOptions = {}) {
     this.#hostElement = host;
-    this.#options = options;
+    this.#options = { ...options };
     this.#placeholderValue = options.placeholder ?? "Type '/' for commands";
     this.#readonly = options.readonly ?? false;
     const doc =
@@ -418,9 +418,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   setMentionProvider(provider: MentionProvider | undefined): void {
-    this.#options = provider
-      ? { ...this.#options, mentionProvider: provider }
-      : (({ mentionProvider: _mentionProvider, ...rest }) => rest)(this.#options);
+    this.#options.mentionProvider = provider;
   }
 
   get pageProvider(): PageProvider | undefined {
@@ -432,9 +430,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   setPageProvider(provider: PageProvider | undefined): void {
-    this.#options = provider
-      ? { ...this.#options, pageProvider: provider }
-      : (({ pageProvider: _pageProvider, ...rest }) => rest)(this.#options);
+    this.#options.pageProvider = provider;
   }
 
   get uploadImage(): ImageUploadHandler | undefined {
@@ -446,9 +442,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   setUploadImage(handler: ImageUploadHandler | undefined): void {
-    this.#options = handler
-      ? { ...this.#options, uploadImage: handler }
-      : (({ uploadImage: _uploadImage, ...rest }) => rest)(this.#options);
+    this.#options.uploadImage = handler;
   }
 
   getSelection(): EditorSelection | null {
@@ -604,9 +598,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   set onOpenPage(handler: ((pageId: string) => void) | undefined) {
-    this.#options = handler
-      ? { ...this.#options, onOpenPage: handler }
-      : (({ onOpenPage: _onOpenPage, ...rest }) => rest)(this.#options);
+    this.#options.onOpenPage = handler;
   }
 
   get resolvePage(): ((pageId: string) => PageInfo | null) | undefined {
@@ -614,9 +606,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   set resolvePage(handler: ((pageId: string) => PageInfo | null) | undefined) {
-    this.#options = handler
-      ? { ...this.#options, resolvePage: handler }
-      : (({ resolvePage: _resolvePage, ...rest }) => rest)(this.#options);
+    this.#options.resolvePage = handler;
     this.refreshPageLinks();
   }
 
@@ -682,8 +672,12 @@ export class NobitaEditor implements BlockHost {
     this.#syncPlaceholders();
   }
 
+  setRelationSync(onRelationSync: NobitaOptions['onRelationSync']): void {
+    this.#options.onRelationSync = onRelationSync;
+  }
+
   setTheme(theme: NobitaTheme): void {
-    this.#options = { ...this.#options, theme };
+    this.#options.theme = theme;
     this.#hostElement.dataset.theme = theme;
     const root = this.root.querySelector<HTMLElement>('.nb-root');
     if (root) root.dataset.theme = theme;
