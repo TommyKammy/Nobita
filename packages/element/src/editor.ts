@@ -74,7 +74,7 @@ import {
   type TextAlign,
   type TextColor,
 } from '@nobita/core';
-import { BlockView } from './block-view.js';
+import { BlockView, type BlockDisplayState } from './block-view.js';
 import type { BlockHost } from './bridge.js';
 import {
   readClipboardPayload,
@@ -243,6 +243,8 @@ export class NobitaEditor implements BlockHost {
   #body!: HTMLElement;
   #tail!: HTMLElement;
   #overlay!: HTMLElement;
+  #display: BlockDisplayState = { databases: new Map(), revealed: new WeakSet() };
+  #printing = false;
   #views = new Map<string, BlockView>();
   #viewIndex = new Map<string, BlockView>();
   #virtual: Virtualizer | undefined;
@@ -383,6 +385,13 @@ export class NobitaEditor implements BlockHost {
 
     this.#bindTitle();
     this.#bindBody();
+    const print = (enabled: boolean) => {
+      this.#printing = enabled;
+      this.#layout = [];
+      this.#syncBody(this.doc.blocks, []);
+    };
+    window.addEventListener('beforeprint', () => print(true), { signal: this.#bodyEvents.signal });
+    window.addEventListener('afterprint', () => print(false), { signal: this.#bodyEvents.signal });
     this.#bindChrome();
     this.#syncBody(this.store.doc.blocks);
     this.#syncTitle();
@@ -669,6 +678,10 @@ export class NobitaEditor implements BlockHost {
   setReadonly(readonly: boolean): void {
     if (this.#readonly === readonly) return;
     this.#readonly = readonly;
+    if (!readonly) for (const state of this.#display.databases.values()) {
+      state.view = null;
+      state.groups.clear();
+    }
     this.#hostElement.toggleAttribute('readonly', readonly);
     this.#title.contentEditable = readonly ? 'false' : 'true';
     this.#body.contentEditable = readonly ? 'false' : 'true';
@@ -890,6 +903,9 @@ export class NobitaEditor implements BlockHost {
       event.preventDefault();
       this.#selectAllInBlock(blockId);
       return;
+    }
+    if (this.#virtual && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      this.#syncBody(this.doc.blocks, [blockId]);
     }
     if (this.#readonly) return;
     const selection = this.#currentSelection();
@@ -1822,10 +1838,15 @@ export class NobitaEditor implements BlockHost {
   #onStoreChange(change: { doc: Doc; previous: Doc; source: string }): void {
     if (this.#destroyed) return;
     if (change.source === 'replace') {
+      this.#display.databases.clear();
       this.#docEpoch += 1;
       this.clearBlockSelection();
     }
-    this.#syncBody(change.doc.blocks);
+    this.#syncBody(change.doc.blocks, undefined, change.source !== 'replace');
+    if (this.#display.databases.size) {
+      const local = this.#localDatabases();
+      for (const id of this.#display.databases.keys()) if (!local.has(id)) this.#display.databases.delete(id);
+    }
     this.refreshDatabases();
     const sync = this.#options.onRelationSync;
     if (sync && change.source !== 'replace') {
@@ -1875,16 +1896,16 @@ export class NobitaEditor implements BlockHost {
     this.#title.contentEditable = this.#readonly ? 'false' : 'true';
   }
 
-  #syncBody(blocks: readonly Block[], pins?: string[]): void {
+  #syncBody(blocks: readonly Block[], pins?: string[], preserveState = true): void {
     const unchanged = blocks === this.#syncedBlocks;
     if (unchanged && !pins) return;
     this.#syncedBlocks = blocks;
     const option = this.#options.virtualize;
     const config = typeof option === 'object' ? option : undefined;
     let layout: number[] | undefined;
-    if (option !== false && blocks.length >= (config?.threshold ?? 300)) {
+    if (!this.#printing && option !== false && blocks.length >= (config?.threshold ?? 300)) {
       this.#virtual ??= new Virtualizer(this.#body, Math.max(0, config?.overscanPx ?? 800),
-        () => this.#syncBody(this.doc.blocks, []));
+        () => { if (!this.#printing) this.#syncBody(this.doc.blocks, []); });
       const selection = this.#currentSelection() ?? this.#lastSelection;
       const active = this.root.activeElement?.closest<HTMLElement>('.nb-block');
       layout = this.#virtual.layout(blocks, [
@@ -1893,7 +1914,7 @@ export class NobitaEditor implements BlockHost {
       ]);
       if (unchanged && layout.length === this.#layout.length && layout.every((n, i) => n === this.#layout[i])) return;
       this.#layout = layout;
-    } else if (this.#virtual) {
+    } else if (!this.#printing && this.#virtual) {
       this.#virtual.destroy();
       this.#virtual = undefined;
       this.#layout = [];
@@ -1906,7 +1927,7 @@ export class NobitaEditor implements BlockHost {
       for (const [id, view] of this.#views) {
         if (ids.has(id)) continue;
         this.#virtual?.unobserve(view.element);
-        view.destroy();
+        view.destroy(preserveState && !!layout && !!this.#virtual?.has(id));
         this.#views.delete(id);
       }
     }
@@ -1922,13 +1943,13 @@ export class NobitaEditor implements BlockHost {
       const context = { depth: 0, index, number };
       let view = this.#views.get(block.id);
       if (!view) {
-        view = new BlockView(this, block, context);
+        view = new BlockView(this, block, context, this.#display);
         this.#views.set(block.id, view);
       }
       if (view.element === cursor) cursor = cursor.nextSibling;
       else this.#body.insertBefore(view.element, cursor);
       view.update(block, context);
-      this.#virtual?.observe(view.element);
+      if (layout) this.#virtual!.observe(view.element);
     };
     if (!layout) { blocks.forEach(render); return; }
     for (const index of layout) {
@@ -1950,6 +1971,12 @@ export class NobitaEditor implements BlockHost {
   scrollToBlock(blockId: string): boolean {
     if (this.#virtual) this.#syncBody(this.doc.blocks, [blockId]);
     const view = this.#findView(blockId);
+    let ancestor = view?.element.parentElement?.closest<HTMLElement>('.nb-block[data-collapsed="true"]');
+    while (ancestor) {
+      this.#display.revealed.add(this.#viewIndex.get(ancestor.dataset.blockId!)!.block.props);
+      delete ancestor.dataset.collapsed;
+      ancestor = ancestor.parentElement?.closest<HTMLElement>('.nb-block[data-collapsed="true"]');
+    }
     view?.element.scrollIntoView({ block: 'nearest' });
     return !!view;
   }
@@ -2684,7 +2711,7 @@ export class NobitaEditor implements BlockHost {
     const visit = (list: readonly Block[]): void => {
       for (const block of list) {
         out.push(block);
-        if (!block.props.collapsed && block.children.length > 0) {
+        if (block.children.length && (!block.props.collapsed || this.#display.revealed.has(block.props))) {
           visit(block.children);
         }
       }

@@ -46,7 +46,8 @@ const estimates: Partial<Record<Block['type'], number>> = {
 };
 
 export class Virtualizer {
-  #parent;
+  #parent: HTMLElement | Window = window;
+  #awaitingAttachment;
   #observer;
   #heights = new Map<string, number>();
   #pending = new Map<string, number>();
@@ -66,10 +67,14 @@ export class Virtualizer {
     private overscan: number,
     private refresh: () => void
   ) {
-    this.#parent = scrollParent(body);
-    this.#parent.addEventListener('scroll', this.#schedule, { passive: true });
+    this.#awaitingAttachment = !body.isConnected;
     window.addEventListener('resize', this.#schedule);
     this.#observer = new ResizeObserver((entries) => {
+      if (this.#awaitingAttachment && body.isConnected) {
+        this.#awaitingAttachment = false;
+        this.#bindParent();
+        this.#schedule();
+      }
       for (const entry of entries) {
         if (entry.target === this.#parent) {
           this.#schedule();
@@ -88,9 +93,15 @@ export class Virtualizer {
         }
       }
     });
-    if (this.#parent instanceof HTMLElement)
-      this.#observer.observe(this.#parent);
+    this.#bindParent();
     this.body.style.overflowAnchor = 'none';
+  }
+  #bindParent() {
+    this.#parent.removeEventListener('scroll', this.#schedule);
+    if (this.#parent instanceof HTMLElement) this.#observer.unobserve(this.#parent);
+    this.#parent = scrollParent(this.body);
+    this.#parent.addEventListener('scroll', this.#schedule, { passive: true });
+    if (this.#parent instanceof HTMLElement) this.#observer.observe(this.#parent);
   }
   anchor(views: Iterable<{ element: HTMLElement }>) {
     const top =
@@ -188,7 +199,11 @@ export class Virtualizer {
     const fixed: number[] = [];
     for (const id of pins) {
       const i = id && this.#indices.get(id);
-      if (typeof i === 'number') fixed.push(i);
+      if (typeof i === 'number') {
+        fixed.push(i);
+        if (i > 0) fixed.push(i - 1);
+        if (i + 1 < blocks.length) fixed.push(i + 1);
+      }
     }
     return windowLayout(
       this.#offsets,

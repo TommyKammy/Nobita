@@ -223,3 +223,173 @@ test('retains logical numbering and supports an explicit full-render option', as
   });
   expect(values).toEqual({ marker: '451', count: 500 });
 });
+
+test('horizontal movement from a distant pinned caret follows logical neighbors', async ({
+  page,
+}) => {
+  await setup(page);
+  for (const [key, offset, target] of [
+    ['ArrowLeft', 0, 'bench-8'],
+    ['ArrowRight', 7, 'bench-10'],
+    ['Shift+ArrowLeft', 0, 'bench-8'],
+    ['Shift+ArrowRight', 7, 'bench-10'],
+  ] as const) {
+    await page.evaluate((offset) => {
+      window.__host.editor!.focus('bench-9', offset);
+      window.__host.editor!.scrollToBlock('bench-4999');
+    }, offset);
+    await expect(page.locator('[data-block-id="bench-4999"]')).toBeInViewport();
+    await page.keyboard.press(key);
+    const selection = await page.evaluate(() =>
+      window.__host.editor!.getSelection()
+    );
+    expect(selection?.focus.blockId).toBe(target);
+    expect(selection?.anchor.blockId).toBe(
+      key.startsWith('Shift') ? 'bench-9' : target
+    );
+  }
+});
+
+test('all blocks are present during print and the window returns afterwards', async ({
+  page,
+}) => {
+  await setup(page, 500);
+  const counts = await page.evaluate(() => {
+    const body = window.__host.shadowRoot!.querySelector('.nb-body')!;
+    window.dispatchEvent(new Event('beforeprint'));
+    const printed = body.querySelectorAll(':scope > .nb-block').length;
+    const gaps = body.querySelectorAll(':scope > [aria-hidden=true]').length;
+    window.dispatchEvent(new Event('afterprint'));
+    return [printed, gaps, body.children.length];
+  });
+  expect(counts.slice(0, 2)).toEqual([500, 0]);
+  expect(counts[2]).toBeLessThan(150);
+});
+
+test('a detached editor binds to its eventual scrolling ancestor', async ({
+  page,
+}) => {
+  await setup(page, 1000);
+  await page.evaluate(() => {
+    const outer = document.createElement('section');
+    outer.style.cssText = 'position:fixed;inset:0;height:350px;overflow:auto';
+    const container = document.createElement('div');
+    container.id = 'preview';
+    outer.append(container);
+    const Editor = window.__host.editor!
+      .constructor as typeof import('@nobita/element').NobitaEditor;
+    new Editor(container, { doc: window.__host.doc! });
+    document.body.append(outer);
+  });
+  await page.evaluate(() =>
+    new Promise(requestAnimationFrame).then(
+      () => new Promise(requestAnimationFrame)
+    )
+  );
+  await page
+    .locator('section')
+    .evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(
+    page.locator('#preview [data-block-id="bench-999"]')
+  ).toBeInViewport();
+});
+
+for (const count of [10, 500]) {
+  test(
+    'reveals nested collapsed ancestors in a readonly document of ' +
+      count +
+      ' blocks',
+    async ({ page }) => {
+      await setup(page, count);
+      const revealed = await page.evaluate(() => {
+        const host = window.__host;
+        const doc = host.doc!,
+          last = doc.blocks.at(-1)!;
+        const collapsed = { ...last, props: { collapsed: true } };
+        host.doc = {
+          ...doc,
+          blocks: [
+            ...doc.blocks.slice(0, -1),
+            {
+              ...collapsed,
+              children: [
+                {
+                  ...collapsed,
+                  id: 'middle',
+                  children: [{ ...last, id: 'result' }],
+                },
+              ],
+            },
+          ],
+        };
+        host.setReadonly(true);
+        return host.editor!.scrollToBlock('result');
+      });
+      expect(revealed).toBe(true);
+      await expect(page.locator('[data-block-id="result"]')).toBeInViewport();
+      expect(
+        await page.evaluate(
+          () => window.__host.doc!.blocks.at(-1)!.props.collapsed
+        )
+      ).toBe(true);
+    }
+  );
+}
+
+test('database search, readonly tab and expanded group survive virtual eviction and remount', async ({
+  page,
+}) => {
+  await setup(page, 1000);
+  await page.evaluate(() => {
+    const host = window.__host,
+      doc = host.doc!;
+    host.doc = {
+      ...doc,
+      blocks: [
+        {
+          ...doc.blocks[0]!,
+          type: 'database',
+          props: {
+            database: {
+              variant: 'database',
+              columns: [
+                { id: 'name', name: 'Name', type: 'text' },
+                { id: 'status', name: 'Status', type: 'select' },
+              ],
+              views: [
+                { id: 'one', name: 'All', type: 'table' },
+                {
+                  id: 'two',
+                  name: 'Grouped',
+                  type: 'table',
+                  groupBy: 'status',
+                  groupProperties: [{ key: 'Done', collapsed: true }],
+                },
+              ],
+              activeViewId: 'one',
+              rows: ['alpha', 'beta'].map((text) => ({
+                id: text,
+                cells: { name: { text }, status: { text: 'Done' } },
+              })),
+            },
+          },
+        },
+        ...doc.blocks.slice(1),
+      ],
+    };
+  });
+  await page.evaluate(() => window.__host.setReadonly(true));
+  const tab = page.getByRole('tab', { name: 'Grouped' });
+  await tab.click();
+  const group = page.locator('.nb-db-group[data-group="Done"]');
+  await group.locator('.nb-db-group-toggle').click();
+  await page.locator('.nb-db-search-toggle').click();
+  await page.locator('.nb-db-search').fill('alpha');
+  await page.evaluate(() => window.__host.editor!.focus('bench-999', 0));
+  await expect(page.locator('.nb-db')).toHaveCount(0);
+  await page.evaluate(() => window.__host.editor!.scrollToBlock('bench-0'));
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
+  await expect(group.locator('.nb-db-table')).toBeVisible();
+  await expect(page.locator('.nb-db-search')).toHaveValue('alpha');
+  await expect(page.locator('.nb-db-cell[data-row-id="beta"]')).toHaveCount(0);
+});

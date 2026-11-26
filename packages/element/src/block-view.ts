@@ -54,6 +54,11 @@ export interface BlockRenderContext {
   number: number;
 }
 
+export interface BlockDisplayState {
+  databases: Map<string, DatabaseView['localState']>;
+  revealed: WeakSet<Block['props']>;
+}
+
 export class BlockView {
   readonly element: HTMLElement;
   readonly id: string;
@@ -78,7 +83,7 @@ export class BlockView {
   #context: BlockRenderContext | null = null;
   #markerKey = '';
 
-  constructor(host: BlockHost, block: Block, context: BlockRenderContext) {
+  constructor(host: BlockHost, block: Block, context: BlockRenderContext, private display: BlockDisplayState) {
     this.#host = host;
     this.block = block;
     this.id = block.id;
@@ -139,7 +144,7 @@ export class BlockView {
 
     if (rebuild || contextChanged || previous.props.level !== block.props.level ||
         previous.props.checked !== block.props.checked || previous.props.tone !== block.props.tone ||
-        previous.props.collapsed !== block.props.collapsed || previous.props.align !== block.props.align) {
+        previous.props.collapsed !== block.props.collapsed || (block.props.collapsed && previous.props !== block.props) || previous.props.align !== block.props.align) {
       this.element.dataset.type = block.type;
       this.element.dataset.depth = String(context.depth);
       if (block.type === 'heading') this.element.dataset.level = String(block.props.level ?? 1);
@@ -148,7 +153,7 @@ export class BlockView {
       else delete this.element.dataset.checked;
       if (block.type === 'callout') this.element.dataset.tone = block.props.tone ?? 'info';
       else delete this.element.dataset.tone;
-      if (block.props.collapsed) this.element.dataset.collapsed = 'true';
+      if (block.props.collapsed && !this.display.revealed.has(block.props)) this.element.dataset.collapsed = 'true';
       else delete this.element.dataset.collapsed;
 
       if (block.props.align) this.#content.style.textAlign = block.props.align;
@@ -285,8 +290,10 @@ export class BlockView {
           redo: () => host.redoDatabase(),
           focusAfter: () => host.focusAfterBlock(blockId),
         } satisfies DatabaseHost,
-        block.props.database ?? createDatabaseData({ variant: 'database' })
+        block.props.database ?? createDatabaseData({ variant: 'database' }),
+        this.display.databases.get(blockId)
       );
+      this.display.databases.delete(blockId);
       this.#database = view;
       this.#content.append(view.element);
       return;
@@ -571,7 +578,7 @@ export class BlockView {
           depth,
           index,
           number,
-        });
+        }, this.display);
         this.#childViews.set(block.id, view);
       }
       if (view.element === cursor) {
@@ -629,12 +636,13 @@ export class BlockView {
     return domPointToOffset(text, range.startContainer, range.startOffset);
   }
 
-  destroy(): void {
+  destroy(evicted = false): void {
+    if (evicted && this.#database) this.display.databases.set(this.id, this.#database.localState);
     this.#database?.destroy();
     this.#database = null;
     this.#table?.destroy();
     this.#table = null;
-    for (const view of this.#childViews.values()) view.destroy();
+    for (const view of this.#childViews.values()) view.destroy(evicted);
     this.#childViews.clear();
     this.#host.unregisterView(this.id);
     this.element.remove();
