@@ -143,6 +143,7 @@ export class DatabaseDetailController {
     const titleColumn = this.#ctx.titleColumn(view);
     const backdrop = el('div', 'nb-db-detail-backdrop');
     backdrop.dataset.recordOwner = this.#ctx.databaseId;
+    backdrop.dataset.rowId = row.id;
     const panel = el('section', 'nb-db-detail');
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'true');

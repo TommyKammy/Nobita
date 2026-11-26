@@ -544,12 +544,13 @@ export class SharedAdapter implements CollaborationAdapter {
       this.store.transact(() => this.#write(change.doc, patches));
     this.#snapshot = this.#read();
   }
-  protected received() {
+  protected received(history?: RemoteDocUpdate['history']) {
     const offsets = this.store.offsets;
     this.#snapshot = this.#read();
     const doc = this.#snapshot;
     const update: RemoteDocUpdate = {
       doc,
+      ...(history && { history }),
       remapPoint: (p) =>
         find(doc.blocks, p.blockId)
           ? { ...p, offset: offsets(bodyText(p.blockId), p.offset) }
@@ -584,12 +585,12 @@ export class SharedAdapter implements CollaborationAdapter {
   }
   undo() {
     if (!this.store.undo()) return false;
-    this.received();
+    this.received('undo');
     return true;
   }
   redo() {
     if (!this.store.redo()) return false;
-    this.received();
+    this.received('redo');
     return true;
   }
   beginComposition(target: CompositionTarget) {
@@ -597,12 +598,14 @@ export class SharedAdapter implements CollaborationAdapter {
     const path =
       target.rowId === undefined
         ? bodyText(target.blockId)
-        : key(
-            target.blockId,
-            block?.type === 'table' ? 'table' : 'database',
-            target.rowId,
-            target.columnId
-          );
+        : target.columnId === undefined
+          ? key(target.blockId, 'recordPage', target.rowId)
+          : key(
+              target.blockId,
+              block?.type === 'table' ? 'table' : 'database',
+              target.rowId,
+              target.columnId
+            );
     this.#composition = {
       target,
       path,
@@ -623,7 +626,9 @@ export class SharedAdapter implements CollaborationAdapter {
         { rowId, columnId } = comp.target;
       if (
         !grid?.rows.some((r) => r.id === rowId) ||
-        !grid.columns.some((c) => c.id === columnId)
+        (columnId !== undefined
+          ? !grid.columns.some((c) => c.id === columnId)
+          : !block.props.database)
       )
         return { doc: this.#snapshot };
     }

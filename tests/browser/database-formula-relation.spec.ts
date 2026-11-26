@@ -526,3 +526,57 @@ for (const nested of [false, true]) {
     }
   );
 }
+
+test('collaborative relation history notifies only the originating host', async ({
+  page,
+}) => {
+  await openFixture(page);
+  const changes = await page.evaluate(
+    async ({ projects, tasks }) => {
+      const path = '/peers.ts';
+      await (await import(path)).setupPeers();
+      const local = window.__host,
+        remote = document.querySelector('#peer') as NobitaEditorElement,
+        observed: string[] = [];
+      projects.columns[1]!.relation = {
+        databaseId: 'tasks',
+        pageId: 'remote',
+        syncedColumnId: 'back',
+      };
+      local.doc = {
+        ...local.doc,
+        blocks: [
+          {
+            id: 'projects',
+            type: 'database',
+            props: { database: projects },
+            text: [],
+            children: [],
+          },
+        ],
+      };
+      for (const [name, host] of [
+        ['local', local],
+        ['peer', remote],
+      ] as const) {
+        host.resolveDatabase = () => tasks;
+        host.onRelationSync = (c) => observed.push(name + ':' + c.linked);
+      }
+      const editor = local.editor!,
+        data = editor.resolveDatabase('projects')!;
+      editor.updateDatabase('projects', {
+        ...data,
+        rows: data.rows.map((row, i) =>
+          i
+            ? row
+            : { ...row, cells: { ...row.cells, tasks: { relations: [] } } }
+        ),
+      });
+      editor.undoDatabase();
+      editor.redoDatabase();
+      return observed;
+    },
+    { projects, tasks }
+  );
+  expect(changes).toEqual(['local:false', 'local:true', 'local:false']);
+});

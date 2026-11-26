@@ -278,3 +278,61 @@ for (const selector of ['.nb-table-cell', '.nb-db-rich-text']) {
     }
   );
 }
+
+test('record detail IME merges an incoming edit before the composition anchor', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await page.evaluate(async () => {
+    const path = '/peers.ts';
+    await (await import(path)).setupPeers();
+    const editor = window.__editor!;
+    editor.store.update((d) => {
+      const next = structuredClone(d);
+      next.blocks[2]!.props.database!.rows[0]!.page = {
+        content: [{ text: 'ab' }],
+      };
+      return next;
+    });
+    window.__host
+      .shadowRoot!.querySelector<HTMLElement>('.nb-db-row-expand')!
+      .click();
+  });
+  const body = page.locator('#editor .nb-db-page-text');
+  await body.click();
+  await body.evaluate((el) => {
+    const text = document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
+    (el.getRootNode() as ShadowRoot & { getSelection(): Selection })
+      .getSelection()
+      .collapse(text, 1);
+  });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.imeSetComposition', {
+    text: 'に',
+    selectionStart: 1,
+    selectionEnd: 1,
+  });
+  await page.evaluate(() => {
+    const b = (document.querySelector('#peer') as typeof window.__host).editor!;
+    b.store.update((d) => {
+      const next = structuredClone(d);
+      next.blocks[2]!.props.database!.rows[0]!.page = {
+        content: [{ text: 'Bab' }],
+      };
+      return next;
+    });
+  });
+  await cdp.send('Input.insertText', { text: '日' });
+  await expect(body).toHaveText('Ba日b');
+  await page.keyboard.type('Z');
+  await expect(body).toHaveText('Ba日Zb');
+  expect(
+    await page.evaluate(() =>
+      (
+        document.querySelector('#peer') as typeof window.__host
+      ).doc.blocks[2]!.props.database!.rows[0]!.page!.content.map(
+        (r) => r.text
+      ).join('')
+    )
+  ).toBe('Ba日Zb');
+});

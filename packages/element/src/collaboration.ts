@@ -21,6 +21,7 @@ export function connect(
   const events = new AbortController(),
     capture = { capture: true, signal: events.signal };
   let composing: CompositionTarget | null = null;
+  let compositionElement: HTMLElement | null = null;
   const block = (id: string) =>
     root.querySelector<HTMLElement>('[data-block-id="' + CSS.escape(id) + '"]');
   const bodyText = (id: string) =>
@@ -30,7 +31,12 @@ export function connect(
       `[data-row-id="${CSS.escape(row)}"][data-column-id="${CSS.escape(col)}"] :is(.nb-table-cell,.nb-db-rich-text)`
     );
   }
-  const receive = ({ doc, remapPoint, remapCellOffset }: RemoteDocUpdate) => {
+  const receive = ({
+    doc,
+    remapPoint,
+    remapCellOffset,
+    history,
+  }: RemoteDocUpdate) => {
     if (composing) return;
     const active = root.activeElement?.classList.contains('nb-body');
     const cell = root.activeElement?.closest<HTMLElement>(
@@ -80,7 +86,7 @@ export function connect(
         );
       };
     }
-    store.applyRemote(doc, remapPoint);
+    store.applyRemote(doc, remapPoint, history);
     restoreCell?.();
     if (active) restore();
   };
@@ -88,7 +94,11 @@ export function connect(
   store.applyRemote(adapter.getDoc());
   const remote = adapter.subscribe(receive);
   const local = store.subscribe((change) => {
-    if (change.source !== 'remote')
+    if (
+      change.source !== 'remote' &&
+      change.source !== 'undo' &&
+      change.source !== 'redo'
+    )
       adapter.applyLocalChange(change, diffDocs(change.previous, change.doc));
   });
   const inputSelector = '.nb-text,.nb-table-cell,.nb-db-rich-text';
@@ -101,7 +111,10 @@ export function connect(
       const text = (
         node instanceof Element ? node : node.parentElement
       )?.closest<HTMLElement>(inputSelector);
-      const id = text?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId;
+      const detail = text?.closest<HTMLElement>('[data-record-owner]')?.dataset;
+      const id =
+        detail?.recordOwner ??
+        text?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId;
       if (
         !text ||
         !id ||
@@ -114,13 +127,20 @@ export function connect(
       const cell = text.closest<HTMLElement>(
         '[data-row-id][data-column-id]'
       )?.dataset;
-      if (!text.classList.contains('nb-text') && !cell) return;
+      const row = detail?.rowId ?? cell?.rowId;
+      const col = detail
+        ? text.closest<HTMLElement>('[data-column-id]')?.dataset.columnId
+        : cell?.columnId;
+      if (
+        !text.classList.contains('nb-text') &&
+        !(row && (col || text.matches('.nb-db-page-text')))
+      )
+        return;
       const base = { blockId: id, from: Math.min(a, b), to: Math.max(a, b) };
-      composing =
-        cell?.rowId && cell.columnId
-          ? { ...base, rowId: cell.rowId, columnId: cell.columnId }
-          : base;
-      if (cell && a === b) {
+      composing = row
+        ? { ...base, rowId: row, ...(col && { columnId: col }) }
+        : base;
+      if (row && a === b) {
         const target = composing;
         text.dispatchEvent(
           new CustomEvent('nb-composition-marks', {
@@ -130,6 +150,7 @@ export function connect(
           })
         );
       }
+      compositionElement = text;
       adapter.beginComposition(composing);
       event.stopPropagation();
     },
@@ -148,6 +169,8 @@ export function connect(
     (e) => {
       if (!composing) return;
       e.stopPropagation();
+      const original = compositionElement;
+      compositionElement = null;
       const target = composing,
         data = (e as CompositionEvent).data;
       composing = null;
@@ -159,10 +182,13 @@ export function connect(
         offset: target.from,
       });
       store.applyRemote(update.doc);
-      const text =
-        target.rowId === undefined
+      const text = original?.isConnected
+        ? original
+        : target.rowId === undefined
           ? bodyText(target.blockId)
-          : cellText(target.blockId, target.rowId, target.columnId);
+          : target.columnId !== undefined
+            ? cellText(target.blockId, target.rowId, target.columnId)
+            : null;
       if (text) {
         const p = offsetToDomPoint(text, point?.offset ?? target.from);
         nativeSelection(root)?.collapse(p.node, p.offset);

@@ -55,6 +55,8 @@ export type DocPatch =
     };
 
 export interface RemoteDocUpdate {
+  /** Set only for a history operation initiated by this replica. */
+  history?: 'undo' | 'redo';
   doc: Doc;
   remapCellOffset?: (
     blockId: string,
@@ -70,12 +72,15 @@ export interface PeerPresence {
   selection: EditorSelection | null;
   focusedBlockId?: string | null;
 }
+/** A row without a column addresses the database record page body. */
 export type CompositionTarget = {
   pendingMarks?: InlineMark;
   blockId: string;
   from: number;
   to: number;
-} & ({ rowId?: never; columnId?: never } | { rowId: string; columnId: string });
+} & (
+  { rowId?: never; columnId?: never } | { rowId: string; columnId?: string }
+);
 export interface CollaborationAdapter {
   getDoc(): Doc;
   beginComposition(target: CompositionTarget): void;

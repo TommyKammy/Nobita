@@ -72,13 +72,13 @@ export class EditorStore {
     this.#lastEntry = null;
   }
 
-  applyRemote(doc: Doc, remap?: RemoteDocUpdate['remapPoint']): void {
+  applyRemote(doc: Doc, remap?: RemoteDocUpdate['remapPoint'], source: 'remote' | 'undo' | 'redo' = 'remote'): void {
     let selection = this.selection;
     if (selection && remap) {
       const anchor = remap(selection.anchor), focus = remap(selection.focus);
       selection = anchor && focus ? { anchor, focus } : null;
     }
-    this.update(() => doc, { source: 'remote', history: false, selection });
+    this.update(() => doc, { source, history: false, selection });
   }
 
   get canUndo(): boolean {
