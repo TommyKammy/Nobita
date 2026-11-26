@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **104.9 KB gzipped** (`383.8 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core and data views.
+- **106.5 KB gzipped** (`390.5 KB` raw) standalone ESM bundle — minified with build-time CSS minification, including the core, rich-text tables, data views, block selection, and context menus.
 - **Zero runtime dependencies** — no Lit, React, ProseMirror, Yjs, or virtual DOM.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -29,8 +29,10 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Blocks | Text, headings 1–6, bulleted / numbered / to-do lists, quote, callout, code, divider, image, simple table, database, page links |
 | Inline | Bold, italic, underline, strikethrough, inline code, links, mentions, `[[` inline page chips, alignment, 8-color highlight and text-color palettes |
 | Editing | Enter / Backspace / Delete merging, Tab indent, block move, undo / redo, block selection (`Escape`, gutter `Shift`/`Cmd`-click, staged `Cmd/Ctrl+A`, `Shift+Arrow`, batch delete / duplicate / copy / paste / drag across text & non-text blocks) |
-| Data views | Multiple named table and board views per database, AFFiNE-style view settings (`⋯`), per-view column order/widths/visibility, nested AND/OR filters, multi-sort, container-aware expandable search (auto-hidden below `560px`), footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state; rich-text cells (`B`/`I`/`U`/`S`/code toolbar & shortcuts, highlight/color rendering, IME & plain-text paste safe), editable record pages (`row.page.content`), board card covers (`coverColumnId`), board card add/open/drag-reorder/group actions (preserving multi-select tags), drag cell selection & fill, TSV copy/paste, readonly view switching & record-page viewing; 11 typed columns (`text`, `number`, `progress`, `select`, `multi-select`, `date`, `checkbox`, `url`, `image`, `files`, `people`) |
-| Menus | Slash menu with fuzzy search and block/page actions (move/copy/link/new page), block handle & right-click context menus (single/multi-block, simple tables, database rows/columns/board cards, `Shift+Right-click` for native menu), selection toolbar with Turn into / Align / format / Color, link popover, `@` mention picker, `[[` page link picker |
+| Tables | Separate `table` block with AFFiNE-style hover handles, row/column drag reorder, rich-text cells (`cell.runs`), drag cell selection (copy/cut/paste/clear), hover add controls, row/column background colors, cell & handle right-click context menus, and HTML/Markdown table import |
+| Data views | Multiple named table and board views per database, AFFiNE-style view settings (`⋯`), per-view column order/widths/visibility, nested AND/OR filters, multi-sort, container-aware expandable search (auto-hidden below `560px`), footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state; rich-text cells (`B`/`I`/`U`/`S`/code toolbar & shortcuts, highlight/color rendering, IME & plain-text paste safe), editable record pages (`row.page.content`), board card covers (`coverColumnId`), board card add/open/drag-reorder/group actions (preserving multi-select tags), right-click menus on rows/columns/board cards, drag cell selection & fill, TSV copy/paste, readonly view switching & record-page viewing; 11 typed columns (`text`, `number`, `progress`, `select`, `multi-select`, `date`, `checkbox`, `url`, `image`, `files`, `people`) |
+| Menus | Slash menu with fuzzy search and block/page actions (move/copy/link/new page), block handle & Notion-style right-click context menus (single/multi-block, simple tables, database rows/columns/board cards; `Shift+Right-click` preserves native menu), selection toolbar with Turn into / Align / format / Color, link popover, `@` mention picker, `[[` page link picker |
+| Workspace | Pure DOM-free `@nobita/core` primitives for backlinks, cycle-safe page trees, breadcrumbs, reparenting, full-text search, and soft-delete Trash; wired into `apps/demo` with drag-and-drop sidebar tree, collapsible backlinks panel, Trash view (search, read-only preview banner, Undo toast, restore & permanent delete), and sidebar right-click menus |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
 | Clipboard | Rich HTML, Markdown, plain text, a private `application/x-nobita+json` format, and image paste through an upload adapter |
@@ -115,7 +117,7 @@ The React wrapper only manages the host element; React never renders a block. Th
 
 ## Storage
 
-The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 104.9 KB gzipped bundle is unchanged.
+The editor itself remains plain JSON in / JSON out. Nothing in `@nobita/element` imports a database, and the 106.5 KB gzipped bundle is unchanged.
 
 `@nobita/storage` is an optional package for hosts that want a ready-made persistence port:
 
@@ -174,7 +176,7 @@ A document is deliberately simple, stable JSON:
 
 **Table** and **Database** are separate blocks.
 
-- A `table` block is a simple editable grid (`props.table`). It follows AFFiNE's table model: row/column handles sit on the first cell edges (click for menus, drag to reorder rows/columns), cells support inline rich-text formatting (`cell.runs` with `cell.text` plain projection and HTML/Markdown table round-trip), drag selection covers multiple cells (copy, cut, paste and clear), hover plus controls add rows/columns, and row/column background colors are available. It has no properties or views.
+- A `table` block is a simple editable grid (`props.table`). It follows AFFiNE's table model: row/column handles sit on the first cell edges (click or right-click for menus, drag to reorder rows/columns), cells support inline rich-text formatting (`cell.runs` with `cell.text` plain projection and HTML/Markdown table round-trip) and cell right-click context menus, drag selection covers multiple cells (copy, cut, paste and clear), hover plus controls add rows/columns, and row/column background colors are available. It has no properties or views.
 - A `database` block is the typed data view (`props.database`). It has typed columns, row records and one or more named views.
 
 ```json
@@ -245,7 +247,7 @@ A document is deliberately simple, stable JSON:
 }
 ```
 
-Column types are `text`, `number`, `select`, `multi-select`, `date`, `checkbox`, `url`, `files` and `people`. Text cells store optional rich-text `runs` alongside the plain `text` projection (used for search, filtering, sorting, statistics and TSV/Markdown export), and empty cells are omitted so documents stay compact. Rows can also carry an optional rich-text `page.content` body edited inside the record page panel. Each view stores its own column layout (order, width, visibility and footer stat), nested `filter` tree, `sorts`, `groupBy` and `groupProperties` (group order, hidden/collapsed state and `manuallyCardSort`). Markdown/HTML tables import as simple tables; TSV paste fills database cells. Legacy documents with a single `view`, `sort`, flat `filters` or `hiddenColumns` still load and migrate on the next edit.
+Column types are `text`, `number`, `progress`, `select`, `multi-select`, `date`, `checkbox`, `url`, `image`, `files`, and `people`. Text cells store optional rich-text `runs` alongside the plain `text` projection (used for search, filtering, sorting, statistics and TSV/Markdown export), `progress` renders an interactive 0–100% bar, `image` supports validated URLs or the host `uploadImage` adapter with Board card covers (`view.coverColumnId`), and empty cells are omitted so documents stay compact. Rows can also carry an optional rich-text `page.content` body edited inside the record page panel, and rows, column headers, and board cards support right-click context menus. Each view stores its own column layout (order, width, visibility and footer stat), nested `filter` tree, `sorts`, `groupBy` and `groupProperties` (group order, hidden/collapsed state and `manuallyCardSort`). Markdown/HTML tables import as simple tables; TSV paste fills database cells. Legacy documents with a single `view`, `sort`, flat `filters` or `hiddenColumns` still load and migrate on the next edit.
 
 ## API
 
@@ -261,6 +263,8 @@ See [docs/public-api.md](docs/public-api.md) for the stable import surface, edit
 | `setDoc(doc, { history? })` | Replace the document |
 | `setTitle(title)` | Update only the title |
 | `getSelection()` | Current block/offset selection or `null` |
+| `getSelectedBlockIds()` | Currently selected block IDs (block selection mode) |
+| `selectBlocks(ids)` / `clearBlockSelection()` | Programmatically set or clear block selection |
 | `focus(blockId?, offset?)` | Focus the editor or a block |
 | `focusTitle()` / `blur()` | Focus control |
 | `undo()` / `redo()` | History |
@@ -329,7 +333,7 @@ The placeholder behaves like AFFiNE: it appears only on the **focused empty para
 
 Attributes: `readonly`, `theme`, `placeholder`, `min-height`, `doc` (JSON string).
 Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `pageProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
-Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`, `insertPageLink()`, `insertInlinePageLink()`, `refreshPageLinks()`, `setReadonly()`, `setTheme()`.
+Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`, `getSelectedBlockIds()`, `selectBlocks()`, `clearBlockSelection()`, `insertPageLink()`, `insertInlinePageLink()`, `refreshPageLinks()`, `setReadonly()`, `setTheme()`.
 Events: `nobita-change` (`{ doc, source }`), `nobita-selection` (`{ selection }`), `nobita-page-open` (`{ pageId }`), `nobita-ready`.
 
 Use `doc` as a property for normal use. Set `doc` **before** the element connects, or use the property after mount; the element keeps the last document across disconnect/reconnect.
@@ -365,9 +369,11 @@ Dark mode is built in (`theme="dark"` or `auto`). The shadow root uses `color-sc
 
 ## Testing
 
-Unit, type and browser regression checks, plus size and performance baselines, are documented in [docs/testing.md](docs/testing.md).
+Unit tests (`@nobita/core` + `@nobita/storage`, 146 tests), TypeScript + public API checks, and Playwright browser regression tests (221 tests), plus size and performance baselines, are documented in [docs/testing.md](docs/testing.md).
 
 ```bash
+pnpm typecheck
+pnpm test
 pnpm test:browser
 pnpm size
 pnpm bench
@@ -389,11 +395,11 @@ Bundle sizes (`pnpm size`):
 
 | Artifact | Raw | Gzip |
 | --- | ---: | ---: |
-| Editor ESM (`nobita.js`) | 383.8 KB | **104.9 KB** |
-| Editor IIFE (`nobita.global.js`) | 383.7 KB | **104.9 KB** |
-| Demo app (editor + UI + seed data) | 439.5 KB | 119.8 KB |
+| Editor ESM (`nobita.js`) | 390.5 KB | **106.5 KB** |
+| Editor IIFE (`nobita.global.js`) | 390.4 KB | **106.5 KB** |
+| Demo app (editor + UI + seed data) | 453.5 KB | 123.3 KB |
 
-The optional `@nobita/storage` package is not part of any editor bundle; it is only present when a host imports it.
+The optional `@nobita/storage` package and `@nobita/core` workspace/Trash helpers are tree-shaken out of the editor bundle; they are only included when a host imports them.
 
 Why it stays small: immutable path-copy updates mean undo is a pointer swap; per-block DOM views are patched by reference; CSS is minified at bundle time; no framework runtime ships; the renderer never re-renders unchanged blocks. See [architecture](docs/architecture.md).
 
@@ -406,7 +412,7 @@ packages/core      Document model, commands, markdown, JSON validation, history 
 packages/element   Editor engine, block views, modular database views, selection, menus, toolbar, web component, CSS bundler
 packages/react     Thin React host wrapper
 packages/storage   Optional persistence port and adapters (localStorage, SQLite/D1, HTTP)
-apps/demo          Notion-like demo: sidebar, pages, search, export, embed dialog
+apps/demo          Notion-like demo: drag-and-drop page tree, [[ links, backlinks, full-text search, Trash, right-click menus, export, embed dialog
 examples/          Optional integrations, including the Cloudflare D1 Worker
 docs/              AFFiNE analysis, architecture, public API, command comparison, testing and storage notes
 ```
