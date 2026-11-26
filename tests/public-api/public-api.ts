@@ -58,6 +58,7 @@ export function publicApiFixture(host: HTMLElement): void {
   );
   const options: NobitaOptions = {
     doc,
+    virtualize: { threshold: 300, overscanPx: 800 },
     theme: 'light' satisfies NobitaTheme,
     readonly: false,
     placeholder: 'Type',
@@ -79,6 +80,7 @@ export function publicApiFixture(host: HTMLElement): void {
     } satisfies PageProvider,
   };
   const editor = createEditor(host, options);
+  editor.scrollToBlock(doc.blocks[0]!.id);
   void editor.insertPageLink({ id: 'p1', title: 'Page' });
   void editor.insertInlinePageLink({ id: 'p1', title: 'Page' });
   editor.refreshPageLinks();

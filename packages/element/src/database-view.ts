@@ -200,7 +200,21 @@ export class DatabaseView {
     this.#clearNarrowSearch();
   };
 
-  constructor(host: DatabaseHost, data: DatabaseData) {
+  get localState() {
+    return { query: this.#searchQuery, open: this.#searchOpen, view: this.#readonlyActiveViewId,
+      groups: this.#groupOverrides, filters: this.#filterBarOpen };
+  }
+
+  constructor(host: DatabaseHost, data: DatabaseData, state?: DatabaseView['localState']) {
+    if (state) {
+      this.#searchQuery = state.query;
+      this.#searchOpen = state.open;
+      this.#filterBarOpen = state.filters;
+      if (host.readonly) {
+        this.#readonlyActiveViewId = state.view;
+        this.#groupOverrides = state.groups;
+      }
+    }
     this.#host = host;
     this.#source = data;
     this.#evaluation = new DatabaseEvalContext(host.resolveDatabase);
@@ -262,6 +276,7 @@ export class DatabaseView {
     });
     this.#detail = new DatabaseDetailController({
       ...baseCtx,
+      databaseId: host.databaseId,
       navigationRows: view => this.#navigationRows(view),
       commitTextRuns: (rowId, colId, runs, key) =>
         this.#commitTextRuns(rowId, colId, runs, key),
@@ -448,7 +463,6 @@ export class DatabaseView {
     this.#headResizeObserver = null;
     this.#narrowSearchMedia?.removeEventListener('change', this.#onNarrowSearchMedia);
     this.#narrowSearchMedia = null;
-    this.#filterBarOpen.clear();
     this.#selectedTds.clear();
     this.#activeTds.clear();
     this.#syncedData = null;

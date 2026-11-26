@@ -1,5 +1,6 @@
 import { icon } from './icons.js';
 import { styles } from './styles.js';
+import { Virtualizer } from './virtualizer.js';
 import {
   EditorStore,
   DatabaseEvalContext,
@@ -73,7 +74,7 @@ import {
   type TextAlign,
   type TextColor,
 } from '@nobita/core';
-import { BlockView } from './block-view.js';
+import { BlockView, type BlockDisplayState } from './block-view.js';
 import type { BlockHost } from './bridge.js';
 import {
   readClipboardPayload,
@@ -131,6 +132,7 @@ export type ImageUploadHandler = (
 ) => ImageUploadResult | string | Promise<ImageUploadResult | string>;
 
 export interface NobitaOptions {
+  virtualize?: boolean | { threshold?: number; overscanPx?: number };
   doc?: Doc | string;
   readonly?: boolean;
   theme?: NobitaTheme;
@@ -241,8 +243,13 @@ export class NobitaEditor implements BlockHost {
   #body!: HTMLElement;
   #tail!: HTMLElement;
   #overlay!: HTMLElement;
+  #display: BlockDisplayState = { databases: new Map(), revealed: new WeakSet() };
+  #printing = false;
   #views = new Map<string, BlockView>();
   #viewIndex = new Map<string, BlockView>();
+  #virtual: Virtualizer | undefined;
+  #layout: number[] = [];
+  #gaps: HTMLElement[] = [];
   #syncedBlocks: readonly Block[] | null = null;
   #placeholderBlockId: string | null = null;
   #menu: Menu;
@@ -378,6 +385,13 @@ export class NobitaEditor implements BlockHost {
 
     this.#bindTitle();
     this.#bindBody();
+    const print = (enabled: boolean) => {
+      this.#printing = enabled;
+      this.#layout = [];
+      this.#syncBody(this.doc.blocks, []);
+    };
+    window.addEventListener('beforeprint', () => print(true), { signal: this.#bodyEvents.signal });
+    window.addEventListener('afterprint', () => print(false), { signal: this.#bodyEvents.signal });
     this.#bindChrome();
     this.#syncBody(this.store.doc.blocks);
     this.#syncTitle();
@@ -664,6 +678,10 @@ export class NobitaEditor implements BlockHost {
   setReadonly(readonly: boolean): void {
     if (this.#readonly === readonly) return;
     this.#readonly = readonly;
+    if (!readonly) for (const state of this.#display.databases.values()) {
+      state.view = null;
+      state.groups.clear();
+    }
     this.#hostElement.toggleAttribute('readonly', readonly);
     this.#title.contentEditable = readonly ? 'false' : 'true';
     this.#body.contentEditable = readonly ? 'false' : 'true';
@@ -742,6 +760,7 @@ export class NobitaEditor implements BlockHost {
   destroy(): void {
     if (this.#destroyed) return;
     this.#destroyed = true;
+    this.#virtual?.destroy();
     this.#bodyEvents.abort();
     this.#unsubscribe();
     this.#unsubscribeSelection();
@@ -885,6 +904,9 @@ export class NobitaEditor implements BlockHost {
       this.#selectAllInBlock(blockId);
       return;
     }
+    if (this.#virtual && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      this.#syncBody(this.doc.blocks, [blockId]);
+    }
     if (this.#readonly) return;
     const selection = this.#currentSelection();
     const block = this.#findView(blockId)?.block ?? findBlock(this.store.doc.blocks, blockId);
@@ -1016,7 +1038,7 @@ export class NobitaEditor implements BlockHost {
     }
 
     if (event.key === 'ArrowUp' && !event.shiftKey && offset === 0) {
-      const previous = this.#previousTextBlock(blockId);
+      const previous = this.#adjacentTextBlock(blockId, -1);
       if (previous) {
         event.preventDefault();
         this.#focusBlock(previous.id, runsLength(previous.text));
@@ -1025,7 +1047,7 @@ export class NobitaEditor implements BlockHost {
     }
 
     if (event.key === 'ArrowDown' && !event.shiftKey && offset >= length) {
-      const next = this.#nextTextBlock(blockId);
+      const next = this.#adjacentTextBlock(blockId, 1);
       if (next) {
         event.preventDefault();
         this.#focusBlock(next.id, 0);
@@ -1163,7 +1185,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   focusAfterBlock(blockId: string): void {
-    const next = this.#nextTextBlock(blockId);
+    const next = this.#adjacentTextBlock(blockId, 1);
     if (next) {
       this.#focusBlock(next.id, 0);
       return;
@@ -1382,11 +1404,27 @@ export class NobitaEditor implements BlockHost {
           }
           return;
         }
-        if (this.#selectedBlockIds.size > 0 && !this.#isNestedField(event.target)) {
+        if (this.#isNestedField(event.target)) return;
+        if (this.#virtual && !event.altKey && !event.isComposing && (event.ctrlKey || event.metaKey) &&
+            (event.key === 'Home' || event.key === 'End')) {
+          const blocks = this.#visibleBlocks();
+          const end = event.key === 'End';
+          const target = end ? blocks.at(-1) : blocks[0];
+          if (!target) return;
+          event.preventDefault();
+          const anchor = event.shiftKey ? this.#currentSelection()?.anchor : undefined;
+          if (this.#selectedBlockIds.size || !isTextualBlock(target)) {
+            this.#selectBlockRange((event.shiftKey && (this.#blockAnchorId ?? anchor?.blockId)) || target.id, target.id);
+          } else {
+            const focus = { blockId: target.id, offset: end ? runsLength(target.text) : 0 };
+            this.#restoreSelection({ anchor: anchor ?? focus, focus });
+          }
+          return;
+        }
+        if (this.#selectedBlockIds.size > 0) {
           this.#onBlockSelectionKeyDown(event);
           return;
         }
-        if (this.#isNestedField(event.target)) return;
         const blockId = this.#activeBlockId(event.target);
         if (blockId) this.keyDown(blockId, event);
       },
@@ -1798,17 +1836,14 @@ export class NobitaEditor implements BlockHost {
         this.#focusBlock(block.id, 0);
         return;
       }
-      if (last.type === 'database' || last.type === 'image' || last.type === 'divider' || last.type === 'page' || last.type === 'table') {
+      if (!isTextualBlock(last)) {
         const { doc, block } = appendParagraphAfter(this.store.doc, last.id);
         const caret: Point = { blockId: block.id, offset: 0 };
         this.#commit(doc, { anchor: caret, focus: caret });
         this.#focusBlock(block.id, 0);
         return;
       }
-      const flat = flattenBlocks(blocks);
-      const lastText = [...flat].reverse().find(
-        item => item.type !== 'divider' && item.type !== 'image' && item.type !== 'database' && item.type !== 'page' && item.type !== 'table'
-      );
+      const lastText = flattenBlocks(blocks).reverse().find(isTextualBlock);
       if (lastText) this.#focusBlock(lastText.id, runsLength(lastText.text));
     });
   }
@@ -1816,10 +1851,15 @@ export class NobitaEditor implements BlockHost {
   #onStoreChange(change: { doc: Doc; previous: Doc; source: string }): void {
     if (this.#destroyed) return;
     if (change.source === 'replace') {
+      this.#display.databases.clear();
       this.#docEpoch += 1;
       this.clearBlockSelection();
     }
-    this.#syncBody(change.doc.blocks);
+    this.#syncBody(change.doc.blocks, undefined, change.source !== 'replace');
+    if (this.#display.databases.size) {
+      const local = this.#localDatabases();
+      for (const id of this.#display.databases.keys()) if (!local.has(id)) this.#display.databases.delete(id);
+    }
     this.refreshDatabases();
     const sync = this.#options.onRelationSync;
     if (sync && change.source !== 'replace') {
@@ -1836,8 +1876,8 @@ export class NobitaEditor implements BlockHost {
       }
     }
     if (change.source !== 'replace' && this.#selectedBlockIds.size > 0) {
-      for (const id of [...this.#selectedBlockIds]) {
-        if (!this.#findView(id) && !findBlock(change.doc.blocks, id)) {
+      for (const id of this.#selectedBlockIds) {
+        if (!this.#findView(id) && !(this.#virtual?.has(id) ?? findBlock(change.doc.blocks, id))) {
           this.#selectedBlockIds.delete(id);
         }
       }
@@ -1869,37 +1909,90 @@ export class NobitaEditor implements BlockHost {
     this.#title.contentEditable = this.#readonly ? 'false' : 'true';
   }
 
-  #syncBody(blocks: readonly Block[]): void {
-    if (blocks === this.#syncedBlocks) return;
+  #syncBody(blocks: readonly Block[], pins?: string[], preserveState = true): void {
+    const unchanged = blocks === this.#syncedBlocks;
+    if (unchanged && !pins) return;
     this.#syncedBlocks = blocks;
-    if (this.#views.size > 0) {
-      const ids = new Set(blocks.map(block => block.id));
+    const option = this.#options.virtualize;
+    const config = typeof option === 'object' ? option : undefined;
+    let layout: number[] | undefined;
+    if (!this.#printing && option !== false && blocks.length >= (config?.threshold ?? 300)) {
+      this.#virtual ??= new Virtualizer(this.#body, Math.max(0, config?.overscanPx ?? 800),
+        () => { if (!this.#printing) this.#syncBody(this.doc.blocks, []); });
+      const selection = this.#currentSelection() ?? this.#lastSelection;
+      const active = this.root.activeElement?.closest<HTMLElement>('.nb-block');
+      layout = this.#virtual.layout(blocks, [
+        this.#compositionBlockId, this.#drag?.blockId, active?.dataset.blockId, this.#focusedBlockId,
+        selection?.anchor.blockId, selection?.focus.blockId, ...(pins ?? []),
+        ...Array.from(this.#overlay.querySelectorAll<HTMLElement>('[data-record-owner]'), el => el.dataset.recordOwner),
+      ]);
+      if (unchanged && layout.length === this.#layout.length && layout.every((n, i) => n === this.#layout[i])) return;
+      this.#layout = layout;
+    } else if (!this.#printing && this.#virtual) {
+      this.#virtual.destroy();
+      this.#virtual = undefined;
+      this.#layout = [];
+    }
+    const restoreAnchor = unchanged && this.#virtual?.anchor(this.#views.values());
+    for (const gap of this.#gaps) gap.remove();
+    this.#gaps.length = 0;
+    if (this.#views.size) {
+      const ids = new Set(layout ? layout.filter(i => i >= 0).map(i => blocks[i]!.id) : blocks.map(b => b.id));
       for (const [id, view] of this.#views) {
         if (ids.has(id)) continue;
-        view.destroy();
+        this.#virtual?.unobserve(view.element);
+        view.destroy(preserveState && !!layout && !!this.#virtual?.has(id));
         this.#views.delete(id);
       }
     }
     let cursor = this.#body.firstChild;
-    let number = 0;
-    blocks.forEach((block, index) => {
+    let number = 0, previous = -1;
+    const render = (block: Block, index: number) => {
+      if (block.type === 'numbered' && previous !== index - 1) {
+        number = 0;
+        for (let i = index - 1; i >= 0 && blocks[i]!.type === 'numbered'; i--) number++;
+      }
+      previous = index;
       number = block.type === 'numbered' ? number + 1 : 0;
+      const context = { depth: 0, index, number };
       let view = this.#views.get(block.id);
       if (!view) {
-        view = new BlockView(this, block, {
-          depth: 0,
-          index,
-          number,
-        });
+        view = new BlockView(this, block, context, this.#display);
         this.#views.set(block.id, view);
       }
-      if (view.element === cursor) {
-        cursor = cursor.nextSibling;
-      } else {
-        this.#body.insertBefore(view.element, cursor);
+      if (view.element === cursor) cursor = cursor.nextSibling;
+      else this.#body.insertBefore(view.element, cursor);
+      view.update(block, context);
+      if (layout) this.#virtual!.observe(view.element);
+    };
+    if (!layout) { blocks.forEach(render); return; }
+    for (const index of layout) {
+      if (index >= 0) render(blocks[index]!, index);
+      else {
+        const gap = document.createElement('div');
+        gap.contentEditable = 'false';
+        gap.setAttribute('aria-hidden', 'true');
+        gap.style.height = -index + 'px';
+        this.#body.insertBefore(gap, cursor);
+        this.#gaps.push(gap);
       }
-      view.update(block, { depth: 0, index, number });
-    });
+    }
+    if (restoreAnchor) restoreAnchor();
+    if (this.#selectedBlockIds.size) this.#syncBlockSelection();
+  }
+
+  /** Reveal a block (including a nested block) without changing the selection. */
+  scrollToBlock(blockId: string): boolean {
+    if (this.#virtual) this.#syncBody(this.doc.blocks, [blockId]);
+    const view = this.#findView(blockId);
+    let ancestor = view?.element.parentElement?.closest<HTMLElement>('.nb-block[data-collapsed="true"]');
+    while (ancestor) {
+      this.#display.revealed.add(this.#viewIndex.get(ancestor.dataset.blockId!)!.block.props);
+      delete ancestor.dataset.collapsed;
+      ancestor = ancestor.parentElement?.closest<HTMLElement>('.nb-block[data-collapsed="true"]');
+    }
+    view?.element.scrollIntoView({ block: 'nearest' });
+    return !!view;
   }
 
   #syncPlaceholders(): void {
@@ -1936,6 +2029,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   #focusBlock(blockId: string, offset: number): void {
+    if (this.#virtual) this.scrollToBlock(blockId);
     const view = this.#findView(blockId);
     const block = view?.block ?? findBlock(this.store.doc.blocks, blockId);
     if (!view || !block) return;
@@ -1956,7 +2050,7 @@ export class NobitaEditor implements BlockHost {
       return;
     }
     if (block.type === 'divider') {
-      const next = this.#nextTextBlock(blockId);
+      const next = this.#adjacentTextBlock(blockId, 1);
       if (next) this.#focusBlock(next.id, 0);
       return;
     }
@@ -1998,6 +2092,7 @@ export class NobitaEditor implements BlockHost {
 
   #restoreSelection(selection: EditorSelection | null, preventScroll = false): void {
     if (!selection) return;
+    if (this.#virtual) this.#syncBody(this.doc.blocks, [selection.anchor.blockId, selection.focus.blockId]);
     const anchorView = this.#findView(selection.anchor.blockId);
     const focusView = this.#findView(selection.focus.blockId);
     if (!anchorView?.textElement || !focusView?.textElement) return;
@@ -2018,7 +2113,7 @@ export class NobitaEditor implements BlockHost {
     }
     if (!preventScroll) {
       const rect = focusView.element.getBoundingClientRect();
-      if (rect.top < 8 || rect.bottom > window.innerHeight - 8) {
+      if (this.#virtual || rect.top < 8 || rect.bottom > window.innerHeight - 8) {
         focusView.element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       }
     }
@@ -2326,14 +2421,7 @@ export class NobitaEditor implements BlockHost {
       });
       return;
     }
-    if (
-      block.type !== 'paragraph' &&
-      block.type !== 'divider' &&
-      block.type !== 'image' &&
-      block.type !== 'database' &&
-      block.type !== 'page' &&
-      block.type !== 'table'
-    ) {
+    if (block.type !== 'paragraph' && isTextualBlock(block)) {
       const next = setBlockType(this.store.doc, blockId, 'paragraph');
       const caret: Point = { blockId, offset: 0 };
       this.#commit(next, { anchor: caret, focus: caret });
@@ -2345,12 +2433,7 @@ export class NobitaEditor implements BlockHost {
       return;
     }
     const previous = location ? location.siblings[location.index - 1] : undefined;
-    if (
-      previous &&
-      (previous.type === 'image' || previous.type === 'divider' || previous.type === 'database' || previous.type === 'page' || previous.type === 'table')
-    ) {
-      return;
-    }
+    if (previous && !isTextualBlock(previous)) return;
     const merged = mergeBlockWithPrevious(this.store.doc, blockId);
     if (!merged) return;
     const caret: Point = { blockId: merged.caretBlockId, offset: merged.caretOffset };
@@ -2383,7 +2466,7 @@ export class NobitaEditor implements BlockHost {
     }
     const location = locateBlock(this.store.doc.blocks, blockId);
     const next = location ? location.siblings[location.index + 1] : undefined;
-    if (next && (next.type === 'image' || next.type === 'divider' || next.type === 'database' || next.type === 'page' || next.type === 'table')) return;
+    if (next && !isTextualBlock(next)) return;
     const merged = mergeBlockWithNext(this.store.doc, blockId);
     if (!merged) return;
     const caret: Point = { blockId, offset: point.offset };
@@ -2572,9 +2655,10 @@ export class NobitaEditor implements BlockHost {
 
   #syncBlockSelection(): void {
     const nextEls = new Set<HTMLElement>();
-    for (const id of this.#selectedBlockIds) {
-      const el = this.#findView(id)?.element;
-      if (el) nextEls.add(el);
+    if (this.#selectedBlockIds.size) {
+      for (const [id, view] of this.#viewIndex) {
+        if (this.#selectedBlockIds.has(id)) nextEls.add(view.element);
+      }
     }
     for (const el of this.#selectedBlockEls) {
       if (!nextEls.has(el)) {
@@ -2610,6 +2694,7 @@ export class NobitaEditor implements BlockHost {
         this.#body.focus({ preventScroll: true });
       }
       if (focusId) {
+        if (this.#virtual && !this.#findView(focusId)) this.scrollToBlock(focusId);
         const el = this.#findView(focusId)?.element;
         if (el) {
           const rect = el.getBoundingClientRect();
@@ -2628,7 +2713,7 @@ export class NobitaEditor implements BlockHost {
     const visit = (list: readonly Block[]): void => {
       for (const block of list) {
         out.push(block);
-        if (!block.props.collapsed && block.children.length > 0) {
+        if (block.children.length && (!block.props.collapsed || this.#display.revealed.has(block.props))) {
           visit(block.children);
         }
       }
@@ -2853,20 +2938,10 @@ export class NobitaEditor implements BlockHost {
     this.#setBlockSelection(pastedIds, pastedIds[0]!, pastedIds[pastedIds.length - 1]!);
   }
 
-  #previousTextBlock(blockId: string): Block | null {
-    const flat = flattenBlocks(this.store.doc.blocks).filter(
-      block => block.type !== 'divider' && block.type !== 'image' && block.type !== 'database' && block.type !== 'page' && block.type !== 'table'
-    );
-    const index = flat.findIndex(block => block.id === blockId);
-    return index > 0 ? flat[index - 1] ?? null : null;
-  }
-
-  #nextTextBlock(blockId: string): Block | null {
-    const flat = flattenBlocks(this.store.doc.blocks).filter(
-      block => block.type !== 'divider' && block.type !== 'image' && block.type !== 'database' && block.type !== 'page' && block.type !== 'table'
-    );
-    const index = flat.findIndex(block => block.id === blockId);
-    return index >= 0 ? flat[index + 1] ?? null : null;
+  #adjacentTextBlock(blockId: string, direction: -1 | 1): Block | null {
+    const blocks = flattenBlocks(this.store.doc.blocks).filter(isTextualBlock);
+    const index = blocks.findIndex(block => block.id === blockId);
+    return index < 0 ? null : blocks[index + direction] ?? null;
   }
 
   #insertBlocks(blocks: Block[]): void {
@@ -2897,7 +2972,7 @@ export class NobitaEditor implements BlockHost {
     if (!first) return;
     let caret: Point;
 
-    if (block.type === 'database' || block.type === 'divider' || block.type === 'image' || block.type === 'page' || block.type === 'table') {
+    if (!isTextualBlock(block)) {
       doc = insertBlocksAfter(doc, block.id, inserted);
       const last = inserted[inserted.length - 1] ?? block;
       caret = { blockId: last.id, offset: runsLength(last.text) };

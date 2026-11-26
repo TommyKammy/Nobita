@@ -395,6 +395,13 @@ export function renderInlineRuns(
   runs: readonly InlineRun[],
   resolvePage?: (pageId: string) => PageInfo | null
 ): void {
+  // Keep the native text node and caret when reconciling an ordinary single run.
+  const only = root.firstChild;
+  if (runs.length === 1 && !runs[0]!.marks && only instanceof HTMLSpanElement &&
+      !only.nextSibling && !only.hasAttributes() && only.firstChild instanceof Text && !only.firstChild.nextSibling) {
+    if (only.firstChild.data !== runs[0]!.text) only.firstChild.data = runs[0]!.text;
+    return;
+  }
   const fragment = document.createDocumentFragment();
   for (const run of runs) {
     const span = document.createElement('span');
