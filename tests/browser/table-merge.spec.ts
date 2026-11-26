@@ -183,3 +183,51 @@ test('keyboard extends a rectangle, merges, and moves past the span', async ({ p
   await page.keyboard.press('ArrowRight');
   await expect(cells(page).nth(1)).toBeFocused();
 });
+
+test('Enter skips a vertical span and appends below a bottom span', async ({ page }) => {
+  await seed(page);
+  await page.evaluate(() => {
+    const doc = window.__editor!.doc;
+    const table = doc.blocks[0]!.props.table!;
+    window.__editor!.setDoc({ ...doc, blocks: [{
+      ...doc.blocks[0]!, props: { table: { ...table, rows: [
+        { id: 'r', cells: { a: { text: 'Upper', rowspan: 2 } } },
+        { id: 's', cells: { b: { text: 'Lower', rowspan: 2 } } },
+        { id: 't', cells: {} },
+      ] } },
+    }] });
+  });
+  await anchor(page).press('Enter');
+  await expect(page.locator('.nb-table-cell[data-row-id="t"][data-column-id="a"]')).toBeFocused();
+  await page.locator('.nb-table-cell[data-row-id="s"][data-column-id="b"]').press('Enter');
+  const rows = page.locator('.nb-table-grid tbody tr');
+  await expect(rows).toHaveCount(4);
+  await expect(rows.last().locator('.nb-table-cell').first()).toBeFocused();
+  await expect(rows.nth(1).locator('td[data-column-id="b"]')).toHaveAttribute('rowspan', '2');
+});
+
+test('hovering ordinary cells aligns handles housed in a merged cell', async ({ page }) => {
+  await seed(page);
+  await page.evaluate(() => {
+    const editor = window.__editor!;
+    const doc = editor.doc;
+    editor.setDoc({ ...doc, blocks: [{
+      ...doc.blocks[0]!, props: { table: { ...doc.blocks[0]!.props.table!, rows: [
+        { id: 'r', cells: { a: { text: 'Merged', rowspan: 2, colspan: 2 } } },
+        { id: 's', cells: {} }, { id: 't', cells: {} },
+      ] } },
+    }] });
+  });
+  for (const [cell, track, label, axis] of [
+    ['[data-row-id="t"][data-column-id="b"]', 'col[data-column-id="b"]', 'Column 2 actions', 'x'],
+    ['[data-row-id="s"][data-column-id="c"]', 'tr[data-row-id="s"]', 'Row 2 actions', 'y'],
+  ] as const) {
+    await page.locator('.nb-table-cell' + cell).hover();
+    const handle = page.getByRole('button', { name: label, exact: true });
+    await expect(handle).toHaveAttribute('data-visible', 'true');
+    const actual = (await handle.boundingBox())!;
+    const expected = (await page.locator(track).boundingBox())!;
+    const dimension = axis === 'x' ? 'width' : 'height';
+    expect(Math.abs(actual[axis] + actual[dimension] / 2 - expected[axis] - expected[dimension] / 2)).toBeLessThan(2);
+  }
+});

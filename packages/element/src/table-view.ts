@@ -283,15 +283,7 @@ export class SimpleTableView {
     table.append(colgroup);
 
     const body = document.createElement('tbody');
-    const alignHandle = (handle: HTMLElement | undefined, track: HTMLElement, horizontal: boolean) => {
-      const td = handle?.parentElement;
-      if (!handle || !(td instanceof HTMLTableCellElement)) return;
-      if ((horizontal ? td.colSpan : td.rowSpan) === 1) return;
-      const bounds = td.getBoundingClientRect();
-      const rect = track.getBoundingClientRect();
-      if (horizontal) handle.style.left = `${rect.left - bounds.left + rect.width / 2}px`;
-      else handle.style.top = `${rect.top - bounds.top + rect.height / 2}px`;
-    };
+    const alignHandles = { row: new Map<string, () => void>(), column: new Map<string, () => void>() };
     this.#data.rows.forEach((row, rowIndex) => {
       const tr = document.createElement('tr');
       tr.dataset.rowId = row.id;
@@ -349,10 +341,18 @@ export class SimpleTableView {
           handle.dataset.visible = 'false';
           handle.dataset.active = 'false';
           handle.append(dots(vertical));
-          handle.addEventListener('focus', () => {
-            const track = vertical ? body.rows[index] : this.#colElements[index];
-            if (track) alignHandle(handle, track, !vertical);
-          }, { signal: this.#events.signal });
+          if ((vertical ? td.rowSpan : td.colSpan) > 1) {
+            const align = () => {
+              const track = vertical ? body.rows[index] : this.#colElements[index];
+              if (!track) return;
+              const bounds = td.getBoundingClientRect();
+              const rect = track.getBoundingClientRect();
+              if (vertical) handle.style.top = `${rect.top - bounds.top + rect.height / 2}px`;
+              else handle.style.left = `${rect.left - bounds.left + rect.width / 2}px`;
+            };
+            alignHandles[axis].set(id, align);
+            handle.addEventListener('focus', align, { signal: this.#events.signal });
+          }
           handle.addEventListener(
             'pointerdown',
             event => this.#beginAxisDrag(event, axis, id),
@@ -464,11 +464,11 @@ export class SimpleTableView {
           const tr = trackAt(body.rows, event.clientY, false);
           columnId = col.dataset.columnId!;
           rowId = tr.dataset.rowId!;
-          alignHandle(this.#colHandles.get(columnId), col, true);
-          alignHandle(this.#rowHandles.get(rowId), tr, false);
         }
         if (!rowId || !columnId) return;
         if (this.#hoverRowId === rowId && this.#hoverColumnId === columnId) return;
+        alignHandles.row.get(rowId)?.();
+        alignHandles.column.get(columnId)?.();
         this.#hoverRowId = rowId;
         this.#hoverColumnId = columnId;
         this.#syncHover();
@@ -1391,10 +1391,10 @@ export class SimpleTableView {
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      const rowIndex = this.#data.rows.findIndex(row => row.id === rowId);
-      const nextRow = this.#data.rows[rowIndex + 1];
+      const rowEnd = tableSpanAt(this.#data, r, c)?.rowEnd ?? r;
+      const nextRow = this.#data.rows[rowEnd + 1];
       if (nextRow) this.focusCell(nextRow.id, columnId, 'start');
-      else this.#addRow(rowId);
+      else this.#addRow();
     }
   }
 
