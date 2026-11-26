@@ -276,6 +276,7 @@ export class DatabaseView {
     });
     this.#detail = new DatabaseDetailController({
       ...baseCtx,
+      databaseId: host.databaseId,
       navigationRows: view => this.#navigationRows(view),
       commitTextRuns: (rowId, colId, runs, key) =>
         this.#commitTextRuns(rowId, colId, runs, key),

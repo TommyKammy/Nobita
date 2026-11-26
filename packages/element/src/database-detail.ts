@@ -41,6 +41,7 @@ import {
 import type { DatabaseRichTextController } from './database-rich-text.js';
 
 export interface DatabaseDetailContext {
+  databaseId: string;
   rootElement: HTMLElement;
   getReadonly(): boolean;
   getData(): DatabaseData;
@@ -141,6 +142,7 @@ export class DatabaseDetailController {
     const view = this.#ctx.activeView();
     const titleColumn = this.#ctx.titleColumn(view);
     const backdrop = el('div', 'nb-db-detail-backdrop');
+    backdrop.dataset.recordOwner = this.#ctx.databaseId;
     const panel = el('section', 'nb-db-detail');
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'true');

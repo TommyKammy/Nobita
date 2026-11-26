@@ -393,3 +393,85 @@ test('database search, readonly tab and expanded group survive virtual eviction 
   await expect(page.locator('.nb-db-search')).toHaveValue('alpha');
   await expect(page.locator('.nb-db-cell[data-row-id="beta"]')).toHaveCount(0);
 });
+
+test('document boundary shortcuts move and extend the logical selection', async ({
+  page,
+}) => {
+  await setup(page);
+  await page.evaluate(() => window.__host.editor!.focus('bench-5', 3));
+  const start = { blockId: 'bench-0', offset: 0 };
+  const end = { blockId: 'bench-9999', offset: 10 };
+  const original = { blockId: 'bench-5', offset: 3 };
+  for (const [key, anchor, focus] of [
+    ['Control+Shift+End', original, end],
+    ['Control+Shift+Home', original, start],
+    ['Control+End', end, end],
+    ['Control+Home', start, start],
+  ] as const) {
+    await page.keyboard.press(key);
+    expect(
+      await page.evaluate(() => window.__host.editor!.getSelection())
+    ).toEqual({ anchor, focus });
+    await expect(
+      page.locator(`[data-block-id="${focus.blockId}"]`)
+    ).toBeInViewport();
+    expect(await page.locator(mounted).count()).toBeLessThan(150);
+  }
+});
+
+test('a portaled record dialog pins its owning database until closed', async ({
+  page,
+}) => {
+  await setup(page, 1000);
+  await page.evaluate(() => {
+    const host = window.__host,
+      doc = host.doc!;
+    host.doc = {
+      ...doc,
+      blocks: [
+        {
+          ...doc.blocks[0]!,
+          children: [
+            {
+              ...doc.blocks[0]!,
+              id: 'nested-db',
+              type: 'database',
+              props: {
+                database: {
+                  variant: 'database',
+                  columns: [{ id: 'name', name: 'Name', type: 'text' }],
+                  rows: [{ id: 'r', cells: { name: { text: 'Original' } } }],
+                },
+              },
+            },
+          ],
+        },
+        ...doc.blocks.slice(1),
+      ],
+    };
+  });
+  await page.locator('.nb-db-cell[data-row-id="r"] .nb-db-rich-text').click();
+  await page.keyboard.press('Control+Enter');
+  const dialog = page.getByRole('dialog', { name: 'Record page' });
+  await expect(dialog).toBeVisible();
+  const title = dialog.locator('.nb-db-detail-title');
+  await title.focus();
+  await page.evaluate(() =>
+    window.scrollTo(0, document.documentElement.scrollHeight)
+  );
+  await expect(page.locator('[data-block-id="bench-999"]')).toBeInViewport();
+  await expect(title).toBeFocused();
+  await title.fill('Edited while scrolled');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () =>
+        window.__host.doc!.blocks[0]!.children[0]!.props.database!.rows[0]!
+          .cells.name?.text
+    )
+  ).toBe('Edited while scrolled');
+  await page.evaluate(() => window.__host.editor!.focus('bench-999', 0));
+  await expect(page.locator('[data-block-id="nested-db"]')).toHaveCount(0);
+});
