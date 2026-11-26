@@ -1,3 +1,4 @@
+import type { CollaborationAdapter } from '@nobita/core';
 import { icon } from './icons.js';
 import { styles } from './styles.js';
 import { Virtualizer } from './virtualizer.js';
@@ -132,6 +133,7 @@ export type ImageUploadHandler = (
 ) => ImageUploadResult | string | Promise<ImageUploadResult | string>;
 
 export interface NobitaOptions {
+  collaboration?: CollaborationAdapter | null;
   virtualize?: boolean | { threshold?: number; overscanPx?: number };
   doc?: Doc | string;
   readonly?: boolean;
@@ -402,7 +404,28 @@ export class NobitaEditor implements BlockHost {
     });
 
     this.#ready = true;
+    if (options.collaboration) this.setCollaboration(options.collaboration);
     if (options.autofocus) this.focus();
+  }
+
+  #disconnect: (() => void) | undefined;
+  #connectionVersion = 0;
+  collaborationReady: Promise<void> = Promise.resolve();
+
+  setCollaboration(adapter: CollaborationAdapter | null): Promise<void> {
+    const version = ++this.#connectionVersion;
+    this.#disconnect?.();
+    this.#disconnect = undefined;
+    this.#page.inert = !!adapter;
+    this.collaborationReady = adapter ? import('./collaboration.js').then(({connect}) => {
+      if (version !== this.#connectionVersion) return;
+      const disconnect = connect(adapter, this.store, this.root, this.#overlay, () => this.#restoreSelection(this.store.selection, true));
+      if (version === this.#connectionVersion) this.#disconnect = disconnect;
+      else disconnect();
+    }).finally(() => {
+      if (version === this.#connectionVersion) this.#page.inert = false;
+    }) : Promise.resolve();
+    return this.collaborationReady;
   }
 
   get doc(): Doc {
@@ -414,7 +437,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   get isReady(): boolean {
-    return this.#ready;
+    return this.#ready && !this.#page.inert;
   }
 
   get focusedBlockId(): string | null {
@@ -758,6 +781,7 @@ export class NobitaEditor implements BlockHost {
   }
 
   destroy(): void {
+    this.setCollaboration(null);
     if (this.#destroyed) return;
     this.#destroyed = true;
     this.#virtual?.destroy();
@@ -1862,7 +1886,7 @@ export class NobitaEditor implements BlockHost {
     }
     this.refreshDatabases();
     const sync = this.#options.onRelationSync;
-    if (sync && change.source !== 'replace') {
+    if (sync && change.source !== 'replace' && change.source !== 'remote') {
       const before = documentDatabases(change.previous.blocks),
         after = this.#localDatabases();
       for (const id of new Set([...before.keys(), ...after.keys()])) {

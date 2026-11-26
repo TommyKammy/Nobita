@@ -1,0 +1,30 @@
+{
+  "name": "@nobita/collab-yjs",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "nobita-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@nobita/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "yjs": "^13.6.33"
+  },
+  "devDependencies": {
+    "yjs": "^13.6.33"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  }
+}

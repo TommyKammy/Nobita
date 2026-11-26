@@ -1,0 +1,143 @@
+import * as Y from 'yjs';
+import type { Doc, InlineRun, PeerPresence } from '@nobita/core';
+import {
+  SharedAdapter,
+  type Backend,
+  type PresenceChannel,
+} from '@nobita/core/collab-runtime';
+
+class YBackend implements Backend {
+  readonly origin = {};
+  readonly history: Y.UndoManager;
+  constructor(readonly doc: Y.Doc) {
+    this.history = new Y.UndoManager(doc, {
+      trackedOrigins: new Set([this.origin]),
+      captureTimeout: 0,
+    });
+  }
+  get actor() {
+    return String(this.doc.clientID);
+  }
+  map(k: string) {
+    return this.doc.getMap('nobita:m:' + k);
+  }
+  array(k: string) {
+    return this.doc.getArray<string>('nobita:a:' + k);
+  }
+  text(k: string) {
+    return this.doc.getText('nobita:t:' + k);
+  }
+  read(k: string) {
+    return Object.fromEntries(this.map(k));
+  }
+  field(k: string, n: string, v: unknown) {
+    if (v === undefined) this.map(k).delete(n);
+    else this.map(k).set(n, v);
+  }
+  ensureList(k: string) {
+    this.array(k);
+  }
+  list(k: string) {
+    return this.array(k).toArray();
+  }
+  insert(k: string, i: number, v: string) {
+    this.array(k).insert(i, [v]);
+  }
+  ensureText(k: string) {
+    this.text(k);
+  }
+  runs(k: string): InlineRun[] {
+    return this.text(k)
+      .toDelta()
+      .map((d: { insert: string; attributes?: InlineRun['marks'] }) => ({
+        text: d.insert,
+        ...(d.attributes && { marks: d.attributes }),
+      }));
+  }
+  splice(k: string, i: number, n: number, v: string) {
+    const t = this.text(k);
+    if (n) t.delete(i, n);
+    if (v) t.insert(i, v);
+  }
+  format(k: string, i: number, n: number, name: string, v: unknown) {
+    this.text(k).format(i, n, { [name]: v ?? null });
+  }
+  cursor(k: string, i: number) {
+    const p = Y.createRelativePositionFromTypeIndex(this.text(k), i);
+    return () =>
+      Y.createAbsolutePositionFromRelativePosition(p, this.doc)?.index ?? null;
+  }
+  transact(fn: () => void) {
+    this.doc.transact(fn, this.origin);
+  }
+  get canUndo() {
+    return this.history.canUndo();
+  }
+  get canRedo() {
+    return this.history.canRedo();
+  }
+  undo() {
+    return !!this.history.undo();
+  }
+  redo() {
+    return !!this.history.redo();
+  }
+  clearHistory() {
+    this.history.clear();
+  }
+}
+
+export class YjsCollaborationAdapter extends SharedAdapter {
+  #off: () => void;
+  constructor(doc: Y.Doc, seed?: Doc, presence?: PresenceChannel) {
+    const backend = new YBackend(doc);
+    super(backend, seed, presence);
+    const listener = (tx: Y.Transaction) => {
+      if (
+        tx.changed.size &&
+        tx.origin !== backend.origin &&
+        tx.origin !== backend.history
+      )
+        this.received();
+    };
+    doc.on('afterTransaction', listener);
+    this.#off = () => {
+      doc.off('afterTransaction', listener);
+      backend.history.destroy();
+    };
+  }
+  override destroy() {
+    this.#off();
+    super.destroy();
+  }
+}
+
+/** Bind a y-protocols Awareness instance without taking ownership of its transport. */
+export function awarenessPresence(
+  awareness: {
+    clientID: number;
+    setLocalStateField(field: string, value: unknown): void;
+    getStates(): Map<number, Record<string, unknown>>;
+    on(event: 'change', fn: () => void): void;
+    off(event: 'change', fn: () => void): void;
+  },
+  user?: PeerPresence['user']
+): PresenceChannel {
+  return {
+    ...(user && { user }),
+    publish: (p) => awareness.setLocalStateField('nobita', p),
+    subscribe: (fn) => {
+      const refresh = () =>
+        fn(
+          [...awareness.getStates()].flatMap(([id, state]) =>
+            id !== awareness.clientID && state.nobita
+              ? [{ ...(state.nobita as PeerPresence), clientId: String(id) }]
+              : []
+          )
+        );
+      awareness.on('change', refresh);
+      refresh();
+      return () => awareness.off('change', refresh);
+    },
+  };
+}

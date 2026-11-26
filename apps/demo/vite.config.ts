@@ -1,3 +1,4 @@
+import {controllerMethods} from '../../packages/element/scripts/controller-methods.mjs';
 import { defineConfig } from 'vite';
 import { editorStylesPath, minifiedEditorStyles } from '../../packages/element/scripts/minify-styles.mjs';
 
@@ -18,5 +19,6 @@ export default defineConfig({
     target: 'es2022',
     sourcemap: true,
     minify: 'terser',
+    terserOptions: { mangle: { properties: { regex: new RegExp('^(' + controllerMethods.join('|') + ')$') } } },
   },
 });

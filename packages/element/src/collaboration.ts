@@ -1,0 +1,187 @@
+import {
+  diffDocs,
+  type CollaborationAdapter,
+  type EditorStore,
+  type PeerPresence,
+  type CompositionTarget,
+  type RemoteDocUpdate,
+} from '@nobita/core';
+import { domPointToOffset, nativeSelection, offsetToDomPoint } from './dom.js';
+
+export function connect(
+  adapter: CollaborationAdapter,
+  store: EditorStore,
+  root: ShadowRoot,
+  overlay: HTMLElement,
+  restore: () => void
+) {
+  const events = new AbortController(),
+    capture = { capture: true, signal: events.signal };
+  let composing: CompositionTarget | null = null;
+  const receive = ({ doc, remapPoint }: RemoteDocUpdate) => {
+    if (composing) return;
+    const active = root.activeElement?.classList.contains('nb-body');
+    store.applyRemote(doc, remapPoint);
+    if (active) restore();
+  };
+  store.setHistoryAdapter(adapter);
+  store.applyRemote(adapter.getDoc());
+  const remote = adapter.subscribe(receive);
+  const local = store.subscribe((change) => {
+    if (change.source !== 'remote' && change.source !== 'replace')
+      adapter.applyLocalChange(change, diffDocs(change.previous, change.doc));
+  });
+  const block = (id: string) =>
+    root.querySelector<HTMLElement>('[data-block-id="' + CSS.escape(id) + '"]');
+  const bodyText = (id: string) =>
+    block(id)?.querySelector<HTMLElement>('.nb-text');
+  const inputSelector = '.nb-text,.nb-table-cell,.nb-db-rich-text';
+  root.addEventListener(
+    'compositionstart',
+    (event) => {
+      const sel = nativeSelection(root),
+        node = sel?.anchorNode;
+      if (!node || !sel?.focusNode) return;
+      const text = (
+        node instanceof Element ? node : node.parentElement
+      )?.closest<HTMLElement>(inputSelector);
+      const id = text?.closest<HTMLElement>('[data-block-id]')?.dataset.blockId;
+      if (
+        !text ||
+        !id ||
+        !text.contains(sel.focusNode) ||
+        text.closest('[contenteditable=false]') === text
+      )
+        return;
+      const a = domPointToOffset(text, node, sel.anchorOffset),
+        b = domPointToOffset(text, sel.focusNode, sel.focusOffset);
+      const cell = text.closest<HTMLElement>(
+        '[data-row-id][data-column-id]'
+      )?.dataset;
+      if (!text.classList.contains('nb-text') && !cell) return;
+      const base = { blockId: id, from: Math.min(a, b), to: Math.max(a, b) };
+      composing =
+        cell?.rowId && cell.columnId
+          ? { ...base, rowId: cell.rowId, columnId: cell.columnId }
+          : base;
+      adapter.beginComposition(composing);
+      event.stopPropagation();
+    },
+    capture
+  );
+  for (const type of ['beforeinput', 'input'])
+    root.addEventListener(
+      type,
+      (e) => {
+        if (composing) e.stopPropagation();
+      },
+      capture
+    );
+  root.addEventListener(
+    'compositionend',
+    (e) => {
+      if (!composing) return;
+      e.stopPropagation();
+      const target = composing,
+        data = (e as CompositionEvent).data;
+      composing = null;
+      const update = data
+        ? adapter.commitComposition(data)
+        : adapter.cancelComposition();
+      const point = update.remapPoint?.({
+        blockId: target.blockId,
+        offset: target.from,
+      });
+      store.applyRemote(update.doc);
+      const text =
+        target.rowId === undefined
+          ? bodyText(target.blockId)
+          : block(target.blockId)?.querySelector<HTMLElement>(
+              '[data-row-id="' +
+                CSS.escape(target.rowId) +
+                '"][data-column-id="' +
+                CSS.escape(target.columnId) +
+                '"] :is(.nb-table-cell,.nb-db-rich-text)'
+            );
+      if (text) {
+        const p = offsetToDomPoint(text, point?.offset ?? target.from);
+        nativeSelection(root)?.collapse(p.node, p.offset);
+      }
+    },
+    capture
+  );
+  const layer = document.createElement('div');
+  overlay.append(layer);
+  let peers: readonly PeerPresence[] = [];
+  const draw = () => {
+    layer.replaceChildren();
+    const origin = overlay.getBoundingClientRect();
+    for (const { selection, user } of peers) {
+      if (!selection) continue;
+      const a = bodyText(selection.anchor.blockId),
+        b = bodyText(selection.focus.blockId);
+      if (!a || !b) continue;
+      const start = offsetToDomPoint(a, selection.anchor.offset),
+        end = offsetToDomPoint(b, selection.focus.offset);
+      const range = document.createRange();
+      range.setStart(start.node, start.offset);
+      range.collapse(true);
+      if (range.comparePoint(end.node, end.offset) < 0) {
+        range.setStart(end.node, end.offset);
+        range.setEnd(start.node, start.offset);
+      } else range.setEnd(end.node, end.offset);
+      for (const rect of range.getClientRects()) {
+        const mark = document.createElement('div');
+        mark.title = user.name;
+        mark.className = 'nb-peer-selection';
+        Object.assign(mark.style, {
+          position: 'absolute',
+          pointerEvents: 'none',
+          backgroundColor: user.color,
+          opacity: range.collapsed ? '1' : '.25',
+          top: rect.top - origin.top + 'px',
+          left: rect.left - origin.left + 'px',
+          width: Math.max(2, rect.width) + 'px',
+          height: rect.height + 'px',
+        });
+        layer.append(mark);
+      }
+    }
+  };
+  const presence = adapter.subscribePresence?.((p) => {
+    peers = p;
+    draw();
+  });
+  const selection = store.subscribeSelection((s) =>
+    adapter.setLocalPresence?.({
+      user: { name: '', color: '#597ad4' },
+      selection: s,
+      focusedBlockId: s?.focus.blockId ?? null,
+    })
+  );
+  const refresh = store.subscribe(() => {
+    if (peers.length) draw();
+  });
+  root.addEventListener(
+    'focusout',
+    (e) => {
+      if (!root.contains((e as FocusEvent).relatedTarget as Node | null))
+        adapter.setLocalPresence?.(null);
+    },
+    capture
+  );
+  root.addEventListener('scroll', draw, capture);
+  window.addEventListener('resize', draw, { signal: events.signal });
+  return () => {
+    events.abort();
+    if (composing) adapter.cancelComposition();
+    remote();
+    local();
+    refresh();
+    presence?.();
+    selection();
+    adapter.setLocalPresence?.(null);
+    layer.remove();
+    store.setHistoryAdapter(null);
+  };
+}

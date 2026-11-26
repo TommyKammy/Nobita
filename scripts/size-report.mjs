@@ -12,6 +12,7 @@ function artifacts() {
   const entries = [
     { name: 'core', path: 'packages/core/dist/index.js' },
     { name: 'element', path: 'packages/element/dist/nobita.js' },
+    { name: 'collaboration', path: 'packages/element/dist/collaboration.js' },
     { name: 'global', path: 'packages/element/dist/nobita.global.js' },
   ];
   const assets = join(root, 'apps/demo/dist/assets');
@@ -50,8 +51,8 @@ for (const { name, path } of artifacts()) {
   console.log(
     `${name.padEnd(12)} ${path.padEnd(38)} ${String(raw).padStart(8)} raw ${String(gzip).padStart(8)} gzip  ${change}`
   );
-  if (name === 'element' && gzip > 114_147) {
-    console.warn('  warning: standalone ESM exceeds the Phase 3 budget of 114,147 gzip bytes');
+  if (name === 'element' && gzip > Math.min(115_147,113_089+1_000)) {
+    console.warn('  warning: standalone ESM exceeds the Phase 4 budget (main + 1,000 and cumulative 115,147 gzip bytes)');
     if (strict) failed = true;
   }
   if (before && gzipDelta > threshold) {

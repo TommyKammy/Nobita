@@ -449,3 +449,25 @@ A command-by-command comparison with AFFiNE is in [docs/command-comparison.md](d
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+### Collaborative editing
+
+Install either `@nobita/collab-yjs` with `yjs`, or `@nobita/collab-automerge` with `@automerge/automerge`. Initialize the document once and share its CRDT history with subsequent replicas. The host provides the transport.
+
+```ts
+import * as Y from 'yjs';
+import { YjsCollaborationAdapter } from '@nobita/collab-yjs';
+
+const shared = new Y.Doc();
+const adapter = new YjsCollaborationAdapter(shared, editor.doc);
+await editor.setCollaboration(adapter);
+// Send Yjs updates through your provider. Peers open the synchronized Y.Doc.
+await editor.setCollaboration(null);
+adapter.destroy();
+```
+
+For Automerge, construct the first `AutomergeCollaborationAdapter` with a Nobita document. Pass its `save()` bytes to the constructor on another client. Deliver subsequent snapshots to `receive(bytes)` to merge offline edits. Both adapters support local Undo/Redo. Connecting and disconnecting start a fresh editor history.
+
+The editor options, custom element, and React wrapper accept a `collaboration` property. Await `editor.collaborationReady` before issuing programmatic edits after a property change. For standalone deployments, serve `dist/collaboration.js` alongside `nobita.js` or `nobita.global.js`. Collaboration loads this module on demand.
+
+For remote selections, pass `awarenessPresence(awareness, user)` to the Yjs adapter or provide a presence channel with `publish`, `subscribe`, and an optional local `user` to either adapter. The host owns the adapter and can reuse it after detaching the editor.

@@ -253,3 +253,4 @@ export {
   runsToInlineHtml,
 } from './serialize.js';
 export { safeHref, safeImageSrc } from './url.js';
+export * from './collab.js';
