@@ -267,7 +267,8 @@ export function connect(
   window.addEventListener('resize', draw, { signal: events.signal });
   return () => {
     events.abort();
-    if (composing) adapter.cancelComposition();
+    const canceled = composing ? adapter.cancelComposition() : undefined;
+    composing = null;
     remote();
     local();
     refresh();
@@ -276,5 +277,6 @@ export function connect(
     adapter.setLocalPresence?.(null);
     layer.remove();
     store.setHistoryAdapter(null);
+    if (canceled) store.applyRemote(canceled.doc, canceled.remapPoint);
   };
 }

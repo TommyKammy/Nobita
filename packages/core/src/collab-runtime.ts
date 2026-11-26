@@ -8,7 +8,7 @@ import {
   type RemoteDocUpdate,
 } from './collab.js';
 import { BOOLEAN_MARK_KEYS } from './types.js';
-import { plainText } from './text.js';
+import { marksAt, plainText } from './text.js';
 import type {
   Block,
   DatabaseData,
@@ -658,7 +658,12 @@ export class SharedAdapter implements CollaborationAdapter {
         from -= Math.max(0, Math.min(range.length, from - range.start));
       }
       this.store.splice(comp.path, from, 0, text);
-      if (comp.target.pendingMarks && text.length)
+      if (!text.length) return;
+      const inherited = marksAt(this.store.runs(comp.path), from + text.length);
+      for (const mark of ['mention', 'page'] as const)
+        if (inherited?.[mark])
+          this.store.format(comp.path, from, text.length, mark, undefined);
+      if (comp.target.pendingMarks)
         for (const name of BOOLEAN_MARK_KEYS)
           this.store.format(
             comp.path,

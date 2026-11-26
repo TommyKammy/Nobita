@@ -383,3 +383,43 @@ test('IME replacement retains a peer insertion inside the original selection', a
   await page.keyboard.type('Z');
   await expect(peer).toHaveText('a日ZXd');
 });
+
+test('disconnect during IME retains deferred peer edits for subsequent local typing', async ({
+  page,
+}) => {
+  await openFixture(page);
+  await page.evaluate(async () => {
+    const path = '/peers.ts';
+    await (await import(path)).setupPeers();
+    window.__editor!.focus('p', 1);
+  });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.imeSetComposition', {
+    text: 'に',
+    selectionStart: 1,
+    selectionEnd: 1,
+  });
+  await page.evaluate(() => {
+    const peer = (document.querySelector('#peer') as typeof window.__host)
+      .editor!;
+    peer.store.update((d) => ({
+      ...d,
+      blocks: d.blocks.map((b) =>
+        b.id === 'p' ? { ...b, text: [{ text: 'Bab' }] } : b
+      ),
+    }));
+  });
+  const value = () =>
+    page.evaluate(() =>
+      window.__editor!.doc.blocks[0]!.text.map((r) => r.text).join('')
+    );
+  expect(await value()).toBe('ab');
+  await page.evaluate(() => window.__editor!.setCollaboration(null));
+  expect(await value()).toBe('Bab');
+  await page.evaluate(() => window.__editor!.focus('p', 3));
+  await page.keyboard.type('Z');
+  expect(await value()).toBe('BabZ');
+  await expect(page.locator('#peer [data-block-id="p"] .nb-text')).toHaveText(
+    'Bab'
+  );
+});

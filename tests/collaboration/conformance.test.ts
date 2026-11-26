@@ -447,3 +447,38 @@ it('restores overlapping Automerge mark ranges independently after synchronizati
   send();
   expect(a.getDoc().blocks[0]!.text).toEqual([{ text: 'ab' }]);
 });
+
+for (const engine of ['yjs', 'automerge']) {
+  for (const reference of [
+    { mention: { id: 'm', label: 'Ada' } },
+    { page: { id: 'p', title: 'Ada' } },
+  ]) {
+    it.each([false, true])(
+      engine +
+        ' IME after ' +
+        Object.keys(reference)[0] +
+        ' leaves the reference intact (pending bold=%s)',
+      (bold) => {
+        const initial = structuredClone(seed);
+        const chip = { text: 'Ada', marks: reference };
+        initial.blocks[0]!.text = [chip];
+        const { a, b, send } = pair(engine, initial);
+        a.beginComposition({
+          blockId: 'a',
+          from: 3,
+          to: 3,
+          ...(bold && { pendingMarks: { bold: true } }),
+        });
+        a.commitComposition('日');
+        send();
+        expect(b.getDoc().blocks[0]!.text).toEqual([
+          chip,
+          { text: '日', ...(bold && { marks: { bold: true } }) },
+        ]);
+        a.undo();
+        send();
+        expect(b.getDoc().blocks[0]!.text).toEqual([chip]);
+      }
+    );
+  }
+}
