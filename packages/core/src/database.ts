@@ -1511,8 +1511,15 @@ export function groupedDatabaseRows(
   data: DatabaseData,
   view: DatabaseView = databaseView(data), context?: DatabaseEvalContext
 ): DatabaseGroup[] {
-  data = evaluateRows(data,context);
-  const rows = filteredDatabaseRows(data, view);
+  return groupFilteredDatabaseRows(data, view, filteredDatabaseRows(data, view, context));
+}
+
+/** Group rows already filtered and sorted for this view. */
+export function groupFilteredDatabaseRows(
+  data: DatabaseData,
+  view: DatabaseView,
+  rows: DatabaseRow[]
+): DatabaseGroup[] {
   const column = view.groupBy
     ? data.columns.find(item => item.id === view.groupBy)
     : undefined;

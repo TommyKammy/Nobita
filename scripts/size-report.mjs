@@ -1,12 +1,29 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
+import { build } from 'vite';
 
 const root = process.cwd();
 const baselinePath = join(root, 'benchmarks', 'size-baseline.json');
 const strict = process.argv.includes('--strict');
 const write = process.argv.includes('--write');
 const threshold = 0.10;
+
+async function bundleCore(entry) {
+  const result = await build({
+    configFile: false,
+    logLevel: 'silent',
+    build: {
+      write: false,
+      target: 'es2022',
+      lib: { entry, formats: ['es'] },
+      rollupOptions: { output: { inlineDynamicImports: true } },
+      minify: 'esbuild',
+    },
+  });
+  const [output] = Array.isArray(result) ? result : [result];
+  return Buffer.from(output.output[0].code);
+}
 
 function artifacts() {
   const entries = [
@@ -39,8 +56,9 @@ for (const { name, path } of artifacts()) {
     failed = true;
     continue;
   }
-  const raw = statSync(absolute).size;
-  const gzip = gzipSync(readFileSync(absolute), { level: 9 }).length;
+  const contents = name === 'core' ? await bundleCore(absolute) : readFileSync(absolute);
+  const raw = contents.length;
+  const gzip = gzipSync(contents, { level: 9 }).length;
   const before = baseline[name];
   const gzipDelta = before ? (gzip - before.gzip) / before.gzip : 0;
   const rawDelta = before ? (raw - before.raw) / before.raw : 0;
@@ -49,7 +67,7 @@ for (const { name, path } of artifacts()) {
     ? `${(gzipDelta * 100).toFixed(1)}% gzip / ${(rawDelta * 100).toFixed(1)}% raw`
     : 'new';
   console.log(
-    `${name.padEnd(12)} ${path.padEnd(38)} ${String(raw).padStart(8)} raw ${String(gzip).padStart(8)} gzip  ${change}`
+    `${name.padEnd(12)} ${(name === 'core' ? 'core public entry (bundled ESM)' : path).padEnd(38)} ${String(raw).padStart(8)} raw ${String(gzip).padStart(8)} gzip  ${change}`
   );
   if (name === 'element' && gzip > Math.min(115_147,113_089+1_000)) {
     console.warn('  warning: standalone ESM exceeds the Phase 4 budget (main + 1,000 and cumulative 115,147 gzip bytes)');

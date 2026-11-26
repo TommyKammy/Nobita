@@ -21,7 +21,7 @@ import {
   databaseViews,
   databaseVisibleColumns,
   filteredDatabaseRows,
-  groupedDatabaseRows,
+  groupFilteredDatabaseRows,
   MAX_DATABASE_COLUMN_WIDTH,
   MIN_DATABASE_COLUMN_WIDTH,
   parseInlineRuns,
@@ -150,8 +150,8 @@ export class DatabaseView {
     overrideVersion: number;
     views: (DatabaseViewConfig & { id: string; name: string })[];
     activeView: DatabaseViewConfig & { id: string; name: string };
-    rowsByViewId: Map<string, DatabaseRow[]>;
-    groupsByViewId: Map<string, ReturnType<typeof groupedDatabaseRows>>;
+    rowsByViewId: Map<string, { filtered: DatabaseRow[]; matched: DatabaseRow[] }>;
+    groupsByViewId: Map<string, ReturnType<typeof groupFilteredDatabaseRows>>;
     statesByViewId: Map<string, ReturnType<typeof databaseViewColumnStates>>;
   } | null = null;
   #filterBarOpen = new Set<string>();
@@ -393,7 +393,7 @@ export class DatabaseView {
         this.#syncValues();
         return;
       }
-      const visibleKey = this.#visibleKeyFor(data);
+      const visibleKey = this.#visibleKeyFor();
       if (visibleKey !== this.#visibleKey) {
         this.render();
       } else {
@@ -402,7 +402,7 @@ export class DatabaseView {
       return;
     }
     const nextKey = this.#keyFor(data);
-    const visibleKey = this.#visibleKeyFor(data);
+    const visibleKey = this.#visibleKeyFor();
     if (nextKey !== this.#structureKey || visibleKey !== this.#visibleKey) {
       this.render();
     } else {
@@ -679,33 +679,38 @@ export class DatabaseView {
     return databaseTitleColumn(this.#data, view);
   }
 
-  #rowsFor(view: DatabaseViewConfig = this.#activeView()): DatabaseRow[] {
+  #queryRows(view: DatabaseViewConfig) {
     const cache = this.#ensureQueryCache();
     const key = view.id ?? '';
     const cached = cache.rowsByViewId.get(key);
     if (cached) return cached;
     const filtered = filteredDatabaseRows(this.#data, view);
-    const result =
+    const matched =
       this.#searchQuery.trim().length > 0
         ? searchDatabaseRows(this.#data, filtered, this.#searchQuery)
         : filtered;
+    const result = { filtered, matched };
     cache.rowsByViewId.set(key, result);
     return result;
   }
 
+  #rowsFor(view: DatabaseViewConfig = this.#activeView()): DatabaseRow[] {
+    return this.#queryRows(view).matched;
+  }
+
   #groupsFor(
     view: DatabaseViewConfig = this.#activeView()
-  ): ReturnType<typeof groupedDatabaseRows> {
+  ): ReturnType<typeof groupFilteredDatabaseRows> {
     const cache = this.#ensureQueryCache();
     const key = view.id ?? '';
     const cached = cache.groupsByViewId.get(key);
     if (cached) return cached;
-    const hasSearch = this.#searchQuery.trim().length > 0;
-    const allowed = hasSearch
-      ? new Set(this.#rowsFor(view).map(row => row.id))
+    const { filtered, matched } = this.#queryRows(view);
+    const allowed = matched !== filtered
+      ? new Set(matched.map(row => row.id))
       : null;
     const hasOverrides = this.#readonly && this.#groupOverrides.size > 0;
-    const baseGroups = groupedDatabaseRows(this.#data, view);
+    const baseGroups = groupFilteredDatabaseRows(this.#data, view, filtered);
     const groups =
       allowed || hasOverrides
         ? baseGroups.map(group => {
@@ -767,27 +772,13 @@ export class DatabaseView {
     });
   }
 
-  #visibleKeyFor(
-    data: DatabaseData,
-    view: DatabaseViewConfig = data === this.#data ? this.#activeView() : databaseView(data)
-  ): string {
-    if (data === this.#data) {
-      if (view.type === 'board' || view.groupBy) {
-        return this.#groupsFor(view)
-          .map(group => `${group.key}:${group.rows.map(row => row.id).join(',')}`)
-          .join('\u0001');
-      }
-      return this.#rowsFor(view).map(row => row.id).join('\u0001');
-    }
-    const allowed = new Set(
-      searchDatabaseRows(data, filteredDatabaseRows(data, view), this.#searchQuery).map(row => row.id)
-    );
+  #visibleKeyFor(view: DatabaseViewConfig = this.#activeView()): string {
     if (view.type === 'board' || view.groupBy) {
-      return groupedDatabaseRows(data, view)
-        .map(group => `${group.key}:${group.rows.filter(row => allowed.has(row.id)).map(row => row.id).join(',')}`)
+      return this.#groupsFor(view)
+        .map(group => `${group.key}:${group.rows.map(row => row.id).join(',')}`)
         .join('\u0001');
     }
-    return [...allowed].join('\u0001');
+    return this.#rowsFor(view).map(row => row.id).join('\u0001');
   }
 
   /** ---- rendering ---- */
@@ -808,7 +799,7 @@ export class DatabaseView {
     const hadFocus = this.element.contains((this.element.getRootNode() as ShadowRoot).activeElement);
     const view = this.#activeView();
     this.#structureKey = this.#keyFor(this.#data);
-    this.#visibleKey = this.#visibleKeyFor(this.#data, view);
+    this.#visibleKey = this.#visibleKeyFor(view);
     this.element.dataset.readonly = String(this.#readonly);
     this.element.dataset.view = view.type;
     this.element.replaceChildren();
@@ -924,7 +915,7 @@ export class DatabaseView {
     this.#activeTds.clear();
     this.#clearRange();
     this.#colElements = [];
-    this.#visibleKey = this.#visibleKeyFor(this.#data, view);
+    this.#visibleKey = this.#visibleKeyFor(view);
     scroll.dataset.view = view.type;
     scroll.replaceChildren(
       view.type === 'board' ? this.#board.render(view) : this.#renderTable(view)
@@ -1984,7 +1975,7 @@ export class DatabaseView {
       }
       return;
     }
-    let groups: ReturnType<typeof groupedDatabaseRows> | null = null;
+    let groups: ReturnType<typeof groupFilteredDatabaseRows> | null = null;
     for (const table of this.element.querySelectorAll<HTMLElement>('.nb-db-table')) {
       const groupKey = table.closest<HTMLElement>('.nb-db-group')?.dataset.group;
       let rows: DatabaseRow[] | null = null;
@@ -3207,11 +3198,34 @@ export class DatabaseView {
     return lines.join('\n');
   }
 
+  #clearRangeContents(): void {
+    const bounds = this.#rangeBounds();
+    if (!bounds) return;
+    const { rows, columns, startRow, endRow, startColumn, endColumn } = bounds;
+    const selected = new Set(rows.slice(startRow, endRow + 1).map(row => row.id));
+    const editable = columns.slice(startColumn, endColumn + 1).filter(column => column.type !== 'formula');
+    this.#host.commit({
+      ...this.#data,
+      rows: this.#data.rows.map(row => {
+        if (!selected.has(row.id)) return row;
+        const cells = { ...row.cells };
+        for (const column of editable) {
+          if (column.type === 'checkbox') cells[column.id] = { ...cells[column.id], checked: false };
+          else delete cells[column.id];
+        }
+        return { ...row, cells };
+      }),
+    });
+    if (editable[0]) {
+      this.#pendingFocus = { rowId: rows[startRow]!.id, columnId: editable[0].id, at: 'start' };
+    }
+    this.#clearRange();
+  }
+
   #applyGrid(
     startRowId: string,
     startColumnId: string,
     grid: string[][],
-    clearReferences = false,
     groupKey?: string
   ): void {
     const view = this.#activeView();
@@ -3278,7 +3292,7 @@ export class DatabaseView {
           else delete cells[column.id];
         } else if (column.type === 'formula') return;
         else if (column.type === 'files' || column.type === 'people' || column.type === 'relation') {
-          if (clearReferences) delete cells[column.id];
+          // Plain text cannot replace a structured reference.
         } else if (value) {
           cells[column.id] = withText(cell, value);
         } else {
@@ -3359,20 +3373,7 @@ export class DatabaseView {
     }
     if (rangeDelete) {
       event.preventDefault();
-      const bounds = this.#rangeBounds();
-      if (!bounds) return;
-      const firstRow = bounds.rows[bounds.startRow];
-      const firstColumn = bounds.columns[bounds.startColumn];
-      if (!firstRow || !firstColumn) return;
-      this.#applyGrid(
-        firstRow.id,
-        firstColumn.id,
-        Array.from({ length: bounds.endRow - bounds.startRow + 1 }, () =>
-          Array.from({ length: bounds.endColumn - bounds.startColumn + 1 }, () => '')
-        ),
-        true,
-        this.#range?.groupKey
-      );
+      this.#clearRangeContents();
     }
   };
 
@@ -3449,20 +3450,7 @@ export class DatabaseView {
     if (!text) return;
     event.clipboardData?.setData('text/plain', text);
     event.preventDefault();
-    const bounds = this.#rangeBounds();
-    if (!bounds) return;
-    const firstRow = bounds.rows[bounds.startRow];
-    const firstColumn = bounds.columns[bounds.startColumn];
-    if (!firstRow || !firstColumn) return;
-    this.#applyGrid(
-      firstRow.id,
-      firstColumn.id,
-      Array.from({ length: bounds.endRow - bounds.startRow + 1 }, () =>
-        Array.from({ length: bounds.endColumn - bounds.startColumn + 1 }, () => '')
-      ),
-      true,
-      this.#range?.groupKey
-    );
+    this.#clearRangeContents();
   };
 
   #onPaste = (event: ClipboardEvent): void => {
@@ -3583,6 +3571,6 @@ export class DatabaseView {
     const groupKey = cell?.closest<HTMLElement>('.nb-db-group')?.dataset.group;
     event.preventDefault();
     event.stopPropagation();
-    this.#applyGrid(startRowId, startColumnId, grid, false, groupKey);
+    this.#applyGrid(startRowId, startColumnId, grid, groupKey);
   };
 }

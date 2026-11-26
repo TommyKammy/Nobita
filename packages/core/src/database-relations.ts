@@ -117,6 +117,23 @@ export function updateDatabaseRelations(
   const schemaChanged = before.columns !== after?.columns;
   if (changes.length || schemaChanged) {
     const local = documentDatabases(doc.blocks);
+    // Only arrays copied by this transaction may be updated in place.
+    const owned = new WeakSet<DatabaseRow[]>();
+    const indices = new WeakMap<DatabaseRow[], Map<string, number> | null>();
+    const rowIndex = (rows: DatabaseRow[], id: string) => {
+      let index = indices.get(rows);
+      // A single lookup is common during editing. Build the index on reuse.
+      if (index === undefined) {
+        indices.set(rows, null);
+        return rows.findIndex(row => row.id === id);
+      }
+      if (index === null) {
+        index = new Map<string, number>();
+        for (let i = 0; i < rows.length; i++) index.set(rows[i]!.id, i);
+        indices.set(rows, index);
+      }
+      return index.get(id) ?? -1;
+    };
     const write = (
       id: string,
       rowId: string,
@@ -128,20 +145,24 @@ export function updateDatabaseRelations(
       if (!data) return;
       const column = data.columns.find((c) => c.id === columnId);
       if (column?.type !== 'relation') return;
-      const rows = data.rows.map((row) => {
-        if (row.id !== rowId) return row;
-        const refs = rowLinks(row, columnId);
-        const next =
-          add && column.relation?.limit === 1
-            ? []
-            : refs.filter((r) => r.rowId !== ref);
-        if (add) next.push({ rowId: ref });
-        const cells = { ...row.cells };
-        if (next.length) cells[columnId] = { relations: next };
-        else delete cells[columnId];
-        return { ...row, cells };
-      });
-      updates.set(id, { ...data, rows });
+      let rows = data.rows;
+      if (!owned.has(rows)) {
+        rows = rows.slice();
+        owned.add(rows);
+        updates.set(id, { ...data, rows });
+      }
+      const position = rowIndex(rows, rowId);
+      if (position < 0) return;
+      const row = rows[position]!;
+      const refs = rowLinks(row, columnId);
+      const next = add && column.relation?.limit === 1
+        ? []
+        : refs.filter(r => r.rowId !== ref);
+      if (add) next.push({ rowId: ref });
+      const cells = { ...row.cells };
+      if (next.length) cells[columnId] = { relations: next };
+      else delete cells[columnId];
+      rows[position] = { ...row, cells };
     };
     const bind = (
       rel: DatabaseRelationConfig,
@@ -174,7 +195,7 @@ export function updateDatabaseRelations(
       if (!binding || !syncedColumnId) return;
       if (linked && binding.reverse.relation?.limit === 1) {
         const links = (db: DatabaseData, id: string, key: string) =>
-          rowLinks(db.rows.find(row => row.id === id), key);
+          rowLinks(db.rows[rowIndex(db.rows, id)], key);
         // An earlier displacement may have deleted this queued forward edge.
         if (!links(updates.get(sourceId)!, sourceRowId, columnId).some(ref => ref.rowId === targetRowId)) return;
         for (const old of links(binding.target, targetRowId, syncedColumnId))
@@ -209,7 +230,9 @@ export function updateDatabaseRelations(
                   ] as const
               )
             );
-            for (const row of binding.target.rows) {
+            // Self-relations can update a later row while importing reverse edges.
+            const targetRows = binding.target.rows;
+            for (const row of owned.has(targetRows) ? targetRows.slice() : targetRows) {
               for (const ref of rowLinks(row, rel.syncedColumnId)) {
                 const existing = links.get(ref.rowId);
                 if (!existing || existing.has(row.id)) continue;
