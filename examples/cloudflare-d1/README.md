@@ -118,6 +118,8 @@ editor.addEventListener('nobita-change', event => {
 
 The debounce groups rapid edits. Serializing requests lets each save use the storage version returned by the previous one. In a host app, surface save failures to the user. On `DocumentConflictError`, load the latest stored document and reconcile it with local edits before resuming.
 
+For a custom block, register its renderer and slash command on the mounted element’s `editor` instance. D1 persists the block’s `custom:` type and `props.data` in the document JSON. The ticket card example shows how to register `/案件` with `registerSlashBlock` and edit the card in a form. That example uses localStorage and runs independently of the Worker. [Ticket card example](../ticket-card/README.md) · [Host code](../ticket-card/host.js)
+
 ## Production notes
 
 - Replace `NOBITA_TOKEN` with Cloudflare Access, a signed session cookie, or your identity provider.
