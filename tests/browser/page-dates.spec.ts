@@ -57,6 +57,7 @@ test('dates follow successful content saves across page actions and reloads', as
 
 test('legacy creation date stays unknown and failed writes keep the last saved date', async ({ page }) => {
   await page.goto(url);
+  await expect(page.locator('#shell')).toBeVisible();
   await page.evaluate(() => {
     const state = JSON.parse(localStorage.getItem('nobita.demo.v2')!);
     delete state.pages[state.activeId].createdAt;
@@ -98,4 +99,15 @@ test('dates a pending edit at the successful write, including an early navigatio
   await page.locator('[data-page-id="getting-started"] .page-title').first().click();
   await page.locator(`[data-page-id="${created.doc.id}"] .page-title`).click();
   expect(await active(page)).toMatchObject({ createdAt: created.createdAt, updatedAt: savedAt.getTime() });
+});
+
+test('reverting a title before its save preserves the last content timestamp', async ({ page }) => {
+  await page.goto(url);
+  await page.locator('#new-page').click();
+  const created = await active(page);
+  const title = page.locator('.nb-title');
+  await title.fill('Temporary');
+  await title.fill('');
+  await expect(page.locator('#save-status')).toHaveAttribute('data-state', 'saved');
+  expect((await active(page)).updatedAt).toBe(created.updatedAt);
 });

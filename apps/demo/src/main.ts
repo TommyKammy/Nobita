@@ -30,7 +30,7 @@ import {
   type PageTreeNode,
 } from '@nobita/core';
 import {
-  createSeedState,
+  type DemoState,
   duplicatePageRecord,
   loadState,
   saveState,
@@ -38,14 +38,13 @@ import {
 } from './store';
 import './styles.css';
 
-const state = loadState();
-if (Object.keys(state.pages).length === 0) Object.assign(state, createSeedState());
+let state: DemoState;
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('App root missing');
 
 app.innerHTML = `
-  <div class="app" id="shell">
+  <div class="app" id="shell" hidden>
     <div class="sidebar-scrim" id="scrim"></div>
     <aside class="sidebar" aria-label="Workspace">
       <div class="brand-row">
@@ -150,7 +149,7 @@ const toastElement = $('#toast') as HTMLDivElement;
 let currentView: 'all' | 'favorites' | 'trash' = 'all';
 let trashQuery = '';
 let editor: NobitaEditor | null = null;
-const changedPages = new Set<PageRecord>();
+const changedPages = new Map<PageRecord, Pick<PageRecord, 'doc' | 'tags'>>();
 let saveFailed = false;
 let saving = false;
 let saveTimer = 0;
@@ -316,11 +315,10 @@ function handleDocChange(doc: Doc, source: string): void {
   const record = state.pages[id];
   if (!record || isTrashed(record)) return;
   const titleChanged = record.doc.title !== doc.title;
+  const edited = source !== 'replace' && (source !== 'set-title' || titleChanged);
+  if (edited) rememberContent(record);
   record.doc = doc;
-  if (source !== 'replace' && (source !== 'set-title' || titleChanged)) {
-    changedPages.add(record);
-    scheduleSave();
-  }
+  if (edited) scheduleSave();
   if (titleChanged) {
     const row = pageTree.querySelector<HTMLElement>(`[data-page-id="${CSS.escape(id)}"]`);
     const title = row?.querySelector<HTMLElement>('.page-title');
@@ -409,11 +407,31 @@ function formatDate(value?: number): string {
   return value ? new Date(value).toLocaleString() : 'Unknown';
 }
 
+function rememberContent(record: PageRecord): void {
+  if (!changedPages.has(record)) changedPages.set(record, { doc: record.doc, tags: record.tags });
+}
+
+function contentChanged(record: PageRecord, before: Pick<PageRecord, 'doc' | 'tags'>): boolean {
+  if (record.doc.title !== before.doc.title) return true;
+  if (record.tags !== before.tags) {
+    const tags = record.tags ?? [];
+    const prior = before.tags ?? [];
+    if (tags.length !== prior.length || tags.some(tag => !prior.includes(tag))) return true;
+  }
+  const blocks = record.doc.blocks;
+  const prior = before.doc.blocks;
+  if (blocks === prior) return false;
+  return blocks.length !== prior.length || blocks.some((block, i) =>
+    block !== prior[i] && JSON.stringify(block) !== JSON.stringify(prior[i])
+  );
+}
+
 function persist(): void {
   window.clearTimeout(saveTimer);
   const previous = new Map<PageRecord, number>();
   const now = Date.now();
-  for (const record of changedPages) {
+  for (const [record, before] of changedPages) {
+    if (!contentChanged(record, before)) continue;
     previous.set(record, record.updatedAt);
     record.updatedAt = now;
   }
@@ -823,8 +841,8 @@ function renamePage(id: string, title: string): void {
   const record = state.pages[id];
   if (!record) return;
   if (record.doc.title === title) return;
+  rememberContent(record);
   record.doc = { ...record.doc, title };
-  changedPages.add(record);
   persist();
   if (state.activeId === id) editor?.setTitle(title);
   editor?.refreshPageLinks();
@@ -997,8 +1015,8 @@ function openPageMenu(id: string, anchor: PopupAnchor): void {
         if (input === null) return;
         const tags = [...new Set(input.split(',').map(tag => tag.trim()).filter(Boolean))];
         if (tags.length === current.length && tags.every(tag => current.includes(tag))) return;
+        rememberContent(record);
         record.tags = tags;
-        changedPages.add(record);
         persist();
       },
     },
@@ -1573,13 +1591,21 @@ function initEvents(): void {
 
 /* ---------------- boot ---------------- */
 
-if (!state.activeId) {
-  state.activeId = firstActivePageId();
+async function start(): Promise<void> {
+  const loaded = await loadState();
+  state = loaded.state;
+  saveFailed = !loaded.saved;
+  if (!state.activeId) {
+    state.activeId = firstActivePageId();
+  }
+  applyTheme();
+  initEvents();
+  shell.removeAttribute('hidden');
+  mountEditor();
+  renderTree();
+  renderCrumbs();
+  renderFavorite();
+  updateStats();
 }
-applyTheme();
-initEvents();
-mountEditor();
-renderTree();
-renderCrumbs();
-renderFavorite();
-updateStats();
+
+void start();
