@@ -15,7 +15,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
   <img src="docs/media/nobita-mobile.png" alt="Nobita on a mobile viewport" width="280" />
 </p>
 
-- **113.9 kB gzipped** standalone ESM editor, including the document model, rich-text tables, database views and virtualized rendering.
+- **114.6 kB gzipped** standalone ESM editor, including the document model, rich-text tables, database views and virtualized rendering.
 - **Zero external runtime dependencies** for the core and standalone editor. React, Yjs and Automerge integrations are optional packages.
 - **Shadow DOM web component** — host styles cannot leak in, editor styles cannot leak out.
 - **Plain JSON documents** — persist to localStorage, IndexedDB, your API, or a file.
@@ -32,6 +32,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Tables | Separate `table` block with AFFiNE-style hover handles, row/column drag reorder, cell merging and splitting, rich-text cells (`cell.runs`), drag cell selection (copy/cut/paste/clear), hover add controls, row/column background colors, cell & handle right-click context menus, and HTML/Markdown table import |
 | Data views | Multiple named table and board views per database, AFFiNE-style view settings (`⋯`), per-view column order/widths/visibility, nested AND/OR filters, multi-sort, container-aware expandable search (auto-hidden below `560px`), footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state; rich-text cells (`B`/`I`/`U`/`S`/code toolbar & shortcuts, highlight/color rendering, IME & plain-text paste safe), editable record pages (`row.page.content`), board card covers (`coverColumnId`), board card add/open/drag-reorder/group actions (preserving multi-select tags), right-click menus on rows/columns/board cards, drag cell selection & fill, TSV copy/paste, readonly view switching & record-page viewing; 13 column types including formulas and bidirectional relations |
 | Menus | Slash menu with fuzzy search and block/page actions (move/copy/link/new page), block handle & Notion-style right-click context menus (single/multi-block, simple tables, database rows/columns/board cards; `Shift+Right-click` preserves native menu), selection toolbar with Turn into / Align / format / Color, link popover, `@` mention picker, `[[` page link picker |
+| Host extensions | [Custom block renderers](#host-defined-blocks) with portable JSON payloads, [per-editor UI dictionaries](#ui-dictionaries) and an optional Japanese locale |
 | Workspace | Pure DOM-free `@nobita/core` primitives for backlinks, cycle-safe page trees, breadcrumbs, reparenting, full-text search, and soft-delete Trash; wired into `apps/demo` with drag-and-drop sidebar tree, collapsible backlinks panel, Trash view (search, read-only preview banner, Undo toast, restore & permanent delete), and sidebar right-click menus |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
@@ -315,7 +316,50 @@ See [docs/public-api.md](docs/public-api.md) for the stable import surface, edit
 | `setUploadImage(handler)` | Replace the image upload adapter at runtime |
 | `destroy()` | Remove listeners and DOM |
 
-Options include `virtualize`, `collaboration`, `databaseProvider`, `resolveDatabase`, `onRelationSync`, `doc`, `readonly`, `theme` (`light` / `dark` / `auto`), `placeholder`, `autofocus`, `spellcheck`, `historyLimit`, `onChange(doc, { source })`, `onSelectionChange(selection)`, `mentionProvider`, `pageProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
+Options include `dictionary`, `virtualize`, `collaboration`, `databaseProvider`, `resolveDatabase`, `onRelationSync`, `doc`, `readonly`, `theme` (`light` / `dark` / `auto`), `placeholder`, `autofocus`, `spellcheck`, `historyLimit`, `onChange(doc, { source })`, `onSelectionChange(selection)`, `mentionProvider`, `pageProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
+
+### Host-defined blocks
+
+Give the block a stable `custom:` type, put its JSON payload in `props.data`, and register a renderer on the editor that will display it. This example mounts a ticket block in `<div id="tickets"></div>`.
+
+```ts
+import { createBlock, createDoc } from '@nobita/core';
+import { createEditor } from '@nobita/element';
+
+const ticket = createBlock('custom:ticket', {
+  text: 'Ticket #42',
+  props: { data: { number: 42 } },
+});
+const editor = createEditor(document.querySelector<HTMLElement>('#tickets')!, {
+  doc: createDoc({ blocks: [ticket] }),
+});
+
+editor.registerCustomBlock('custom:ticket', block => {
+  const data = block.props.data;
+  if (data && typeof data === 'object' && 'number' in data && typeof data.number === 'number') {
+    return `Ticket #${data.number}`;
+  }
+  return 'Ticket';
+});
+```
+
+The renderer receives the block and the editor’s read-only flag and can return a DOM node or plain text. Pass `null` as the renderer to unregister it. On a client with custom-block support but no matching renderer, the editor displays the type name. Editing another block and saving as Nobita JSON preserves the custom type, payload, text and children. Use JSON for this round trip. [Custom block API](docs/public-api.md#host-defined-blocks)
+
+### UI dictionaries
+
+Pass a partial `NobitaDictionary` to `createEditor` to override menu, toolbar and database labels on one editor. Keys are the original English messages. For example, `{ 'New Record': 'Add ticket' }` changes that label and leaves unspecified labels in English.
+
+For a Japanese UI, import `ja` and override any product-specific terms. The Japanese dictionary is a separate module.
+
+```ts
+import { createEditor, type NobitaDictionary } from '@nobita/element';
+import { ja } from '@nobita/element/locales/ja';
+
+const dictionary = { ...ja, 'New Record': '案件を追加' } satisfies NobitaDictionary;
+createEditor(document.querySelector<HTMLElement>('#editor')!, { dictionary });
+```
+
+With `<nobita-editor>`, assign `element.dictionary` before appending the element to the document. Each editor snapshots its dictionary when it mounts. Keep tokens such as `{count}` and `{name}` in overrides. User-entered content, column names and saved view names retain their original values. [Dictionary API](docs/public-api.md#ui-dictionaries)
 
 ### Mentions, links and images
 
@@ -368,7 +412,7 @@ The placeholder behaves like AFFiNE: it appears only on the **focused empty para
 ### `<nobita-editor>`
 
 Attributes: `readonly`, `theme`, `placeholder`, `min-height`, `doc` (JSON string).
-Properties: `collaboration`, `databaseProvider`, `resolveDatabase`, `onRelationSync`, `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `pageProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
+Properties: `dictionary` (set before connecting), `collaboration`, `databaseProvider`, `resolveDatabase`, `onRelationSync`, `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `pageProvider`, `uploadImage`, `onOpenPage`, `resolvePage`.
 Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`, `getSelectedBlockIds()`, `selectBlocks()`, `clearBlockSelection()`, `insertPageLink()`, `insertInlinePageLink()`, `refreshPageLinks()`, `setReadonly()`, `setTheme()`.
 Events: `nobita-change` (`{ doc, source }`), `nobita-selection` (`{ selection }`), `nobita-page-open` (`{ pageId }`), `nobita-ready`.
 
@@ -405,7 +449,7 @@ Dark mode is built in (`theme="dark"` or `auto`). The shadow root uses `color-sc
 
 ## Testing
 
-The suite covers 164 core tests, 16 storage tests, 110 collaboration tests and 288 Playwright browser tests as of the virtual rendering update. CI also checks TypeScript, the public API, bundle sizes and browser performance. [Verified CI run](https://github.com/TommyKammy/Nobita/actions/runs/45904113492)
+All 591 tests passed on `f98148c`: 165 core, 16 storage, 112 collaboration and 298 Playwright browser tests. CI also checks TypeScript, the public API, bundle sizes and browser performance. [Verified CI run](https://github.com/TommyKammy/Nobita/actions/runs/45914333320)
 
 ```bash
 pnpm typecheck
@@ -418,25 +462,33 @@ pnpm bench --strict
 
 ## Performance
 
-In a headless Chromium CI run with the production bundle, setting a document and rendering its initial viewport took the following times (median of five runs). Documents below the default 300-block threshold render in full. [Benchmark run](https://github.com/TommyKammy/Nobita/actions/runs/45904113492)
+In a headless Chromium CI run with the production bundle, setting a document and rendering its initial viewport took the following times (median of five runs). Documents below the default 300-block threshold render in full. [Benchmark run](https://github.com/TommyKammy/Nobita/actions/runs/45914333320)
 
 | Top-level blocks | 200 | 1,000 | 3,000 | 10,000 |
 | --- | ---: | ---: | ---: | ---: |
-| Initial render | 0.8 ms | 2.1 ms | 2.4 ms | 4.5 ms |
+| Initial render | 1.0 ms | 1.1 ms | 2.2 ms | 4.5 ms |
 
-Editing a single paragraph reuses the block index and cumulative heights when the layout structure stays the same. Line wrapping updates measured heights through `ResizeObserver`. In a local Chromium comparison with 50,000 paragraphs, median input time fell from 5.2 ms to 2.1 ms for edits in the middle of the document. [Virtual rendering measurements](https://github.com/TommyKammy/Nobita/pull/26)
+On the same CI runner, editing and scrolling a 10,000-block document took at most 5.7 ms and 7.5 ms respectively over 15 frames, with at most 86 top-level blocks mounted. Evaluating five formulas across 100 database rows took 0.30 ms (median of 15 evaluations). [CI measurements](https://github.com/TommyKammy/Nobita/actions/runs/45914333320)
 
-Grouped database searches reuse filtered and sorted rows. Bidirectional relations copy the target row array on the first write and build a row index for repeated lookups. Adding 4,000 links between two 4,000-row databases took 1.26 ms in a local Node benchmark, down from 75.16 ms for the same operation. These timings cover the model update. [Database measurements](https://github.com/TommyKammy/Nobita/pull/25)
+A separate local Chromium benchmark on the same revision measured a 40-row, four-column database mount and its block menu. Values are medians of nine run medians, including synchronous layout. Locale download time is excluded. [Dictionary benchmark procedure](docs/testing.md#dictionary-benchmark)
 
-The following sizes are in bytes, measured with `pnpm size` on Node.js 22.23.5. The core measurement bundles its public ESM entry and its imports. The standalone editor already includes the core code it uses. The collaboration module loads on demand and its size excludes the host's chosen CRDT adapter and library. [Bundle size report](https://github.com/TommyKammy/Nobita/actions/runs/45904113492)
+| Operation | Default English | Japanese dictionary |
+| --- | ---: | ---: |
+| Mount database | 5.9 ms | 6.9 ms |
+| Open block menu | 0.8 ms | 1.8 ms |
+
+For earlier before/after comparisons, see the [single-block virtualization benchmark](https://github.com/TommyKammy/Nobita/pull/26) and the [bulk relation update benchmark](https://github.com/TommyKammy/Nobita/pull/25).
+
+The following sizes are in bytes, measured on Node.js 22.23.5 using level-9 gzip. CI runs `pnpm size --strict`; the optional Japanese module was measured separately from the same build revision. The core measurement bundles its public ESM entry and its imports. The standalone editor already includes the core code it uses. The collaboration module loads on demand and its size excludes the host's chosen CRDT adapter and library. [Bundle size report](https://github.com/TommyKammy/Nobita/actions/runs/45914333320)
 
 | Artifact | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Core public entry (bundled ESM) | 145,422 | 38,067 |
-| Editor ESM (`nobita.js`) | 419,593 | 113,926 |
-| Editor IIFE (`nobita.global.js`) | 419,913 | 114,100 |
+| Core public entry (bundled ESM) | 145,968 | 38,228 |
+| Editor ESM (`nobita.js`) | 421,024 | 114,633 |
+| Editor IIFE (`nobita.global.js`) | 421,344 | 114,790 |
 | On-demand editor collaboration module | 8,362 | 3,314 |
-| Demo app main JavaScript bundle | 477,337 | 131,905 |
+| Optional Japanese dictionary (`locales/ja.js`) | 16,730 | 4,931 |
+| Demo app main JavaScript bundle | 477,788 | 132,639 |
 
 ## Repository layout
 
