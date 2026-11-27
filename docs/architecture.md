@@ -39,6 +39,8 @@ Invariants:
 - Untouched branches keep **reference identity** across updates. This is what
   makes rendering and history cheap.
 
+Core recognizes `custom:` block types during parsing. It retains the type and JSON payload in `props.data` alongside the standard text runs and children. A client with custom-block support can edit another block and save the document as Nobita JSON even when it has no renderer for the custom type. [Document parser](../packages/core/src/serialize.ts)
+
 Inline marks are five boolean flags (`bold`, `italic`, `underline`, `strike`,
 `code`) plus atomic mention and page references and three formatting values: `link` (a URL string), `highlight` (background)
 and `color` (foreground). Highlight and text color share the same eight named
@@ -246,7 +248,7 @@ plain text. HTML paste uses `DOMParser`; links are restricted to safe schemes.
 
 Placeholders are per focused block, matching AFFiNE. An empty paragraph shows
 the configured placeholder (`Type '/' for commands` by default); an empty
-heading shows `Heading 1/2/3/4/5/6`. Nothing is shown while the page title, a
+heading shows its localized heading label (English defaults range from `Heading 1` to `Heading 6`). Nothing is shown while the page title, a
 database cell, an image caption, or a non-empty block has focus, and the
 placeholder disappears as soon as the block has any text. The editor updates
 this state from the live selection, focus changes, composition events and store
@@ -382,17 +384,17 @@ See the [measured editing times and bundle sizes](../README.md#performance) and 
 
 ## Extension points
 
-Today, adding a block type means:
+### Custom block renderers
 
-1. Add the type and props to `core/types.ts`.
-2. Add defaults/conversion handling in `core/doc.ts` and `core/commands.ts`.
-3. Render it in `packages/element/src/block-view.ts`.
-4. Add a slash-menu entry and markdown rules.
-5. Add HTML/Markdown import/export cases.
+The host registers a renderer by type with `editor.registerCustomBlock(type, renderer)`. Each editor owns its renderer map, so two editors can display the same saved block differently. Registration, replacement and removal refresh matching mounted views. A block mounted later, including after virtual eviction, reads the current map.
 
-This is intentionally explicit: there is no plugin runtime yet, and no hidden
-schema registry to fight. A formal block registry can be layered on without
-changing the document format.
+`BlockView` places the returned DOM node or text inside a non-editable widget and renders the block’s children normally. When the renderer is absent or throws, the widget displays the type name. Passing `null` removes the renderer. Registration changes the view only. Built-in slash commands and Markdown rules are maintained separately. [Host-defined block API](public-api.md#host-defined-blocks) · [Block view](../packages/element/src/block-view.ts)
+
+### UI dictionaries
+
+At construction the editor copies the host’s message overrides. Menus, formatting toolbars and database views use that instance’s translator for visible text and accessible names. A missing key resolves to its English message. User content and saved property names stay in the document model. The Japanese messages ship in a separate module, `@nobita/element/locales/ja`. [Dictionary API](public-api.md#ui-dictionaries)
+
+The slash menu matches both translated and original English command labels. During IME composition the editor leaves candidate navigation and confirmation to the input method and refreshes the slash query when composition ends. [Menu implementation](../packages/element/src/menu.ts)
 
 ## Known limitations
 

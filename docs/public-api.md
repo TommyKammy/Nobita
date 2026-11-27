@@ -9,6 +9,7 @@ Use the package entry points declared in each package’s `exports` map. The cor
 | `@nobita/core` | `@nobita/core` | Document model, commands, serialization, Markdown/HTML |
 | `@nobita/element` | `@nobita/element` | Editor, web component, clipboard helpers, icons |
 | `@nobita/element` | `@nobita/element/styles` | Named `styles` CSS string for host integrations |
+| `@nobita/element` | `@nobita/element/locales/ja` | Named `ja` export with Japanese UI messages |
 | `@nobita/react` | `@nobita/react` | React wrapper around `<nobita-editor>` |
 | `@nobita/storage` | `@nobita/storage` | Optional persistence adapters |
 | `@nobita/storage` | `@nobita/storage/sql` | SQL document store, schema and driver types |
@@ -24,7 +25,7 @@ Stable exports:
 - `createEditor(host, options)`
 - `NobitaEditorElement`
 - `defineNobitaEditor(tagName?)`
-- `NobitaOptions`
+- `NobitaOptions`, `NobitaDictionary`, `CustomBlockRenderer`
 - `NobitaTheme`
 - `NobitaChangeDetail`, `NobitaPageOpenDetail`
 - `MentionItem`, `MentionProvider`, `PageProvider`, `ImageUploadResult`, `ImageUploadHandler`
@@ -64,7 +65,7 @@ these files directly. The core `DatabaseView` type is exported from
 
 ### UI dictionaries
 
-Use the original English message as the key. Omit a key to keep its English label.
+Use the original English message as the key. For example, `{ dictionary: { 'New Record': 'Add ticket' } }` changes one label and keeps the remaining labels in English.
 The optional Japanese module can be imported on its own or spread into a host dictionary.
 
 ```ts
@@ -81,6 +82,8 @@ menu items, toolbar tooltips and accessible names. Keep placeholder names such a
 `{count}` and `{name}` in translated messages. Document content, stored view names and
 host-supplied search results retain their original values. Slash commands also accept
 their English search terms.
+
+### Mentions, uploads and page references
 
 `MentionProvider.search(query)` may return items synchronously or as a Promise. Each item is
 `{ id, label, kind?, keywords? }`; the selected item becomes an inline
@@ -113,7 +116,7 @@ owns loading and routing.
 `insertMarkdown(markdown)`, `insertPageLink(page, { afterBlockId? })`,
 `insertInlinePageLink(page)`, `refreshPageLinks()`,
 `getBlockLink(blockId)`, `setMentionProvider(provider)`, `setPageProvider(provider)`,
-`setUploadImage(handler)`, `destroy()`.
+`setUploadImage(handler)`, `registerCustomBlock(type, renderer)`, `destroy()`.
 
 `scrollToBlock(id)` mounts and reveals a nested or top-level block without moving the caret. Its boolean result indicates whether the editor found the block. After replacing a host-provided database snapshot, call `editor.refreshDatabases()` to refresh formula and relation views. `setRelationSync(callback)` replaces the external relation callback.
 
@@ -121,7 +124,7 @@ owns loading and routing.
 
 Attributes: `readonly`, `theme`, `placeholder`, `min-height`, `doc` (JSON string).
 
-Properties: `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `pageProvider`,
+Properties: `dictionary` (set before connection), `doc`, `value` (JSON), `markdown`, `editor`, `mentionProvider`, `pageProvider`,
 `uploadImage`, `onOpenPage`, `resolvePage`, `collaboration`, `databaseProvider`, `resolveDatabase`, `onRelationSync`.
 
 Methods: `focus()`, `undo()`, `redo()`, `getMarkdown()`, `getJSON()`,
@@ -169,6 +172,7 @@ If a renderer is absent or throws while displaying an unfamiliar payload, the ed
 Stable exports include:
 
 - Document types: `Doc`, `Block`, `BlockProps`, `InlineRun`, `InlineMark`, `MentionRef`, `PageInfo`, `TableData`, `TableRow`, `TableColumn`, `TableCell`, `EditorSelection`
+- Custom blocks: `CustomBlockType`, `JsonValue`, `isCustomBlockType(type)`
 - Serialization: `parseDoc`, `docToJSON`, `blocksToMarkdown`, `markdownToBlocks`,
   `blocksToHtml`
 - Editing commands: `setBlockType`, `setBlockAlign`, `toggleChecked`,
