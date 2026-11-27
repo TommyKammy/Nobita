@@ -75,6 +75,10 @@ app.innerHTML = `
         <div class="trash-filter" id="trash-filter" hidden>
           <input type="search" id="trash-search" placeholder="Filter trash…" aria-label="Filter trash" />
         </div>
+        <search class="tag-filter" id="tag-filter" hidden>
+          <label for="filter-tag">Tag</label>
+          <select id="filter-tag"><option value="">All tags</option></select>
+        </search>
         <div id="page-tree"></div>
       </div>
       <div class="sidebar-foot">
@@ -103,6 +107,14 @@ app.innerHTML = `
           </div>
         </div>
         <div id="editor-host"></div>
+        <section id="note-tags" class="note-tags" aria-label="Note tags" hidden>
+          <span class="tags-label">Tags</span>
+          <div id="tag-chips" class="tag-chips"></div>
+          <form id="tag-form" aria-label="Add a tag">
+            <input id="tag-input" name="tag" aria-label="Tag name" placeholder="Tag name" autocomplete="off">
+            <button type="submit">Add tag</button>
+          </form>
+        </section>
         <p id="page-dates" class="page-dates"></p>
         <section class="backlinks" id="backlinks" aria-label="Backlinks" hidden></section>
         <div class="empty-state" id="empty-state" hidden>
@@ -133,6 +145,12 @@ const newPageButton = $('#new-page') as HTMLButtonElement;
 const emptyTrashButton = $('#empty-trash') as HTMLButtonElement;
 const trashFilter = $('#trash-filter') as HTMLDivElement;
 const trashSearch = $('#trash-search') as HTMLInputElement;
+const filterTag = $<HTMLSelectElement>('#filter-tag');
+const tagInput = $<HTMLInputElement>('#tag-input');
+const tagForm = $<HTMLFormElement>('#tag-form');
+const tagChips = $<HTMLElement>('#tag-chips');
+const noteTags = $<HTMLElement>('#note-tags');
+const tagFilter = $<HTMLElement>('#tag-filter');
 const trashBanner = $('#trash-banner') as HTMLDivElement;
 const crumbs = $('#crumbs') as HTMLDivElement;
 const favoriteButton = $('#favorite') as HTMLButtonElement;
@@ -262,6 +280,7 @@ function iconFor(record: PageRecord): string {
 /* ---------------- editor ---------------- */
 
 function syncEditorReadonly(): void {
+  displayTags();
   const record = activeRecord();
   const trashed = Boolean(record && isTrashed(record));
   trashBanner.hidden = !trashed;
@@ -495,6 +514,10 @@ function openPage(id: string, focusBlockId?: string): void {
 }
 
 function newPage(parentId: string | null = null): void {
+  if (filterTag.value) {
+    filterTag.value = '';
+    currentView = 'all';
+  }
   if (currentView === 'trash') currentView = 'all';
   const created = createWorkspacePage('', parentId);
   state.activeId = created.id;
@@ -558,6 +581,46 @@ function movePageInTree(
 
 /* ---------------- sidebar ---------------- */
 
+function displayTags(): void {
+  const record = activeRecord();
+  const readonly = !record || isTrashed(record);
+  noteTags.hidden = !record || (readonly && !record.tags?.length);
+  tagForm.hidden = readonly;
+  if (noteTags.dataset.page !== state.activeId || readonly) tagInput.value = '';
+  noteTags.dataset.page = state.activeId ?? '';
+  tagChips.replaceChildren();
+  if (!record) return;
+  for (const tag of record.tags ?? []) {
+    const chip = document.createElement('span');
+    chip.className = 'tag-chip';
+    chip.textContent = tag;
+    if (!readonly) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.setAttribute('aria-label', `Remove tag ${tag}`);
+      remove.addEventListener('click', () => {
+        saveTags(record, (record.tags ?? []).filter(value => value !== tag));
+        tagInput.focus();
+      });
+      chip.append(remove);
+    }
+    tagChips.append(chip);
+  }
+}
+
+function saveTags(record: PageRecord, values: string[]): void {
+  if (isTrashed(record)) return;
+  const tags = [...new Set(values.map(tag => tag.trim()).filter(Boolean))];
+  const current = record.tags ?? [];
+  if (tags.length === current.length && tags.every(tag => current.includes(tag))) return;
+  rememberContent(record);
+  record.tags = tags;
+  persist();
+  if (record === activeRecord()) displayTags();
+  renderTree();
+}
+
 function renderTree(): void {
   pageTree.replaceChildren();
   const inputs = treeInputs();
@@ -573,6 +636,7 @@ function renderTree(): void {
     button.dataset.active = String(button.dataset.view === currentView);
   }
 
+  tagFilter.hidden = currentView === 'trash';
   if (currentView === 'trash') {
     const needle = trashQuery.trim().toLowerCase();
     const items = trashed
@@ -593,15 +657,25 @@ function renderTree(): void {
     return;
   }
 
-  if (currentView === 'favorites') {
-    const favorites = Object.entries(state.pages)
-      .filter(([, record]) => !isTrashed(record) && record.favorite)
+  const selected = filterTag.value;
+  const choices = new Set(active.flatMap(item => state.pages[item.id]?.tags ?? []));
+  if (selected) choices.add(selected);
+  filterTag.replaceChildren(new Option('All tags', ''));
+  for (const tag of [...choices].sort((a, b) => a.localeCompare(b))) {
+    filterTag.add(new Option(tag, tag));
+  }
+  filterTag.value = selected;
+  if (currentView === 'favorites' || selected) {
+    const matches = Object.entries(state.pages)
+      .filter(([, record]) => !isTrashed(record) &&
+        (currentView !== 'favorites' || record.favorite) &&
+        (!selected || record.tags?.includes(selected)))
       .sort((a, b) => b[1].updatedAt - a[1].updatedAt);
-    if (favorites.length === 0) {
-      showEmptyTree('No favorites yet. Star a page to keep it close.');
+    if (matches.length === 0) {
+      showEmptyTree(selected ? 'No pages with this tag.' : 'No favorites yet. Star a page to keep it close.');
       return;
     }
-    for (const [id, record] of favorites) pageTree.append(pageRow(id, record, 0, false, false));
+    for (const [id, record] of matches) pageTree.append(pageRow(id, record, 0, false, false));
     return;
   }
 
@@ -1013,11 +1087,7 @@ function openPageMenu(id: string, anchor: PopupAnchor): void {
         const current = record.tags ?? [];
         const input = window.prompt('Tags (comma-separated)', current.join(', '));
         if (input === null) return;
-        const tags = [...new Set(input.split(',').map(tag => tag.trim()).filter(Boolean))];
-        if (tags.length === current.length && tags.every(tag => current.includes(tag))) return;
-        rememberContent(record);
-        record.tags = tags;
-        persist();
+        saveTags(record, input.split(','));
       },
     },
     { label: 'Duplicate', icon: icon.duplicate, action: () => duplicatePage(id) },
@@ -1057,6 +1127,7 @@ function duplicatePage(id: string): void {
 }
 
 function showEmptyWorkspace(): void {
+  displayTags();
   editor?.setDoc(createDoc());
   editorHost.hidden = true;
   backlinksPanel.hidden = true;
@@ -1489,6 +1560,15 @@ function applyTheme(): void {
 }
 
 function initEvents(): void {
+  filterTag.addEventListener('change', renderTree);
+  tagForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const record = activeRecord();
+    if (!record || isTrashed(record)) return;
+    saveTags(record, [...(record.tags ?? []), ...tagInput.value.split(',')]);
+    tagInput.value = '';
+    tagInput.focus();
+  });
   for (const button of document.querySelectorAll<HTMLElement>('.nav-item')) {
     button.addEventListener('click', () => {
       const view = button.dataset.view;
