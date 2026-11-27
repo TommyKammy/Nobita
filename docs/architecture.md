@@ -388,7 +388,7 @@ See the [measured editing times and bundle sizes](../README.md#performance) and 
 
 The host registers a renderer by type with `editor.registerCustomBlock(type, renderer)`. Each editor owns its renderer map, so two editors can display the same saved block differently. Registration, replacement and removal refresh matching mounted views. A block mounted later, including after virtual eviction, reads the current map.
 
-`BlockView` places the returned DOM node or text inside a non-editable widget and renders the block’s children normally. When the renderer is absent or throws, the widget displays the type name. Passing `null` removes the renderer. Registration changes the view only. Built-in slash commands and Markdown rules are maintained separately. [Host-defined block API](public-api.md#host-defined-blocks) · [Block view](../packages/element/src/block-view.ts)
+`BlockView` places the returned DOM node or text inside a non-editable widget and renders the block’s children normally. When the renderer is absent or throws, the widget displays the type name. Passing `null` removes the renderer. Registration changes the view only. An independent, editor-local `registerSlashBlock` registry supplies host insertion commands to the slash menu. [Host-defined block API](public-api.md#host-defined-blocks) · [Block view](../packages/element/src/block-view.ts)
 
 ### UI dictionaries
 

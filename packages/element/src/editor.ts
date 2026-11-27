@@ -108,6 +108,15 @@ import { LinkPopover, Toolbar, type ToolbarMark } from './toolbar.js';
 
 export type NobitaTheme = 'light' | 'dark' | 'auto';
 
+/** A host command offered in a childless paragraph containing only the slash query. */
+export interface SlashBlockCommand {
+  id: string;
+  label: string;
+  keywords?: readonly string[];
+  /** Return a fresh custom block tree with unique IDs. */
+  create(): Block;
+}
+
 export interface MentionItem {
   id: string;
   label: string;
@@ -269,6 +278,7 @@ export class NobitaEditor implements BlockHost {
   #pendingMarks: InlineMark | undefined;
   #lastSelection: EditorSelection | null = null;
   #lastSelectionKey = '';
+  #slashBlocks = new Map<string, SlashBlockCommand>();
   #slash: SlashState | null = null;
   #mention: MentionState | null = null;
   #mentionQueryToken = 0;
@@ -292,14 +302,7 @@ export class NobitaEditor implements BlockHost {
   #onDocumentSelection = (): void => {
     this.#handleSelectionChange();
   };
-  #onImmediateSelection = (): void => {
-    this.#handleSelectionChange();
-  };
-  #onScroll = (): void => {
-    this.#toolbar.hide();
-    this.#linkPopover.hide();
-  };
-  #onResize = (): void => {
+  #onViewportChange = (): void => {
     this.#toolbar.hide();
     this.#linkPopover.hide();
   };
@@ -538,6 +541,19 @@ export class NobitaEditor implements BlockHost {
     for (const view of this.#viewIndex.values()) {
       if (view.block.type === type) view.renderCustomBlock();
     }
+  }
+
+  registerSlashBlock(command: SlashBlockCommand): () => void {
+    // Snapshot each registration so even registering the same object twice has its own disposer.
+    const { id, label, keywords } = command;
+    const entry = { id, label, ...(keywords && { keywords }), create: () => command.create() };
+    this.#slashBlocks.set(entry.id, entry);
+    if (this.#slash) this.#menu.close();
+    return () => {
+      if (this.#slashBlocks.get(entry.id) !== entry) return;
+      this.#slashBlocks.delete(entry.id);
+      if (this.#slash) this.#menu.close();
+    };
   }
 
   getDoc(): Doc {
@@ -801,12 +817,6 @@ export class NobitaEditor implements BlockHost {
     this.#bodyEvents.abort();
     this.#unsubscribe();
     this.#unsubscribeSelection();
-    document.removeEventListener('selectionchange', this.#onDocumentSelection);
-    this.root.removeEventListener('pointerup', this.#onImmediateSelection, true);
-    this.root.removeEventListener('keyup', this.#onImmediateSelection, true);
-    window.removeEventListener('scroll', this.#onScroll, true);
-    window.removeEventListener('resize', this.#onResize);
-    window.removeEventListener('keydown', this.#onWindowKeyDown, true);
     this.#menu.close(false);
     this.#mention = null;
     this.#pageLink = null;
@@ -1358,7 +1368,7 @@ export class NobitaEditor implements BlockHost {
   addBlockAfter(blockId: string): void {
     if (this.#readonly) return;
     const { doc, block } = appendParagraphAfter(this.store.doc, blockId);
-    this.#commit(doc, { anchor: { blockId: block.id, offset: 0 }, focus: { blockId: block.id, offset: 0 } });
+    this.#commit(doc, caretSelection({ blockId: block.id, offset: 0 }));
     this.#focusBlock(block.id, 0);
   }
 
@@ -1849,30 +1859,29 @@ export class NobitaEditor implements BlockHost {
   }
 
   #bindChrome(): void {
+    const signal = this.#bodyEvents.signal;
+    const capture = { capture: true, signal };
     this.#overlay.addEventListener(
       'click',
       event => {
         const target = event.target instanceof Element ? event.target : null;
         if (target) this.#handleInlineNavClick(target, event);
       },
-      { signal: this.#bodyEvents.signal }
+      { signal }
     );
-    document.addEventListener('selectionchange', this.#onDocumentSelection);
-    this.root.addEventListener('pointerup', this.#onImmediateSelection, true);
-    this.root.addEventListener('keyup', this.#onImmediateSelection, true);
-    window.addEventListener('scroll', this.#onScroll, true);
-    window.addEventListener('resize', this.#onResize);
-    window.addEventListener('keydown', this.#onWindowKeyDown, true);
+    document.addEventListener('selectionchange', this.#onDocumentSelection, { signal });
+    this.root.addEventListener('pointerup', this.#onDocumentSelection, capture);
+    this.root.addEventListener('keyup', this.#onDocumentSelection, capture);
+    window.addEventListener('scroll', this.#onViewportChange, capture);
+    window.addEventListener('resize', this.#onViewportChange, { signal });
+    window.addEventListener('keydown', this.#onWindowKeyDown, capture);
     this.#tail.addEventListener('mousedown', event => {
       event.preventDefault();
       const blocks = this.store.doc.blocks;
       const last = blocks[blocks.length - 1];
       if (!last) {
         const block = createBlock('paragraph');
-        this.#commit({ ...this.store.doc, blocks: [block] }, {
-          anchor: { blockId: block.id, offset: 0 },
-          focus: { blockId: block.id, offset: 0 },
-        });
+        this.#commit({ ...this.store.doc, blocks: [block] }, caretSelection({ blockId: block.id, offset: 0 }));
         this.#focusBlock(block.id, 0);
         return;
       }
@@ -2551,10 +2560,7 @@ export class NobitaEditor implements BlockHost {
       this.#focusBlock(blockId, point.offset);
       return;
     }
-    this.#commit(moveBlock(this.store.doc, blockId, sibling.id, direction), {
-      anchor: point,
-      focus: point,
-    });
+    this.#commit(moveBlock(this.store.doc, blockId, sibling.id, direction), caretSelection(point));
     this.#focusBlock(blockId, point.offset);
   }
 
@@ -3168,10 +3174,7 @@ export class NobitaEditor implements BlockHost {
     const caret: EditorSelection | null =
       selection ??
       (this.#focusedBlockId
-        ? {
-            anchor: { blockId: this.#focusedBlockId, offset: 0 },
-            focus: { blockId: this.#focusedBlockId, offset: 0 },
-          }
+        ? caretSelection({ blockId: this.#focusedBlockId, offset: 0 })
         : null);
     let doc = this.store.doc;
     for (const id of ids) doc = setBlockAlign(doc, id, align);
@@ -3379,18 +3382,26 @@ export class NobitaEditor implements BlockHost {
     });
   }
 
+  #queryCaret(blockId: string): number {
+    const selection = this.#currentSelection();
+    return selection && this.#isCollapsed(selection) && selection.anchor.blockId === blockId
+      ? selection.anchor.offset : -1;
+  }
+
+  #wordQuery(state: SlashState, end: number): string | null {
+    if (end <= state.start) return null;
+    const block = findBlock(this.doc.blocks, state.blockId);
+    if (!block) return null;
+    const query = plainText(block.text).slice(state.start + 1, end);
+    return /\s/u.test(query) ? null : query;
+  }
+
   #syncMentionMenu(forceSearch = false): void {
     const mention = this.#mention;
     if (!mention) return;
-    const selection = this.#currentSelection();
-    const valid =
-      selection !== null &&
-      this.#isCollapsed(selection) &&
-      selection.anchor.blockId === mention.blockId;
-    const block = valid ? findBlock(this.store.doc.blocks, mention.blockId) : undefined;
-    const end = valid ? selection.anchor.offset : -1;
-    const query = block && end > mention.start ? plainText(block.text).slice(mention.start + 1, end) : '';
-    if (!block || end <= mention.start || /[\s\n]/u.test(query)) {
+    const end = this.#queryCaret(mention.blockId);
+    const query = this.#wordQuery(mention, end);
+    if (query === null) {
       if (this.#mention === mention) this.#mention = null;
       this.#menu.close();
       return;
@@ -3418,7 +3429,6 @@ export class NobitaEditor implements BlockHost {
     mention: MentionState
   ): MenuItem[] {
     return items.map(item => ({
-      id: `mention-${item.id}`,
       label: item.label,
       icon: icon.user,
       group: this.t('Mentions'),
@@ -3522,13 +3532,8 @@ export class NobitaEditor implements BlockHost {
   #syncPageLinkMenu(forceSearch = false): void {
     const state = this.#pageLink;
     if (!state) return;
-    const selection = this.#currentSelection();
-    const valid =
-      selection !== null &&
-      this.#isCollapsed(selection) &&
-      selection.anchor.blockId === state.blockId;
-    const block = valid ? findBlock(this.store.doc.blocks, state.blockId) : undefined;
-    const end = valid ? selection.anchor.offset : -1;
+    const end = this.#queryCaret(state.blockId);
+    const block = end >= 0 ? findBlock(this.doc.blocks, state.blockId) : undefined;
     const minEnd = state.start + state.triggerLength;
     const text = block ? plainText(block.text) : '';
     const triggerOk =
@@ -3602,7 +3607,6 @@ export class NobitaEditor implements BlockHost {
         ? `<span>${escapeMenuText(page.icon.trim())}</span>`
         : icon.page;
       return {
-        id: `page-${page.id}`,
         label: title,
         icon: iconHtml,
         group: this.t('Pages'),
@@ -3617,7 +3621,6 @@ export class NobitaEditor implements BlockHost {
       items.some(item => (item.title.trim() || this.t('Untitled page')).toLowerCase() === trimmed.toLowerCase());
     if (provider?.create && trimmed.length > 0 && !hasExact) {
       out.push({
-        id: `page-create-${trimmed}`,
         label: this.t('Create "{name}"', trimmed),
         description: this.t('New page'),
         icon: icon.plus,
@@ -3826,49 +3829,46 @@ export class NobitaEditor implements BlockHost {
     this.#pageLink = null;
     const slash = { blockId, start: slashOffset, end: slashOffset + 1 };
     this.#slash = slash;
-    const removeSlash = (): void => {
-      this.#removeSlashQuery(slash);
-    };
+    const afterQuery = <Args extends unknown[]>(run: (...args: Args) => void) =>
+      (...args: Args) => {
+        this.#removeSlashQuery(slash);
+        run(...args);
+      };
     const rect = this.#caretRect(blockId);
     const pageProvider = this.#options.pageProvider;
     const items = buildSlashMenuItems({
       t: this.t,
-      convert: (type, props) => {
-        removeSlash();
-        this.#convertBlock(blockId, type, props);
-      },
+      convert: afterQuery((type, props) => this.#convertBlock(blockId, type, props)),
       insertText: text => this.#insertSlashText(slash, blockId, text),
-      alignBlock: align => {
-        removeSlash();
-        this.#alignBlockAt(blockId, align, slashOffset);
-      },
-      moveBlock: position => {
-        removeSlash();
-        this.#moveBlockVertically(blockId, position, slashOffset);
-      },
-      copyBlock: () => {
-        removeSlash();
-        this.#copyBlockToClipboard(blockId, slashOffset);
-      },
-      ...(pageProvider
-        ? {
-            linkPage: () => {
-              removeSlash();
-              this.#focusBlock(blockId, slashOffset);
-              void this.#openPageLinkMenu(blockId, slashOffset, 'block');
-            },
-          }
-        : {}),
-      ...(pageProvider?.create
-        ? {
-            createPage: () => {
-              removeSlash();
-              this.#focusBlock(blockId, slashOffset);
-              void this.#createSlashPage(blockId, slashOffset);
-            },
-          }
-        : {}),
+      alignBlock: afterQuery(align => this.#alignBlockAt(blockId, align, slashOffset)),
+      moveBlock: afterQuery(position => this.#moveBlockVertically(blockId, position, slashOffset)),
+      copyBlock: afterQuery(() => this.#copyBlockToClipboard(blockId, slashOffset)),
+      ...(pageProvider && {
+        linkPage: afterQuery(() => {
+          this.#focusBlock(blockId, slashOffset);
+          void this.#openPageLinkMenu(blockId, slashOffset, 'block');
+        }),
+      }),
+      ...(pageProvider?.create && {
+        createPage: afterQuery(() => {
+          this.#focusBlock(blockId, slashOffset);
+          void this.#createSlashPage(blockId, slashOffset);
+        }),
+      }),
     });
+    if (this.#slashBlocks.size && !slashOffset) {
+      const block = findBlock(this.doc.blocks, blockId);
+      if (block?.type === 'paragraph' && !block.children.length && plainText(block.text) === '/') {
+        for (const command of this.#slashBlocks.values()) {
+          items.push({
+            label: command.label,
+            ...(command.keywords && { keywords: command.keywords }),
+            icon: icon.file,
+            action: () => this.#insertSlashBlock(slash, command),
+          });
+        }
+      }
+    }
     this.#menu.open({
       items,
       anchor: rectAnchor(rect),
@@ -3881,6 +3881,33 @@ export class NobitaEditor implements BlockHost {
     });
   }
 
+  #insertSlashBlock(slash: SlashState, command: SlashBlockCommand): void {
+    const { blockId, end } = slash;
+    const doc = this.doc;
+    const canInsert = () => !this.#readonly && !this.#composing && !this.#destroyed &&
+      this.doc === doc && this.#slashBlocks.get(command.id) === command && this.#queryCaret(blockId) === end;
+    const block = findBlock(doc.blocks, blockId);
+    if (!canInsert() || block?.type !== 'paragraph' || block.children.length ||
+        plainText(block.text) !== '/' + this.#menu.query) return;
+    const card = command.create();
+    if (!canInsert() || !isCustomBlockType(card.type)) return;
+    const tree = flattenBlocks([card]);
+    const ids = new Set(tree.map(child => child.id));
+    if (ids.size !== tree.length || flattenBlocks(doc.blocks).some(child => ids.has(child.id))) return;
+    const clean = replaceBlockText(doc, blockId, []);
+    const caret = caretSelection({ blockId, offset: 0 });
+    // A collaboration adapter owns undo snapshots and records changes as separate transactions.
+    if (this.#disconnect) {
+      this.store.update(() => clean, { history: false, selection: caret });
+      if (this.doc !== clean || this.#readonly || this.#destroyed) return;
+    }
+    this.store.update(() => insertBlockRelative(clean, blockId, card, 'before'), {
+      undoBase: { doc: clean, selection: caret },
+      selection: caret,
+    });
+    this.#focusBlock(blockId, 0);
+  }
+
   #syncSlashMenu(): void {
     const slash = this.#slash;
     if (!slash || this.#composing) return;
@@ -3888,24 +3915,9 @@ export class NobitaEditor implements BlockHost {
       this.#slash = null;
       return;
     }
-    const selection = this.#currentSelection();
-    if (!selection || !this.#isCollapsed(selection) || selection.anchor.blockId !== slash.blockId) {
-      this.#menu.close();
-      return;
-    }
-    const block = findBlock(this.store.doc.blocks, slash.blockId);
-    if (!block) {
-      this.#menu.close();
-      return;
-    }
-    const text = plainText(block.text);
-    const end = selection.anchor.offset;
-    if (end <= slash.start) {
-      this.#menu.close();
-      return;
-    }
-    const query = text.slice(slash.start + 1, end);
-    if (/[\s\n]/u.test(query)) {
+    const end = this.#queryCaret(slash.blockId);
+    const query = this.#wordQuery(slash, end);
+    if (query === null) {
       this.#menu.close();
       return;
     }
@@ -3923,10 +3935,7 @@ export class NobitaEditor implements BlockHost {
     this.#slash = null;
     this.store.update(() => next, {
       history: false,
-      selection: {
-        anchor: { blockId: slash.blockId, offset: slash.start },
-        focus: { blockId: slash.blockId, offset: slash.start },
-      },
+      selection: caretSelection({ blockId: slash.blockId, offset: slash.start }),
     });
   }
 
@@ -3978,10 +3987,7 @@ export class NobitaEditor implements BlockHost {
         this.#focusBlock(blockId, 0);
         return;
       }
-      this.#commit(replaceBlockText(this.store.doc, blockId, []), {
-        anchor: { blockId, offset: 0 },
-        focus: { blockId, offset: 0 },
-      });
+      this.#commit(replaceBlockText(this.store.doc, blockId, []), caretSelection({ blockId, offset: 0 }));
       return;
     }
     const location = locateBlock(this.store.doc.blocks, blockId);

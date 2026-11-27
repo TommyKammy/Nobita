@@ -20,6 +20,9 @@ export default defineConfig({
     modulePreload: { polyfill: false },
     sourcemap: true,
     minify: 'terser',
-    terserOptions: { mangle: { properties: { regex: new RegExp('^(' + controllerMethods.join('|') + ')$') } } },
+    terserOptions: {
+      compress: { passes: 2, sequences: false },
+      mangle: { properties: { regex: new RegExp('^(' + controllerMethods.join('|') + ')$') } },
+    },
   },
 });

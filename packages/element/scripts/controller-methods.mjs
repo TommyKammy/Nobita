@@ -1,5 +1,6 @@
 // Internal view and controller members. Host API and document property names stay public.
 export const controllerMethods = [
+  'renderCustomBlock', 'englishLabel', 'alignBlock', 'linkPage',
   'focusAfterHistory', 'focusFirstCell', 'focusCell', 'caretOffset', 'setSelected', 'onHide',
   'setQuery', 'setItems', 'isVisible', 'isOpen', 'copyMarkdown', 'copyBlocks', 'copyLink',
   'rootElement', 'instanceId', 'pointFromCaret', 'keepTrigger', 'restoreFocus', 'filterable',

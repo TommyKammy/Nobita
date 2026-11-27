@@ -3,12 +3,11 @@ import { el } from './dom.js';
 import { dismissFloating, placeFloating } from './floating.js';
 
 export interface MenuItem {
-  id: string;
   label: string;
   description?: string;
   icon: string;
   group?: string;
-  keywords?: string[];
+  keywords?: readonly string[];
   englishLabel?: string;
   shortcut?: string;
   action: () => void;
@@ -74,6 +73,10 @@ export class Menu {
       const item = this.#filtered[index];
       if (item) this.#run(item);
     });
+  }
+
+  get query(): string {
+    return this.#query;
   }
 
   get isOpen(): boolean {
