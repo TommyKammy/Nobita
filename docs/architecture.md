@@ -388,13 +388,19 @@ See the [measured editing times and bundle sizes](../README.md#performance) and 
 
 The host registers a renderer by type with `editor.registerCustomBlock(type, renderer)`. Each editor owns its renderer map, so two editors can display the same saved block differently. Registration, replacement and removal refresh matching mounted views. A block mounted later, including after virtual eviction, reads the current map.
 
-`BlockView` places the returned DOM node or text inside a non-editable widget and renders the block’s children normally. When the renderer is absent or throws, the widget displays the type name. Passing `null` removes the renderer. Registration changes the view only. An independent, editor-local `registerSlashBlock` registry supplies host insertion commands to the slash menu. [Host-defined block API](public-api.md#host-defined-blocks) · [Block view](../packages/element/src/block-view.ts)
+`BlockView` places the returned DOM node or text inside a non-editable widget and renders the block’s children normally. When the renderer is absent or throws, the widget displays the type name. Passing `null` removes the renderer. Renderer registration changes only the view. [Host-defined block API](public-api.md#host-defined-blocks) · [Block view](../packages/element/src/block-view.ts)
+
+### Host-defined slash commands
+
+Each editor keeps its own command registry keyed by the host’s command ID. For the ticket card, `acme.insert-ticket` identifies the menu command and `custom:ticket` identifies the block type in saved JSON. Typing `/案件` in an empty, childless paragraph filters the menu using the host’s label and keywords. Choosing the command calls its factory. The editor checks the current query, caret, editability and registration, and rejects a block tree with duplicate or conflicting IDs. [Ticket card host code](../examples/ticket-card/host.js) · [Editor implementation](../packages/element/src/editor.ts)
+
+Insertion clears the query, inserts the card immediately before the original paragraph and focuses that paragraph at offset zero. Local history records the cleared paragraph as the undo target. With a collaboration adapter, the editor clears the query in a separate transaction before inserting the card, so undoing the insertion also leaves an empty paragraph on peers. [Slash command regressions](../tests/browser/slash-block.spec.ts)
 
 ### UI dictionaries
 
 At construction the editor copies the host’s message overrides. Menus, formatting toolbars and database views use that instance’s translator for visible text and accessible names. A missing key resolves to its English message. User content and saved property names stay in the document model. The Japanese messages ship in a separate module, `@nobita/element/locales/ja`. [Dictionary API](public-api.md#ui-dictionaries)
 
-The slash menu matches both translated and original English command labels. During IME composition the editor leaves candidate navigation and confirmation to the input method and refreshes the slash query when composition ends. [Menu implementation](../packages/element/src/menu.ts)
+For built-in commands, the slash menu matches both translated and original English labels. During IME composition the editor leaves candidate navigation and confirmation to the input method and refreshes the slash query when composition ends. [Menu implementation](../packages/element/src/menu.ts)
 
 ## Known limitations
 

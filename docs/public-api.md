@@ -25,7 +25,7 @@ Stable exports:
 - `createEditor(host, options)`
 - `NobitaEditorElement`
 - `defineNobitaEditor(tagName?)`
-- `NobitaOptions`, `NobitaDictionary`, `CustomBlockRenderer`
+- `NobitaOptions`, `NobitaDictionary`, `CustomBlockRenderer`, `SlashBlockCommand`
 - `NobitaTheme`
 - `NobitaChangeDetail`, `NobitaPageOpenDetail`
 - `MentionItem`, `MentionProvider`, `PageProvider`, `ImageUploadResult`, `ImageUploadHandler`
@@ -116,7 +116,7 @@ owns loading and routing.
 `insertMarkdown(markdown)`, `insertPageLink(page, { afterBlockId? })`,
 `insertInlinePageLink(page)`, `refreshPageLinks()`,
 `getBlockLink(blockId)`, `setMentionProvider(provider)`, `setPageProvider(provider)`,
-`setUploadImage(handler)`, `registerCustomBlock(type, renderer)`, `destroy()`.
+`setUploadImage(handler)`, `registerCustomBlock(type, renderer)`, `registerSlashBlock(command): () => void`, `destroy()`.
 
 `scrollToBlock(id)` mounts and reveals a nested or top-level block without moving the caret. Its boolean result indicates whether the editor found the block. After replacing a host-provided database snapshot, call `editor.refreshDatabases()` to refresh formula and relation views. `setRelationSync(callback)` replaces the external relation callback.
 
@@ -146,38 +146,38 @@ Use a stable `custom:`-prefixed type for each host-defined block. Store its payl
 import { createBlock, createDoc } from '@nobita/core';
 import { createEditor } from '@nobita/element';
 
-const issue = createBlock('custom:acme.issue', {
-  text: 'Issue #42',
-  props: { data: { number: 42, status: 'open' } },
-});
 const editor = createEditor(document.querySelector<HTMLElement>('#notes')!, {
-  doc: createDoc({ blocks: [issue, createBlock('paragraph')] }),
+  doc: createDoc({ blocks: [createBlock('paragraph')] }),
 });
 
-editor.registerCustomBlock('custom:acme.issue', block => {
+editor.registerCustomBlock('custom:ticket', block => {
   const data = block.props.data;
-  if (data && typeof data === 'object' && 'number' in data && typeof data.number === 'number') {
-    return `Issue #${data.number}`;
+  if (data && typeof data === 'object' && 'number' in data && typeof data.number === 'string') {
+    return `案件（${data.number}）`;
   }
-  return 'Issue';
+  return '案件カード';
 });
 ```
 
 `registerCustomBlock(type, renderer)` registers or replaces a renderer on one editor. Each call refreshes matching mounted blocks. Renderers receive the current block and a boolean indicating read-only mode. Return a DOM node or a string (displayed as text). Treat the input as immutable. Host controls should respect read-only mode and submit edits through the document store. Pass `null` to remove the renderer. For a web component, access the editor through `element.editor` after it is ready.
 
-Register a slash command on the same editor to let users insert new cards.
+Register a `SlashBlockCommand` on the same editor. Users can type `/案件` or `/ticket` and choose **案件カード**.
 
 ```ts
 const unregister = editor.registerSlashBlock({
   id: 'acme.insert-ticket',
   label: '案件カード',
   keywords: ['案件', 'ticket'],
-  create: () => createBlock('custom:ticket', { props: { data: { status: 'open' } } }),
+  create: () => createBlock('custom:ticket', {
+    text: '案件（未採番）',
+    props: { data: { version: 1, number: '未採番', status: 'open' } },
+  }),
 });
 ```
 
-The host supplies localized labels and search terms. The synchronous factory runs on selection and should return a new custom block with fresh IDs and no side effects. In a childless paragraph containing only the slash query, selecting the command inserts the card at that position and focuses the empty paragraph immediately after it. Undo restores the empty paragraph. Registering the same ID replaces its command. Calling the returned disposer removes only that registration. Changing registrations dismisses an open slash menu. See the [editable ticket card example](../examples/ticket-card/).
+The host supplies localized labels and search terms. The synchronous factory runs on selection and should return a new custom block with fresh IDs and no side effects. In a childless paragraph containing only the slash query, selecting the command inserts the card at that position and focuses the empty paragraph immediately after it. Undo restores the empty paragraph. Registering the same ID replaces its command. Calling the returned disposer removes only that registration. Changing registrations dismisses an open slash menu.
 
+The runnable example renders an editable form. Submitting the ticket number and status uses one `editor.store.update` call, and `onChange` saves the resulting JSON to localStorage. Open the same document in unregistered mode, edit a neighboring paragraph, and reload in registered mode to verify the card fields survive. [Run the ticket card example](../examples/ticket-card/README.md) · [Host implementation](../examples/ticket-card/host.js)
 
 If a renderer is absent or throws while displaying an unfamiliar payload, the editor displays the type name. Editing other blocks and saving as Nobita JSON preserves the custom type, JSON payload, inline text and children. This requires a client with custom-block support. Earlier versions normalize unknown block types to paragraphs. Markdown and HTML are presentation formats; use Nobita JSON to retain the opaque payload.
 

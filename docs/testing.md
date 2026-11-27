@@ -12,7 +12,7 @@ pnpm test
 - package project builds and React/demo/D1 type checks
 - `pnpm typecheck:public-api`, which compiles the consumer fixture at `tests/public-api/public-api.ts`
 
-`pnpm test` runs the core and storage suites, then the shared collaboration suite against the Yjs and Automerge adapters. On `f98148c`, all 293 of those tests passed (165 core, 16 storage and 112 collaboration). The separate Playwright step passed 298 browser tests, bringing the total to 591. [Verified CI run](https://github.com/TommyKammy/Nobita/actions/runs/45914333320)
+`pnpm test` runs the core and storage suites, then the shared collaboration suite against the Yjs and Automerge adapters. On `e9458f0`, all 293 of those tests passed (165 core, 16 storage and 112 collaboration). The separate Playwright step passed 305 browser tests against the production bundle, bringing the local total to 598. [Test results](../README.md#testing)
 
 ## Browser regression tests
 
@@ -28,6 +28,7 @@ The Vite fixture runs at `127.0.0.1:4174`. By default it exercises the editor so
 Covered today:
 
 - registered and unregistered clients exchanging custom-block JSON, renderer isolation and failure, native widget keyboard activation and clipboard round-trips. [Custom block tests](../tests/browser/custom-block.spec.ts)
+- host slash commands, including Japanese IME confirmation, focus and undo/redo after insertion, paragraphs with text or children, stale or removed commands, conflicting block IDs and undo across peers. [Slash block tests](../tests/browser/slash-block.spec.ts)
 - partial-dictionary English fallback, per-editor isolation, Japanese IME and English slash aliases, translated actions and unchanged saved values. [Dictionary tests](../tests/browser/dictionary.spec.ts)
 - mount and document round-trip
 - typing and `nobita-change`
@@ -65,7 +66,7 @@ pnpm size
 
 The report measures raw bytes and level-9 gzip for the bundled core public entry, standalone editor ESM, global IIFE, on-demand `collaboration.js` and the demo’s main JavaScript asset. It builds the core measurement in memory from the compiled public entry. Baseline entries are stored in [size-baseline.json](../benchmarks/size-baseline.json).
 
-On `f98148c`, CI measured 114,633 B gzip for the standalone editor ESM and 132,639 B for the demo. The optional Japanese module measured 4,931 B gzip separately. To reproduce the locale measurement after building, run the following from the repository root. [All raw and gzip sizes](../README.md#performance)
+On `e9458f0`, the local Node.js 22.23.5 build measured 114,636 B gzip for the standalone editor ESM and 132,463 B for the demo. The optional Japanese module measured 4,970 B gzip separately. To reproduce the locale measurement after building, run the following from the repository root. [All raw and gzip sizes](../README.md#performance)
 
 ```bash
 node -e "const b = require('node:fs').readFileSync('packages/element/dist/locales/ja.js'); console.log(b.length, require('node:zlib').gzipSync(b, { level: 9 }).length)"
@@ -91,12 +92,12 @@ The script starts or reuses the browser fixture. It measures the median of five 
 
 | Top-level blocks | 200 | 1,000 | 3,000 | 10,000 |
 | --- | ---: | ---: | ---: | ---: |
-| Measured median on `f98148c` (CI) | 1.0 ms | 1.1 ms | 2.2 ms | 4.5 ms |
+| Measured median on `e9458f0` (local Chromium, production bundle) | 0.4 ms | 0.7 ms | 1.2 ms | 3.3 ms |
 | Maximum median | 2.6 ms | 10 ms | 12 ms | 15 ms |
 
 On the 10,000-block document the benchmark scrolls and inserts text at 15 positions. The maximum input or scroll work must stay at or below 16.6 ms and the mounted top-level block count must stay below 150. A separate 100-row, five-formula benchmark must have a median below 2 ms across 15 evaluations. `pnpm bench:check` and `pnpm bench --strict` run the same checks. `pnpm bench --write` records the initial-render medians. [Benchmark implementation](../scripts/benchmark.mjs)
 
-The same CI run measured 5.7 ms maximum input time, 7.5 ms maximum scroll time and 86 mounted blocks at peak. Formula evaluation took 0.30 ms (median of 15). [CI benchmark results](https://github.com/TommyKammy/Nobita/actions/runs/45914333320)
+The same run measured 2.5 ms maximum input time, 4.4 ms maximum scroll time and 86 mounted blocks at peak. Formula evaluation took 0.30 ms (median of 15). [Measurement conditions and results](../README.md#performance)
 
 ## CI
 
@@ -124,7 +125,17 @@ Each run discards three warmups and measures 15 mounts of a 40-row, four-column
 database and its block menu. Both timings include synchronous layout. The reported
 value is the median of the nine run medians. Locale download time is excluded.
 
-In the local Chromium run recorded for `f98148c`, mounting the database took 5.9 ms in English and 6.9 ms in Japanese. Opening the block menu took 0.8 ms and 1.8 ms respectively. [Measurement table](../README.md#performance)
+In the local Chromium run recorded for `e9458f0`, mounting the database took 5.8 ms in English and 6.3 ms in Japanese. Opening the block menu took 0.7 ms and 1.6 ms respectively. [Measurement table](../README.md#performance)
+
+## Slash command benchmark
+
+Use the production fixtures described above. To reproduce the single-revision comparison in the README, pass the same fixture URL twice. For a before/after comparison, pass the base URL first and the candidate URL second.
+
+```bash
+node scripts/benchmark-slash-block.mjs http://127.0.0.1:4197 http://127.0.0.1:4197
+```
+
+The script rotates the base, candidate and candidate-with-one-command configurations. It measures menu opening and filtering by `h1` in all three, and ticket-card insertion in the registered configuration. Each result is the median of seven round medians, with three warmups and 20 measured operations per round. On `e9458f0`, opening took 0.90 ms and filtering took 0.20 ms both with and without the command. Selecting and inserting the card took 0.10 ms. [Benchmark implementation](../scripts/benchmark-slash-block.mjs)
 
 ## Baseline policy
 
