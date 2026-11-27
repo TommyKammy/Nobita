@@ -16,6 +16,7 @@ export type {
   NobitaOptions,
   NobitaTheme,
   PageProvider,
+  SlashBlockCommand,
 } from './editor.js';
 
 export {

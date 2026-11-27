@@ -14,6 +14,7 @@ import type {
   BlockType,
   Doc,
   EditorSelection,
+  HeadingLevel,
   Point,
   TextAlign,
 } from '@nobita/core';
@@ -76,71 +77,33 @@ function addDays(date: Date, days: number): Date {
   return next;
 }
 
-interface SlashBlockMeta {
-  group: 'Basic blocks' | 'Lists' | 'Blocks';
+interface SlashBlockPreset {
+  type: BlockType;
+  label: string;
+  group: string;
   keywords: string[];
+  level?: HeadingLevel;
   shortcut?: string;
   description?: string;
-  label?: string;
 }
 
-const SLASH_BLOCK_KEYS = [
-  'paragraph:',
-  'heading:1',
-  'heading:2',
-  'heading:3',
-  'heading:4',
-  'heading:5',
-  'heading:6',
-  'bulleted:',
-  'numbered:',
-  'todo:',
-  'quote:',
-  'code:',
-  'divider:',
-  'callout:',
-] as const;
-
-const SLASH_BLOCK_META: Record<string, SlashBlockMeta> = {
-  'paragraph:': { group: 'Basic blocks', keywords: ['plain', 'p'], shortcut: '⌥0' },
-  'heading:1': { group: 'Basic blocks', keywords: ['h1', 'title'], shortcut: '⌥1' },
-  'heading:2': { group: 'Basic blocks', keywords: ['h2', 'subtitle'], shortcut: '⌥2' },
-  'heading:3': { group: 'Basic blocks', keywords: ['h3'], shortcut: '⌥3' },
-  'heading:4': { group: 'Basic blocks', keywords: ['h4'], shortcut: '⌥4' },
-  'heading:5': { group: 'Basic blocks', keywords: ['h5'], shortcut: '⌥5' },
-  'heading:6': { group: 'Basic blocks', keywords: ['h6'], shortcut: '⌥6' },
-  'bulleted:': {
-    group: 'Lists',
-    keywords: ['bullet', 'ul', 'unordered'],
-    label: 'Bulleted list',
-  },
-  'numbered:': {
-    group: 'Lists',
-    keywords: ['number', 'ol', 'ordered'],
-    label: 'Numbered list',
-  },
-  'todo:': {
-    group: 'Lists',
-    keywords: ['task', 'checkbox', 'check'],
-    label: 'To-do list',
-  },
-  'quote:': { group: 'Blocks', keywords: ['blockquote', 'citation'] },
-  'code:': {
-    group: 'Blocks',
-    keywords: ['code', 'pre', 'snippet'],
-    label: 'Code block',
-  },
-  'divider:': {
-    group: 'Blocks',
-    keywords: ['hr', 'line', 'separator'],
-    description: 'Visually separate content',
-  },
-  'callout:': { group: 'Blocks', keywords: ['note', 'info', 'warning'] },
-};
-
-const TURN_INTO_BY_KEY = new Map(
-  TURN_INTO_TYPES.map(entry => [`${entry.type}:${entry.level ?? ''}`, entry])
-);
+const basic = 'Basic blocks';
+const slashBlocks: SlashBlockPreset[] = [
+  { type: 'paragraph', label: 'Text', group: basic, keywords: ['plain', 'p'], shortcut: '⌥0' },
+  ...([1, 2, 3, 4, 5, 6] as const).map(level => ({
+    type: 'heading' as const, level, label: `Heading ${level}`, group: basic,
+    keywords: [`h${level}`, ...(level === 1 ? ['title'] : level === 2 ? ['subtitle'] : [])],
+    shortcut: `⌥${level}`,
+  })),
+  { type: 'bulleted', label: 'Bulleted list', group: 'Lists', keywords: ['bullet', 'ul', 'unordered'] },
+  { type: 'numbered', label: 'Numbered list', group: 'Lists', keywords: ['number', 'ol', 'ordered'] },
+  { type: 'todo', label: 'To-do list', group: 'Lists', keywords: ['task', 'checkbox', 'check'] },
+  { type: 'quote', label: 'Quote', group: 'Blocks', keywords: ['blockquote', 'citation'] },
+  { type: 'code', label: 'Code block', group: 'Blocks', keywords: ['code', 'pre', 'snippet'] },
+  { type: 'divider', label: 'Divider', group: 'Blocks', keywords: ['hr', 'line', 'separator'],
+    description: 'Visually separate content' },
+  { type: 'callout', label: 'Callout', group: 'Blocks', keywords: ['note', 'info', 'warning'] },
+];
 
 function translateItems(items: MenuItem[], t: Translate): MenuItem[] {
   for (const item of items) {
@@ -157,31 +120,12 @@ function translateItems(items: MenuItem[], t: Translate): MenuItem[] {
 
 export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
   const mod = /\bMac\b|\biPad\b|\biPhone\b/u.test(navigator.platform);
-  const items: MenuItem[] = [];
-  for (const key of SLASH_BLOCK_KEYS) {
-    const entry = TURN_INTO_BY_KEY.get(key);
-    const meta = SLASH_BLOCK_META[key];
-    if (!entry || !meta) continue;
-    items.push({
-      id:
-        entry.type === 'divider'
-          ? 'divider'
-          : `${entry.type}-${entry.level ?? ''}`,
-      label: meta.label ?? entry.label,
-      icon: blockIcon(entry.type, entry.level),
-      group: meta.group,
-      keywords: meta.keywords,
-      ...(meta.description ? { description: meta.description } : {}),
-      ...(meta.shortcut
-        ? { shortcut: shortcutLabel(mod, meta.shortcut) }
-        : {}),
-      action: () =>
-        context.convert(
-          entry.type,
-          entry.level ? { level: entry.level } : {}
-        ),
-    });
-  }
+  const items: MenuItem[] = slashBlocks.map(({ type, level, shortcut, ...item }) => ({
+    ...item,
+    icon: blockIcon(type, level),
+    ...(shortcut && { shortcut: shortcutLabel(mod, shortcut) }),
+    action: () => context.convert(type, level ? { level } : {}),
+  }));
 
   const align = (
     name: string,
@@ -189,7 +133,6 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
     iconMarkup: string,
     shortcut: string
   ): MenuItem => ({
-    id: `align-${value}`,
     label: name,
     icon: iconMarkup,
     group: 'Alignment',
@@ -204,44 +147,26 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
   );
 
   const dateItem = (
-    id: string,
     label: string,
-    description: string,
     iconMarkup: string,
     value: () => string
   ): MenuItem => ({
-    id,
     label,
-    description,
+    description: value(),
     icon: iconMarkup,
     group: 'Date',
     keywords: ['date', 'time', label.toLowerCase()],
     action: () => context.insertText(value()),
   });
   items.push(
-    dateItem('today', 'Today', formatDateValue(new Date()), icon.calendar, () => formatDateValue(new Date())),
-    dateItem(
-      'tomorrow',
-      'Tomorrow',
-      formatDateValue(addDays(new Date(), 1)),
-      icon.calendar,
-      () => formatDateValue(addDays(new Date(), 1))
-    ),
-    dateItem(
-      'yesterday',
-      'Yesterday',
-      formatDateValue(addDays(new Date(), -1)),
-      icon.calendar,
-      () => formatDateValue(addDays(new Date(), -1))
-    ),
-    dateItem('now', 'Now', formatDateTimeValue(new Date()), icon.clock, () =>
-      formatDateTimeValue(new Date())
-    )
+    dateItem('Today', icon.calendar, () => formatDateValue(new Date())),
+    dateItem('Tomorrow', icon.calendar, () => formatDateValue(addDays(new Date(), 1))),
+    dateItem('Yesterday', icon.calendar, () => formatDateValue(addDays(new Date(), -1))),
+    dateItem('Now', icon.clock, () => formatDateTimeValue(new Date()))
   );
 
   items.push(
     {
-      id: 'table',
       label: 'Table',
       description: 'Simple editable table',
       icon: icon.table,
@@ -250,7 +175,6 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
       action: () => context.convert('table'),
     },
     {
-      id: 'database',
       label: 'Database',
       description: 'Rows with typed properties',
       icon: icon.database,
@@ -265,7 +189,6 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
 
   if (context.linkPage) {
     items.push({
-      id: 'link-page',
       label: 'Link page',
       description: 'Insert a link to another page',
       icon: icon.page,
@@ -276,7 +199,6 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
   }
   if (context.createPage) {
     items.push({
-      id: 'new-page',
       label: 'New page',
       description: 'Create and link a new page',
       icon: icon.plus,
@@ -288,7 +210,6 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
 
   items.push(
     {
-      id: 'move-up',
       label: 'Move Up',
       description: 'Move this block one position up',
       icon: icon.arrowUp,
@@ -297,7 +218,6 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
       action: () => context.moveBlock('before'),
     },
     {
-      id: 'move-down',
       label: 'Move Down',
       description: 'Move this block one position down',
       icon: icon.arrowDown,
@@ -306,7 +226,6 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
       action: () => context.moveBlock('after'),
     },
     {
-      id: 'copy',
       label: 'Copy',
       description: 'Copy this block to the clipboard',
       icon: icon.copy,
@@ -329,7 +248,6 @@ export function buildBlockMenuItems(context: BlockMenuContext): MenuItem[] {
       (entry.type !== 'heading' ||
         (block.props.level ?? 1) === (entry.level ?? 1));
     items.push({
-      id: `turn-${entry.type}-${entry.level ?? ''}`,
       label: entry.label,
       icon: blockIcon(entry.type, entry.level),
       group: 'Turn into',
@@ -347,84 +265,27 @@ export function buildBlockMenuItems(context: BlockMenuContext): MenuItem[] {
     });
   }
 
+  const item = (label: string, glyph: string, action: () => void, shortcut?: string): MenuItem =>
+    ({ label, icon: glyph, group: 'Actions', action, ...(shortcut && { shortcut }) });
+  const changeIndent = (change: typeof indentBlock) => {
+    const point = context.pointFromCaret();
+    context.commit(change(context.getDoc(), blockId), { anchor: point, focus: point });
+  };
   items.push(
-    {
-      id: 'copy',
-      label: 'Copy',
-      description: 'Copy this block to the clipboard',
-      icon: icon.copy,
-      group: 'Actions',
-      action: () => context.copyBlock(context.pointFromCaret().offset),
-    },
-    {
-      id: 'copy-link',
-      label: 'Copy link',
-      description: 'Copy a link to this block',
-      icon: icon.link,
-      group: 'Actions',
-      action: () => context.copyLink(),
-    },
-    {
-      id: 'duplicate',
-      label: 'Duplicate',
-      icon: icon.duplicate,
-      group: 'Actions',
-      shortcut: '⌘D',
-      action: () => {
-        const copy = duplicateBlockTree(block);
-        const next = insertBlockRelative(
-          context.getDoc(),
-          blockId,
-          copy,
-          'after'
-        );
-        const caret: Point = { blockId: copy.id, offset: 0 };
-        context.commit(next, { anchor: caret, focus: caret });
-        context.focusBlock(copy.id, 0);
-      },
-    },
-    {
-      id: 'copy-markdown',
-      label: 'Copy as Markdown',
-      icon: icon.copy,
-      group: 'Actions',
-      action: () => context.copyMarkdown(),
-    },
-    {
-      id: 'indent',
-      label: 'Indent',
-      icon: icon.indent,
-      group: 'Actions',
-      shortcut: 'Tab',
-      action: () => {
-        const point = context.pointFromCaret();
-        context.commit(indentBlock(context.getDoc(), blockId), {
-          anchor: point,
-          focus: point,
-        });
-      },
-    },
-    {
-      id: 'dedent',
-      label: 'Outdent',
-      icon: icon.outdent,
-      group: 'Actions',
-      shortcut: '⇧Tab',
-      action: () => {
-        const point = context.pointFromCaret();
-        context.commit(dedentBlock(context.getDoc(), blockId), {
-          anchor: point,
-          focus: point,
-        });
-      },
-    },
-    {
-      id: 'delete',
-      label: 'Delete',
-      icon: icon.trash,
-      group: 'Actions',
-      action: () => context.deleteBlock(),
-    }
+    { ...item('Copy', icon.copy, () => context.copyBlock(context.pointFromCaret().offset)),
+      description: 'Copy this block to the clipboard' },
+    item('Copy link', icon.link, context.copyLink),
+    item('Duplicate', icon.duplicate, () => {
+      const copy = duplicateBlockTree(block);
+      const next = insertBlockRelative(context.getDoc(), blockId, copy, 'after');
+      const caret = { blockId: copy.id, offset: 0 };
+      context.commit(next, { anchor: caret, focus: caret });
+      context.focusBlock(copy.id, 0);
+    }, '⌘D'),
+    item('Copy as Markdown', icon.copy, context.copyMarkdown),
+    item('Indent', icon.indent, () => changeIndent(indentBlock), 'Tab'),
+    item('Outdent', icon.outdent, () => changeIndent(dedentBlock), '⇧Tab'),
+    item('Delete', icon.trash, context.deleteBlock)
   );
   return translateItems(items, context.t);
 }
@@ -432,12 +293,12 @@ export function buildBlockMenuItems(context: BlockMenuContext): MenuItem[] {
 export function buildMultiBlockMenuItems(context: MultiBlockMenuContext): MenuItem[] {
   const { t, count } = context;
   const group = t('Selected ({count} blocks)', count);
-  const item = (id: string, label: string, glyph: string, shortcut: string, action: () => void): MenuItem =>
-    ({ id, group, label: t(label, count), icon: glyph, shortcut, action });
+  const item = (label: string, glyph: string, shortcut: string, action: () => void): MenuItem =>
+    ({ group, label: t(label, count), icon: glyph, shortcut, action });
   return [
-    item('multi-copy', 'Copy {count} blocks', icon.copy, '⌘C', () => context.copyBlocks()),
-    { id: 'multi-copy-md', group, label: t('Copy as Markdown'), icon: icon.copy, action: () => context.copyMarkdown() },
-    item('multi-duplicate', 'Duplicate {count} blocks', icon.duplicate, '⌘D', () => context.duplicateBlocks()),
-    item('multi-delete', 'Delete {count} blocks', icon.trash, '⌫', () => context.deleteBlocks()),
+    item('Copy {count} blocks', icon.copy, '⌘C', context.copyBlocks),
+    { group, label: t('Copy as Markdown'), icon: icon.copy, action: context.copyMarkdown },
+    item('Duplicate {count} blocks', icon.duplicate, '⌘D', context.duplicateBlocks),
+    item('Delete {count} blocks', icon.trash, '⌫', context.deleteBlocks),
   ];
 }

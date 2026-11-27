@@ -7,6 +7,7 @@ import {
   plainTextToBlocks,
   readClipboardPayload,
   type CustomBlockRenderer,
+  type SlashBlockCommand,
   type NobitaChangeDetail,
   type NobitaOptions,
   type NobitaPageOpenDetail,
@@ -88,6 +89,10 @@ export function publicApiFixture(host: HTMLElement): void {
   const card = createBlock(type, { props: { data } });
   const render: CustomBlockRenderer = block => JSON.stringify(block.props.data);
   editor.registerCustomBlock(type, render);
+  const unregister = editor.registerSlashBlock({
+    id: 'insert-issue', label: 'Issue', keywords: ['ticket'], create: () => createBlock(type),
+  } satisfies SlashBlockCommand);
+  unregister();
   editor.setDoc(createDoc({ blocks: [card] }));
   editor.registerCustomBlock(type, null);
   // @ts-expect-error - built-in renderers cannot be replaced by host registration

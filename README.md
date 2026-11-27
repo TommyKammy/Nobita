@@ -294,6 +294,7 @@ See [docs/public-api.md](docs/public-api.md) for the stable import surface, edit
 | `getJSON(pretty?)` | Serialize the document |
 | `getMarkdown()` / `getHTML()` | Export helpers |
 | `setDoc(doc, { history? })` | Replace the document |
+| `registerSlashBlock(command)` | Offer a host-defined block in the slash menu of an empty paragraph. Returns an unregister function. [Ticket card example](examples/ticket-card/) |
 | `registerCustomBlock(type, renderer)` | Register an editor-local renderer for a `custom:` block. Clients without the renderer retain its JSON payload. [Usage](docs/public-api.md#host-defined-blocks) |
 | `setTitle(title)` | Update only the title |
 | `getSelection()` | Current block/offset selection or `null` |

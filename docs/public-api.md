@@ -165,6 +165,20 @@ editor.registerCustomBlock('custom:acme.issue', block => {
 
 `registerCustomBlock(type, renderer)` registers or replaces a renderer on one editor. Each call refreshes matching mounted blocks. Renderers receive the current block and a boolean indicating read-only mode. Return a DOM node or a string (displayed as text). Treat the input as immutable. Host controls should respect read-only mode and submit edits through the document store. Pass `null` to remove the renderer. For a web component, access the editor through `element.editor` after it is ready.
 
+Register a slash command on the same editor to let users insert new cards.
+
+```ts
+const unregister = editor.registerSlashBlock({
+  id: 'acme.insert-ticket',
+  label: '案件カード',
+  keywords: ['案件', 'ticket'],
+  create: () => createBlock('custom:ticket', { props: { data: { status: 'open' } } }),
+});
+```
+
+The host supplies localized labels and search terms. The synchronous factory runs on selection and should return a new custom block with fresh IDs and no side effects. In a childless paragraph containing only the slash query, selecting the command inserts the card at that position and focuses the empty paragraph immediately after it. Undo restores the empty paragraph. Registering the same ID replaces its command. Calling the returned disposer removes only that registration. Changing registrations dismisses an open slash menu. See the [editable ticket card example](../examples/ticket-card/).
+
+
 If a renderer is absent or throws while displaying an unfamiliar payload, the editor displays the type name. Editing other blocks and saving as Nobita JSON preserves the custom type, JSON payload, inline text and children. This requires a client with custom-block support. Earlier versions normalize unknown block types to paragraphs. Markdown and HTML are presentation formats; use Nobita JSON to retain the opaque payload.
 
 ## `@nobita/core`

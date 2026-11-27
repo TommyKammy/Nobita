@@ -12,6 +12,8 @@ export interface UpdateOptions {
   history?: boolean;
   /** Consecutive updates sharing a key within the merge window become one undo step. */
   mergeKey?: string;
+  /** Undo a completed command to its document and caret with transient command text removed. */
+  undoBase?: { doc: Doc; selection: EditorSelection | null };
   /** Selection to publish with the change. */
   selection?: EditorSelection | null;
   source?: string;
@@ -165,9 +167,9 @@ export class EditorStore {
         last.time = now;
       } else {
         const entry: HistoryEntry = {
-          before: previous,
+          before: options.undoBase?.doc ?? previous,
           after: next,
-          selectionBefore,
+          selectionBefore: options.undoBase ? options.undoBase.selection : selectionBefore,
           selectionAfter,
           time: now,
           ...(mergeKey ? { mergeKey } : {}),
