@@ -52,6 +52,16 @@ pnpm typecheck    # TypeScript 7 project build
 pnpm build        # packages + bundled editor + demo
 ```
 
+### Using the workspace demo
+
+**Note dates.** Scroll to the bottom of a note to see **Created** and **Updated** in your local time. **Updated** records the last successful save that changed the body, title, or tags. Opening a note or toggling its favorite star leaves that timestamp unchanged. Older notes without a recorded creation date show **Created Unknown**.
+
+**Edit tags.** Open **⋯ → Edit tags** at the top right of the note. Type a name and choose **Save tags**. To add several tags, press Enter or choose **Add** after each name, then choose **Save tags** once. Use **×** beside a tag to remove it before saving. **Cancel** or Esc discards the draft. Saved tags appear at the bottom of the note.
+
+**Filter by tag.** Choose a tag from the sidebar’s **Tag** dropdown to list matching notes, including nested notes. In **Favorites**, the list shows only starred notes with that tag. Choose **All tags** to clear the filter.
+
+**Insert a table of contents.** In an empty paragraph, type `/toc` or `/目次` and select **Table of contents**. It lists H1–H6 headings in document order and updates as you add, rename, move, or delete them. Click an entry or focus it and press Enter to jump to its heading. This also reveals headings inside collapsed blocks or outside the visible area. For embedded editors, see [table of contents registration](docs/public-api.md#table-of-contents).
+
 ### Web component
 
 ```html
