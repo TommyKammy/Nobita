@@ -1,5 +1,8 @@
 /** Japanese editor UI messages. Import this module only when needed. */
 export const ja = {
+  'Table of contents': '目次',
+  'No headings yet': '見出しはまだありません',
+  'Untitled heading': '無題の見出し',
   "+ Add condition": "+ 条件を追加",
   "+ Add filter": "+ フィルターを追加",
   "+ Add group": "+ グループを追加",

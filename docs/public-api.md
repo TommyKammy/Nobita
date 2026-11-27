@@ -265,3 +265,17 @@ pnpm typecheck:public-api
 
 Browser integration tests exercise the same public entry points through
 `tests/browser/fixture`.
+
+### Table of contents
+
+The workspace demo registers this optional block in each editor. To enable it in an embedded editor:
+
+```ts
+import { createEditor } from '@nobita/element';
+import { registerTableOfContents } from '@nobita/element/table-of-contents';
+
+const editor = createEditor(host, { doc });
+const unregister = registerTableOfContents(editor);
+```
+
+Type `/toc`, `/table of contents` or `/目次` in an empty paragraph. Each outline lists the current document's H1–H6 headings in document order, including nested headings. Entries use block IDs, so repeated titles navigate independently. Navigation reveals collapsed ancestors locally and works in readonly mode. Only the `custom:table-of-contents` block is stored in JSON. A host without the renderer preserves the block through the existing custom-block fallback. Call `unregister()` to remove this editor's renderer and insertion command.

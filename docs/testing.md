@@ -141,3 +141,13 @@ The script rotates the base, candidate and candidate-with-one-command configurat
 
 Update a baseline only when the size or performance change is intentional and
 understood. Include the before/after numbers in the commit message.
+
+## Table of contents input benchmark
+
+Serve the base and candidate production **workspace demos** and pass their URLs to
+`node scripts/benchmark-table-of-contents.mjs <base-url> <candidate-url>`.
+The benchmark rotates three configurations through seven rounds: base, candidate
+and candidate with a mounted table of contents. Each document contains 1,000
+blocks including 20 headings. It measures paragraph and heading input through
+`beforeinput`, including synchronous layout, with three warmups and 15 measured
+insertions per round. The result is the median of the round medians, in milliseconds.

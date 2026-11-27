@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8">
+  <title>Table of contents fixture</title>
+  <nobita-editor id="editor" style="display:block"></nobita-editor>
+  <script type="module">
+    import './main.ts';
+    import { registerTableOfContents } from '@nobita/element/table-of-contents';
+    const editor = window.__editor;
+    const stale = registerTableOfContents(editor);
+    const dispose = registerTableOfContents(editor);
+    stale();
+    document.addEventListener('unregister-toc', dispose, { once: true });
+  </script>
+</html>
