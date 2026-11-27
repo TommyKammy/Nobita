@@ -25,3 +25,17 @@ Use `getDoc()` to read the current document, `setDoc(doc)` to replace it and `de
 Register a renderer for a host-defined block with `editor.registerCustomBlock()`. Clients without that renderer preserve the block’s type and JSON data. See [host-defined blocks](../../docs/public-api.md#host-defined-blocks) for an example.
 
 See the [public API](../../docs/public-api.md) for editor options, events and methods.
+
+## Customize UI messages
+
+Pass a partial English-keyed dictionary to `createEditor`. Missing entries keep
+the built-in English wording. Import Japanese explicitly when your host needs it.
+
+```ts
+import { createEditor } from '@nobita/element';
+import { ja } from '@nobita/element/locales/ja';
+
+createEditor(container, { dictionary: { ...ja, 'New Record': '案件を追加' } });
+```
+
+See the [dictionary API](../../docs/public-api.md#ui-dictionaries) for custom elements and message placeholders.

@@ -1,3 +1,4 @@
+import type { Translate } from './dictionary.js';
 import {
   createDatabaseData,
   dedentBlock,
@@ -20,6 +21,7 @@ import { blockIcon, icon } from './icons.js';
 import type { MenuItem } from './menu.js';
 
 export interface SlashMenuContext {
+  t: Translate;
   convert(type: BlockType, props?: Partial<BlockProps>): void;
   insertText(text: string): void;
   alignBlock(align: TextAlign): void;
@@ -30,6 +32,7 @@ export interface SlashMenuContext {
 }
 
 export interface BlockMenuContext {
+  t: Translate;
   block: Block;
   getDoc(): Doc;
   pointFromCaret(): Point;
@@ -42,6 +45,7 @@ export interface BlockMenuContext {
 }
 
 export interface MultiBlockMenuContext {
+  t: Translate;
   count: number;
   copyBlocks(): void;
   copyMarkdown(): void;
@@ -137,6 +141,19 @@ const SLASH_BLOCK_META: Record<string, SlashBlockMeta> = {
 const TURN_INTO_BY_KEY = new Map(
   TURN_INTO_TYPES.map(entry => [`${entry.type}:${entry.level ?? ''}`, entry])
 );
+
+function translateItems(items: MenuItem[], t: Translate): MenuItem[] {
+  for (const item of items) {
+    const label = t(item.label);
+    if (label !== item.label) {
+      item.englishLabel = item.label;
+      item.label = label;
+    }
+    if (item.description && item.group !== 'Date') item.description = t(item.description);
+    if (item.group) item.group = t(item.group);
+  }
+  return items;
+}
 
 export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
   const mod = /\bMac\b|\biPad\b|\biPhone\b/u.test(navigator.platform);
@@ -299,7 +316,7 @@ export function buildSlashMenuItems(context: SlashMenuContext): MenuItem[] {
     }
   );
 
-  return items;
+  return translateItems(items, context.t);
 }
 
 export function buildBlockMenuItems(context: BlockMenuContext): MenuItem[] {
@@ -409,42 +426,18 @@ export function buildBlockMenuItems(context: BlockMenuContext): MenuItem[] {
       action: () => context.deleteBlock(),
     }
   );
-  return items;
+  return translateItems(items, context.t);
 }
 
 export function buildMultiBlockMenuItems(context: MultiBlockMenuContext): MenuItem[] {
-  const label = `${context.count} blocks`;
+  const { t, count } = context;
+  const group = t('Selected ({count} blocks)', count);
+  const item = (id: string, label: string, glyph: string, shortcut: string, action: () => void): MenuItem =>
+    ({ id, group, label: t(label, count), icon: glyph, shortcut, action });
   return [
-    {
-      id: 'multi-copy',
-      label: `Copy ${label}`,
-      icon: icon.copy,
-      group: `Selected (${label})`,
-      shortcut: '⌘C',
-      action: () => context.copyBlocks(),
-    },
-    {
-      id: 'multi-copy-md',
-      label: 'Copy as Markdown',
-      icon: icon.copy,
-      group: `Selected (${label})`,
-      action: () => context.copyMarkdown(),
-    },
-    {
-      id: 'multi-duplicate',
-      label: `Duplicate ${label}`,
-      icon: icon.duplicate,
-      group: `Selected (${label})`,
-      shortcut: '⌘D',
-      action: () => context.duplicateBlocks(),
-    },
-    {
-      id: 'multi-delete',
-      label: `Delete ${label}`,
-      icon: icon.trash,
-      group: `Selected (${label})`,
-      shortcut: '⌫',
-      action: () => context.deleteBlocks(),
-    },
+    item('multi-copy', 'Copy {count} blocks', icon.copy, '⌘C', () => context.copyBlocks()),
+    { id: 'multi-copy-md', group, label: t('Copy as Markdown'), icon: icon.copy, action: () => context.copyMarkdown() },
+    item('multi-duplicate', 'Duplicate {count} blocks', icon.duplicate, '⌘D', () => context.duplicateBlocks()),
+    item('multi-delete', 'Delete {count} blocks', icon.trash, '⌫', () => context.deleteBlocks()),
   ];
 }

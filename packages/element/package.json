@@ -11,6 +11,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./locales/ja": {
+      "nobita-source": "./src/locales/ja.ts",
+      "types": "./dist/locales/ja.d.ts",
+      "import": "./dist/locales/ja.js"
+    },
     "./styles": {
       "nobita-source": "./src/styles.ts",
       "types": "./dist/styles.d.ts",

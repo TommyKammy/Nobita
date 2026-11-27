@@ -4,6 +4,7 @@
     "noEmit": true,
     "paths": {
       "@nobita/core": ["./packages/core/src/index.ts"],
+      "@nobita/element/locales/ja": ["./packages/element/src/locales/ja.ts"],
       "@nobita/element": ["./packages/element/src/index.ts"]
     }
   },

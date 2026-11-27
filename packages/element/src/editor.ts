@@ -1,3 +1,4 @@
+import { createTranslator, type NobitaDictionary, type Translate } from './dictionary.js';
 import type { CollaborationAdapter } from '@nobita/core';
 import { icon } from './icons.js';
 import { styles } from './styles.js';
@@ -136,6 +137,7 @@ export type ImageUploadHandler = (
 ) => ImageUploadResult | string | Promise<ImageUploadResult | string>;
 
 export interface NobitaOptions {
+  dictionary?: NobitaDictionary;
   collaboration?: CollaborationAdapter | null;
   virtualize?: boolean | { threshold?: number; overscanPx?: number };
   doc?: Doc | string;
@@ -237,6 +239,7 @@ function rectAnchor(rect: DOMRect): {
 }
 
 export class NobitaEditor implements BlockHost {
+  readonly t: Translate;
   readonly root: ShadowRoot;
   readonly store: EditorStore;
   #placeholderValue: string;
@@ -300,8 +303,11 @@ export class NobitaEditor implements BlockHost {
     this.#toolbar.hide();
     this.#linkPopover.hide();
   };
+  #isComposingKey = (event: KeyboardEvent): boolean =>
+    this.#composing || event.isComposing || event.keyCode === 229;
+
   #onWindowKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape') return;
+    if (event.key !== 'Escape' || this.#isComposingKey(event)) return;
     const hadOverlay =
       this.#mention !== null ||
       this.#pageLink !== null ||
@@ -323,6 +329,7 @@ export class NobitaEditor implements BlockHost {
   };
 
   constructor(host: HTMLElement, options: NobitaOptions = {}) {
+    this.t = createTranslator(options.dictionary);
     this.#hostElement = host;
     this.#options = { ...options };
     this.#placeholderValue = options.placeholder ?? "Type '/' for commands";
@@ -349,8 +356,8 @@ export class NobitaEditor implements BlockHost {
     this.#title.contentEditable = this.#readonly ? 'false' : 'true';
     this.#title.spellcheck = options.spellcheck ?? true;
     this.#title.setAttribute('role', 'textbox');
-    this.#title.setAttribute('aria-label', 'Document title');
-    this.#title.dataset.placeholder = 'Untitled';
+    this.#title.setAttribute('aria-label', this.t('Document title'));
+    this.#title.dataset.placeholder = this.t('Untitled');
     titleWrap.append(this.#title);
     this.#body = el('div', 'nb-body');
     this.#body.tabIndex = -1;
@@ -358,7 +365,7 @@ export class NobitaEditor implements BlockHost {
     this.#body.spellcheck = options.spellcheck ?? true;
     this.#body.setAttribute('role', 'textbox');
     this.#body.setAttribute('aria-multiline', 'true');
-    this.#body.setAttribute('aria-label', 'Document body');
+    this.#body.setAttribute('aria-label', this.t('Document body'));
     this.#tail = el('div', 'nb-tail');
     this.#page.append(titleWrap, this.#body, this.#tail);
     const scroll = el('div', 'nb-scroll');
@@ -368,8 +375,9 @@ export class NobitaEditor implements BlockHost {
     rootElement.append(this.#overlay);
     this.root.append(style, rootElement);
 
-    this.#menu = new Menu(this.root, this.#overlay);
+    this.#menu = new Menu(this.root, this.#overlay, this.t, this.#isComposingKey);
     this.#toolbar = new Toolbar(
+      this.t,
       this.#overlay,
       key => this.#toggleMark(key),
       () => this.#toggleLink(),
@@ -378,7 +386,7 @@ export class NobitaEditor implements BlockHost {
       color => this.#applyHighlight(color),
       color => this.#applyTextColor(color)
     );
-    this.#linkPopover = new LinkPopover(this.#overlay);
+    this.#linkPopover = new LinkPopover(this.#overlay, this.t);
 
     this.#bindTitle();
     this.#bindBody();
@@ -1307,6 +1315,7 @@ export class NobitaEditor implements BlockHost {
     const block = findBlock(this.store.doc.blocks, blockId);
     if (!block) return;
     const items = buildBlockMenuItems({
+      t: this.t,
       block,
       getDoc: () => this.store.doc,
       pointFromCaret: () => this.#pointFromCaret(blockId),
@@ -1332,6 +1341,7 @@ export class NobitaEditor implements BlockHost {
     const blocks = selectedTopLevelBlocks(this.store.doc.blocks, this.#selectedBlockIds);
     if (blocks.length === 0) return;
     const items = buildMultiBlockMenuItems({
+      t: this.t,
       count: blocks.length,
       copyBlocks: () => this.#writeBlocksToClipboard(blocks),
       copyMarkdown: () => this.#copyMarkdown(blocks),
@@ -1424,6 +1434,7 @@ export class NobitaEditor implements BlockHost {
     body.addEventListener(
       'keydown',
       event => {
+        if (this.#isComposingKey(event)) return;
         if (event.key === 'Escape' && event.target instanceof Element && event.target.closest('.nb-page-link')) {
           const blockId = this.#blockIdFromTarget(event.target);
           if (blockId) {
@@ -1502,6 +1513,7 @@ export class NobitaEditor implements BlockHost {
         const blockId = this.#compositionBlockId ?? this.#activeBlockId(null);
         this.#compositionBlockId = null;
         if (blockId) this.domInput(blockId);
+        this.#syncSlashMenu();
         this.#syncPlaceholders();
       },
       { signal }
@@ -2048,7 +2060,7 @@ export class NobitaEditor implements BlockHost {
 
   #placeholderFor(block: Block): string {
     if (block.type === 'paragraph') return this.placeholder;
-    if (block.type === 'heading') return `Heading ${block.props.level ?? 1}`;
+    if (block.type === 'heading') return this.t(`Heading ${block.props.level ?? 1}`);
     return '';
   }
 
@@ -3409,7 +3421,7 @@ export class NobitaEditor implements BlockHost {
       id: `mention-${item.id}`,
       label: item.label,
       icon: icon.user,
-      group: 'Mentions',
+      group: this.t('Mentions'),
       keywords: [item.id, ...(item.keywords ?? [])],
       action: () => this.#insertMention(mention, item),
     }));
@@ -3533,7 +3545,7 @@ export class NobitaEditor implements BlockHost {
       const lowerTarget = target.toLowerCase();
       const exact = lowerTarget
         ? state.items.find(
-            item => (item.title.trim() || 'Untitled page').toLowerCase() === lowerTarget
+            item => (item.title.trim() || this.t('Untitled page')).toLowerCase() === lowerTarget
           )
         : undefined;
       if (exact) {
@@ -3585,7 +3597,7 @@ export class NobitaEditor implements BlockHost {
 
   #pageLinkMenuItems(items: readonly PageInfo[], state: PageLinkState): MenuItem[] {
     const out: MenuItem[] = items.map(page => {
-      const title = page.title.trim() || 'Untitled page';
+      const title = page.title.trim() || this.t('Untitled page');
       const iconHtml = page.icon?.trim()
         ? `<span>${escapeMenuText(page.icon.trim())}</span>`
         : icon.page;
@@ -3593,7 +3605,7 @@ export class NobitaEditor implements BlockHost {
         id: `page-${page.id}`,
         label: title,
         icon: iconHtml,
-        group: 'Pages',
+        group: this.t('Pages'),
         keywords: [page.id, title],
         action: () => this.#insertPageLinkFromState(state, page),
       };
@@ -3602,14 +3614,14 @@ export class NobitaEditor implements BlockHost {
     const trimmed = state.query.trim();
     const hasExact =
       trimmed.length > 0 &&
-      items.some(item => (item.title.trim() || 'Untitled page').toLowerCase() === trimmed.toLowerCase());
+      items.some(item => (item.title.trim() || this.t('Untitled page')).toLowerCase() === trimmed.toLowerCase());
     if (provider?.create && trimmed.length > 0 && !hasExact) {
       out.push({
         id: `page-create-${trimmed}`,
-        label: `Create "${trimmed}"`,
-        description: 'New page',
+        label: this.t('Create "{name}"', trimmed),
+        description: this.t('New page'),
         icon: icon.plus,
-        group: 'Create',
+        group: this.t('Create'),
         keywords: [trimmed, 'create', 'new'],
         action: () => void this.#createAndInsertPage(state, trimmed),
       });
@@ -3731,7 +3743,7 @@ export class NobitaEditor implements BlockHost {
     if (this.#destroyed || this.#readonly || epoch !== this.#docEpoch) return;
     const lowerTarget = target.toLowerCase();
     const exact = items.find(
-      item => (item.title.trim() || 'Untitled page').toLowerCase() === lowerTarget
+      item => (item.title.trim() || this.t('Untitled page')).toLowerCase() === lowerTarget
     );
     if (!exact?.id) return;
     const block = findBlock(this.store.doc.blocks, snapshot.blockId);
@@ -3820,6 +3832,7 @@ export class NobitaEditor implements BlockHost {
     const rect = this.#caretRect(blockId);
     const pageProvider = this.#options.pageProvider;
     const items = buildSlashMenuItems({
+      t: this.t,
       convert: (type, props) => {
         removeSlash();
         this.#convertBlock(blockId, type, props);
@@ -3870,7 +3883,7 @@ export class NobitaEditor implements BlockHost {
 
   #syncSlashMenu(): void {
     const slash = this.#slash;
-    if (!slash) return;
+    if (!slash || this.#composing) return;
     if (!this.#menu.isOpen) {
       this.#slash = null;
       return;

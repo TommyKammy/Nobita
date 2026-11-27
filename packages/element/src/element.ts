@@ -34,6 +34,8 @@ export class NobitaEditorElement extends Base {
   #mentionProvider: MentionProvider | undefined;
   #pageProvider: PageProvider | undefined;
   #uploadImage: ImageUploadHandler | undefined;
+  /** Set before connecting the element. */
+  dictionary?: NobitaOptions['dictionary'];
   databaseProvider?: NobitaOptions['databaseProvider'];
   resolveDatabase?: NobitaOptions['resolveDatabase'];
   #collaboration: NobitaOptions['collaboration'];
@@ -62,6 +64,7 @@ export class NobitaEditorElement extends Base {
     const doc = this.#pendingDoc ?? this.#lastDoc ?? this.getAttribute('doc') ?? undefined;
     this.#editor = new NobitaEditor(this, {
       ...(doc === undefined ? {} : { doc }),
+      ...(this.dictionary && { dictionary: this.dictionary }),
       readonly: this.hasAttribute('readonly'),
       theme: (this.getAttribute('theme') as NobitaTheme | null) ?? 'light',
       ...(this.getAttribute('placeholder')

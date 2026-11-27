@@ -1,3 +1,4 @@
+import type { Translate } from './dictionary.js';
 import {
   clearDatabaseColumnCells,
   cloneDatabaseCell as cloneCell,
@@ -93,6 +94,7 @@ export type DatabaseImageUploader = (
 ) => string | { src: string } | Promise<string | { src: string }>;
 
 export interface DatabaseHost {
+  readonly t: Translate;
   databaseId: string;
   readonly pageId: string;
   resolveDatabase: DatabaseResolver;
@@ -230,6 +232,7 @@ export class DatabaseView {
       this.#host.resolvePage?.(pageId) ?? null;
 
     this.#richText = new DatabaseRichTextController({
+      t: host.t,
       rootElement: this.element,
       getDetailElement: () => this.#detail.element,
       isReadonly: () => this.#readonly,
@@ -237,6 +240,7 @@ export class DatabaseView {
       resolvePage,
     });
     const baseCtx = {
+      t: host.t,
       rootElement: this.element,
       getReadonly: () => this.#readonly,
       getData: () => this.#data,
@@ -711,6 +715,12 @@ export class DatabaseView {
       : null;
     const hasOverrides = this.#readonly && this.#groupOverrides.size > 0;
     const baseGroups = groupFilteredDatabaseRows(this.#data, view, filtered);
+    const groupedColumn = this.#data.columns.find(column => column.id === view.groupBy);
+    for (const group of baseGroups) {
+      if (!groupedColumn || groupedColumn.type === 'checkbox' || !group.key) {
+        group.label = this.#host.t(group.label);
+      }
+    }
     const groups =
       allowed || hasOverrides
         ? baseGroups.map(group => {
@@ -813,9 +823,9 @@ export class DatabaseView {
     titleIcon.innerHTML = this.#data.variant === 'table' ? icon.table : icon.database;
     const titleInput = el('input', 'nb-db-title-input');
     titleInput.value = this.#data.title ?? '';
-    titleInput.placeholder = this.#data.variant === 'table' ? 'Untitled table' : 'Untitled database';
+    titleInput.placeholder = this.#data.variant === 'table' ? this.#host.t('Untitled table') : this.#host.t('Untitled database');
     titleInput.disabled = this.#readonly;
-    titleInput.setAttribute('aria-label', 'Database title');
+    titleInput.setAttribute('aria-label', this.#host.t('Database title'));
     titleInput.addEventListener('input', () => {
       const value = titleInput.value.replace(/\r?\n/gu, ' ').slice(0, 200);
       if ((this.#data.title ?? '') === value) return;
@@ -830,8 +840,8 @@ export class DatabaseView {
     this.#renderToolButtons(view, tools);
     if (!this.#readonly) {
       const addRecord = btn('nb-db-btn nb-db-new-record-toolbar', {
-        html: `${icon.plus}<span>New Record</span>`,
-        title: 'Add record',
+        html: icon.plus, label: this.#host.t('New Record'),
+        title: this.#host.t('Add record'),
       });
       addRecord.addEventListener('click', () => {
         const rowId = this.#addRow();
@@ -852,7 +862,7 @@ export class DatabaseView {
     const fillHandle = el('div', 'nb-db-fill-handle');
     fillHandle.dataset.visible = 'false';
     fillHandle.setAttribute('role', 'button');
-    fillHandle.setAttribute('aria-label', 'Fill selected cells');
+    fillHandle.setAttribute('aria-label', this.#host.t('Fill selected cells'));
     fillHandle.addEventListener('pointerdown', event => {
       event.preventDefault();
       event.stopPropagation();
@@ -934,16 +944,16 @@ export class DatabaseView {
     const bar = el('div', 'nb-db-filter-bar');
     bar.id = `${this.#instanceId}-filters`;
     bar.setAttribute('role', 'region');
-    bar.setAttribute('aria-label', 'Active filters');
+    bar.setAttribute('aria-label', this.#host.t('Active filters'));
     for (const condition of group.conditions) {
       let text: string;
       if (condition.type === 'group') {
         const count = condition.conditions.length;
-        text = `${count} ${count === 1 ? 'rule' : 'rules'}`;
+        text = this.#host.t(count === 1 ? '{count} rule' : '{count} rules', count);
       } else {
         const column = this.#data.columns.find(item => item.id === condition.columnId);
         if (!column) continue;
-        const operator = FILTER_LABELS[condition.operator] ?? condition.operator;
+        const operator = this.#host.t(FILTER_LABELS[condition.operator] ?? condition.operator);
         text = `${column.name} ${operator}${condition.value ? ` ${condition.value}` : ''}`;
       }
       const chip = btn('nb-db-filter-chip', { text });
@@ -953,7 +963,7 @@ export class DatabaseView {
       bar.append(chip);
     }
     if (!this.#readonly) {
-      const add = btn('nb-db-filter-add-chip', { text: '+ Add filter' });
+      const add = btn('nb-db-filter-add-chip', { text: this.#host.t('+ Add filter') });
       add.addEventListener('click', () => this.#popovers.openFilterPopover(add), {
         signal: this.#events.signal,
       });
@@ -965,7 +975,7 @@ export class DatabaseView {
   #renderViewBar(view: DatabaseViewConfig): HTMLElement {
     const bar = el('div', 'nb-db-viewbar');
     bar.setAttribute('role', 'tablist');
-    bar.setAttribute('aria-label', 'Database views');
+    bar.setAttribute('aria-label', this.#host.t('Database views'));
     for (const item of this.#views()) {
       const button = btn('nb-db-viewtab', {
         title: item.name,
@@ -989,8 +999,8 @@ export class DatabaseView {
     if (!this.#readonly) {
       const add = btn('nb-db-viewtab nb-db-viewadd', {
         text: '+',
-        title: 'Add view',
-        ariaLabel: 'Add view',
+        title: this.#host.t('Add view'),
+        ariaLabel: this.#host.t('Add view'),
       });
       add.addEventListener('click', () => this.#popovers.openAddViewMenu(add), {
         signal: this.#events.signal,
@@ -1005,9 +1015,11 @@ export class DatabaseView {
       const viewId = this.#activeView().id;
       const activeFilterCount = databaseFilterGroup(view).conditions.length;
       const filter = btn('nb-db-btn', {
-        html: `${icon.filter}<span class="nb-db-btn-label">${activeFilterCount > 0 ? `Filter (${activeFilterCount})` : 'Filter'}</span>`,
-        title: 'Filter rows',
-        ariaLabel: activeFilterCount > 0 ? `Filter, ${activeFilterCount} active` : 'Filter rows',
+        html: icon.filter,
+        labelClass: 'nb-db-btn-label',
+        label: activeFilterCount > 0 ? this.#host.t('Filter ({count})', activeFilterCount) : this.#host.t('Filter'),
+        title: this.#host.t('Filter rows'),
+        ariaLabel: activeFilterCount > 0 ? this.#host.t('Filter, {count} active', activeFilterCount) : this.#host.t('Filter rows'),
         dataset: {
           active: String(activeFilterCount > 0),
           filterToggle: 'true',
@@ -1040,7 +1052,7 @@ export class DatabaseView {
     this.#renderSearch(tools);
 
     if (this.#readonly) return;
-    const options = iconBtn('nb-db-btn nb-db-viewmore', icon.more, 'View settings');
+    const options = iconBtn('nb-db-btn nb-db-viewmore', icon.more, this.#host.t('View settings'));
     options.addEventListener('click', () => this.#popovers.openViewMenu(options), {
       signal: this.#events.signal,
     });
@@ -1049,15 +1061,15 @@ export class DatabaseView {
 
   #renderSearch(tools: HTMLElement): void {
     const wrap = el('div', 'nb-db-search-wrap');
-    const toggle = iconBtn('nb-db-search-toggle', icon.search, 'Search', {
-      title: 'Search rows',
+    const toggle = iconBtn('nb-db-search-toggle', icon.search, this.#host.t('Search'), {
+      title: this.#host.t('Search rows'),
     });
     const search = el('input', 'nb-db-search');
     search.type = 'search';
-    search.placeholder = 'Search';
+    search.placeholder = this.#host.t('Search');
     search.value = this.#searchQuery;
-    search.setAttribute('aria-label', 'Search rows');
-    const clear = iconBtn('nb-db-search-clear', icon.x, 'Clear search');
+    search.setAttribute('aria-label', this.#host.t('Search rows'));
+    const clear = iconBtn('nb-db-search-clear', icon.x, this.#host.t('Clear search'));
 
     const setOpen = (open: boolean): void => {
       this.#searchOpen = open;
@@ -1179,12 +1191,12 @@ export class DatabaseView {
     if (view.groupBy) {
       const groups = this.#groupsFor(view);
       if (groups.length === 0) {
-        wrapper.append(el('div', 'nb-db-empty', 'No groups'));
+        wrapper.append(el('div', 'nb-db-empty', this.#host.t('No groups')));
         return wrapper;
       }
       const visibleGroups = groups.filter(group => !group.hidden);
       if (visibleGroups.length === 0) {
-        wrapper.append(el('div', 'nb-db-empty', 'All groups are hidden'));
+        wrapper.append(el('div', 'nb-db-empty', this.#host.t('All groups are hidden')));
         return wrapper;
       }
       for (const group of visibleGroups) {
@@ -1193,7 +1205,7 @@ export class DatabaseView {
         const heading = el('div', 'nb-db-group-head');
         const collapsed = Boolean(group.collapsed);
         const toggle = btn('nb-db-group-toggle', {
-          ariaLabel: collapsed ? 'Expand group' : 'Collapse group',
+          ariaLabel: collapsed ? this.#host.t('Expand group') : this.#host.t('Collapse group'),
         });
         toggle.setAttribute('aria-expanded', String(!collapsed));
         toggle.append(el('span', 'nb-db-group-chevron', collapsed ? '▸' : '▾'));
@@ -1204,8 +1216,8 @@ export class DatabaseView {
         const addRow = iconBtn(
           'nb-db-group-add',
           icon.plus,
-          `Add row to ${group.label || 'group'}`,
-          { title: 'Add row to group', disabled: this.#readonly }
+          this.#host.t('Add row to {name}', group.label || this.#host.t('group')),
+          { title: this.#host.t('Add row to group'), disabled: this.#readonly }
         );
         addRow.addEventListener('click', event => {
           event.stopPropagation();
@@ -1213,7 +1225,7 @@ export class DatabaseView {
         }, { signal: this.#contentEvents.signal });
         heading.append(
           toggle,
-          el('span', 'nb-db-group-label', group.label || 'No value'),
+          el('span', 'nb-db-group-label', group.label || this.#host.t('No value')),
           el('span', 'nb-db-group-count', String(group.rows.length)),
           addRow
         );
@@ -1239,7 +1251,7 @@ export class DatabaseView {
     groupKey?: string
   ): HTMLTableElement {
     const table = el('table', 'nb-db-table');
-    table.setAttribute('aria-label', this.#data.title?.trim() || 'Database');
+    table.setAttribute('aria-label', this.#data.title?.trim() || this.#host.t('Database'));
     const states = this.#columnStates(view).filter(state =>
       columns.some(column => column.id === state.column.id)
     );
@@ -1293,7 +1305,7 @@ export class DatabaseView {
       th.scope = 'col';
       th.dataset.columnId = column.id;
       const button = btn('nb-db-col-head', {
-        ariaLabel: `Edit column ${column.name}`,
+        ariaLabel: this.#host.t('Edit column {name}', column.name),
         disabled: this.#readonly,
       });
       const typeIcon = el('span', 'nb-db-typeicon');
@@ -1312,7 +1324,7 @@ export class DatabaseView {
       const resizer = el('span', 'nb-db-resizer');
       resizer.setAttribute('role', 'separator');
       resizer.setAttribute('aria-orientation', 'vertical');
-      resizer.setAttribute('aria-label', `Resize ${column.name}`);
+      resizer.setAttribute('aria-label', this.#host.t('Resize {name}', column.name));
       th.append(button, resizer);
       headRow.append(th);
     }
@@ -1321,7 +1333,7 @@ export class DatabaseView {
     headRow.append(spacerHead);
     const addHead = el('th', 'nb-db-add-column-head');
     if (!this.#readonly) {
-      addHead.append(iconBtn('nb-db-add-column', icon.plus, 'Add column'));
+      addHead.append(iconBtn('nb-db-add-column', icon.plus, this.#host.t('Add column')));
     }
     headRow.append(addHead);
     thead.append(headRow);
@@ -1385,7 +1397,7 @@ export class DatabaseView {
       const td = el(
         'td',
         'nb-db-empty',
-        this.#readonly ? 'No rows' : 'No rows yet. Add one below.'
+        this.#readonly ? this.#host.t('No rows') : this.#host.t('No rows yet. Add one below.')
       );
       td.colSpan = Math.max(1, columns.length + 3);
       empty.append(td);
@@ -1461,8 +1473,8 @@ export class DatabaseView {
     tr.classList.toggle('is-row-selected', this.#selectedRows.has(row.id));
     const handle = el('td', 'nb-db-handle');
     if (!this.#readonly) {
-      const grip = iconBtn('nb-db-row-grip', icon.more, 'Select row');
-      const check = iconBtn('nb-db-row-check', icon.checkboxSquare, 'Select row', {
+      const grip = iconBtn('nb-db-row-grip', icon.more, this.#host.t('Select row'));
+      const check = iconBtn('nb-db-row-check', icon.checkboxSquare, this.#host.t('Select row'), {
         dataset: { rowId: row.id },
       });
       check.setAttribute('role', 'checkbox');
@@ -1484,9 +1496,9 @@ export class DatabaseView {
 
   #renderRowOperations(): HTMLElement {
     const ops = el('div', 'nb-db-row-ops');
-    ops.append(iconBtn('nb-db-row-expand', icon.expand, 'Expand row'));
+    ops.append(iconBtn('nb-db-row-expand', icon.expand, this.#host.t('Expand row')));
     if (!this.#readonly) {
-      ops.append(iconBtn('nb-db-rowmenu', icon.more, 'Row actions'));
+      ops.append(iconBtn('nb-db-rowmenu', icon.more, this.#host.t('Row actions')));
     }
     return ops;
   }
@@ -1506,8 +1518,8 @@ export class DatabaseView {
         const stat = state.stat;
         const button = btn('nb-db-stat', {
           text: stat
-            ? `${DATABASE_STAT_LABELS[stat]}: ${databaseStatValue(rows, state.column, stat)}`
-            : 'Calculate',
+            ? `${this.#host.t(DATABASE_STAT_LABELS[stat])}: ${databaseStatValue(rows, state.column, stat)}`
+            : this.#host.t('Calculate'),
           disabled: this.#readonly,
           dataset: {
             statColumn: state.column.id,
@@ -1531,7 +1543,8 @@ export class DatabaseView {
       addRowCell.colSpan = Math.max(1, columns.length + 3);
       const addRow = btn('nb-db-new-record');
       const addRowLabel = el('span', 'nb-db-new-record-label');
-      addRowLabel.innerHTML = `${icon.plus}<span>New Record</span>`;
+      addRowLabel.innerHTML = icon.plus;
+      addRowLabel.append(el('span', undefined, this.#host.t('New Record')));
       addRow.append(addRowLabel);
       addRow.addEventListener('click', () => this.#addRow(undefined, groupKey), {
         signal: this.#contentEvents.signal,
@@ -1848,11 +1861,13 @@ export class DatabaseView {
     if (!this.#countElement) return;
     const total = this.#data.rows.length;
     const shown = this.#rowsFor(view).length;
-    const rowText = shown === total ? `${total}` : `${shown} of ${total}`;
+    const { t } = this.#host;
+    const rowText = shown === total ? String(total)
+      : t('{shown} of {total}').replaceAll('{shown}', String(shown)).replaceAll('{total}', String(total));
     const columnCount = this.#data.columns.length;
-    this.#countElement.textContent = `${rowText} ${shown === 1 && total === 1 ? 'row' : 'rows'} · ${columnCount} ${
-      columnCount === 1 ? 'column' : 'columns'
-    }`;
+    const rows = t(shown === 1 && total === 1 ? '{count} row' : '{count} rows', rowText);
+    const columns = t(columnCount === 1 ? '{count} column' : '{count} columns', columnCount);
+    this.#countElement.textContent = `${rows} · ${columns}`;
   }
 
   #registerCell(key: string, nodes: CellNodes): void {
@@ -1970,7 +1985,7 @@ export class DatabaseView {
       )) {
         if (button.dataset.calculated !== 'false') {
           button.dataset.calculated = 'false';
-          button.textContent = 'Calculate';
+          button.textContent = this.#host.t('Calculate');
         }
       }
       return;
@@ -1987,7 +2002,7 @@ export class DatabaseView {
         if (!stat) {
           if (button.dataset.calculated !== 'false') {
             button.dataset.calculated = 'false';
-            button.textContent = 'Calculate';
+            button.textContent = this.#host.t('Calculate');
           }
           continue;
         }
@@ -2000,7 +2015,7 @@ export class DatabaseView {
           }
         }
         button.dataset.calculated = 'true';
-        button.textContent = `${DATABASE_STAT_LABELS[stat]}: ${databaseStatValue(rows, state.column, stat)}`;
+        button.textContent = `${this.#host.t(DATABASE_STAT_LABELS[stat])}: ${databaseStatValue(rows, state.column, stat)}`;
       }
     }
   }
@@ -2085,28 +2100,28 @@ export class DatabaseView {
         button.textContent = databaseCellDisplay(cell,'formula');
         const failed = /^#(?:SYNTAX|REF|CYCLE|TYPE|DIV0|LIMIT)$/.test(value);
         button.classList.toggle('nb-db-error', failed);
-        button.title = failed ? 'Formula error ' + value : 'Edit formula';
+        button.title = failed ? this.#host.t('Formula error ') + value : this.#host.t('Edit formula');
         break;
       case 'relation':
-        applyMultiLabel(button, cell?.values ?? [], column.name);
+        applyMultiLabel(this.#host.t, button, cell?.values ?? [], column.name);
         break;
       case 'checkbox':
         button.setAttribute('aria-checked', String(Boolean(cell?.checked)));
         break;
       case 'select':
-        applySelectLabel(button, value, column.options, column.name);
+        applySelectLabel(this.#host.t, button, value, column.options, column.name);
         break;
       case 'multi-select':
-        applyMultiLabel(button, cell?.values ?? [], column.name);
+        applyMultiLabel(this.#host.t, button, cell?.values ?? [], column.name);
         break;
       case 'files':
-        applyFilesLabel(button, cell?.files ?? [], column.name);
+        applyFilesLabel(this.#host.t, button, cell?.files ?? [], column.name);
         break;
       case 'people':
-        applyPeopleLabel(button, cell?.people ?? [], column.name);
+        applyPeopleLabel(this.#host.t, button, cell?.people ?? [], column.name);
         break;
       case 'image':
-        applyImageLabel(button, value, column.name);
+        applyImageLabel(this.#host.t, button, value, column.name);
         break;
     }
   }
@@ -2365,7 +2380,7 @@ export class DatabaseView {
     const text = el('div', 'nb-db-text');
     text.contentEditable = this.#readonly ? 'false' : 'true';
     text.spellcheck = false;
-    text.dataset.placeholder = column.type === 'url' ? 'https://…' : 'Empty';
+    text.dataset.placeholder = column.type === 'url' ? 'https://…' : this.#host.t('Empty');
     text.dataset.richText = String(column.type === 'text');
     text.setAttribute('role', 'textbox');
     text.setAttribute('aria-label', column.name);

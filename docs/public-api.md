@@ -41,6 +41,7 @@ these files directly. The core `DatabaseView` type is exported from
 
 | Option | Type | Description |
 | --- | --- | --- |
+| `dictionary` | `NobitaDictionary` | Per-editor UI messages, supplied at construction |
 | `doc` | `Doc \| string` | Initial document |
 | `readonly` | `boolean` | Disable editing |
 | `theme` | `'light' \| 'dark' \| 'auto'` | Editor theme |
@@ -60,6 +61,26 @@ these files directly. The core `DatabaseView` type is exported from
 | `uploadImage` | `ImageUploadHandler` | Upload pasted/dropped images |
 | `onOpenPage` | `(pageId) => void` | Host navigation for page reference blocks |
 | `resolvePage` | `(pageId) => PageInfo \| null` | Optional cached metadata for live page titles/icons |
+
+### UI dictionaries
+
+Use the original English message as the key. Omit a key to keep its English label.
+The optional Japanese module can be imported on its own or spread into a host dictionary.
+
+```ts
+import { createEditor, type NobitaDictionary } from '@nobita/element';
+import { ja } from '@nobita/element/locales/ja';
+
+const dictionary = { ...ja, 'New Record': '案件を追加' } satisfies NobitaDictionary;
+createEditor(container, { dictionary });
+```
+
+For a custom element, set its `dictionary` property before connecting it to the document.
+Each editor snapshots its dictionary on construction. Labels render as plain text, including
+menu items, toolbar tooltips and accessible names. Keep placeholder names such as
+`{count}` and `{name}` in translated messages. Document content, stored view names and
+host-supplied search results retain their original values. Slash commands also accept
+their English search terms.
 
 `MentionProvider.search(query)` may return items synchronously or as a Promise. Each item is
 `{ id, label, kind?, keywords? }`; the selected item becomes an inline

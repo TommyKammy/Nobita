@@ -1,3 +1,4 @@
+import type { Translate } from './dictionary.js';
 import {
   databaseCellText,
   databaseCellDisplay,
@@ -41,6 +42,7 @@ import {
 import type { DatabaseRichTextController } from './database-rich-text.js';
 
 export interface DatabaseDetailContext {
+  readonly t: Translate;
   databaseId: string;
   rootElement: HTMLElement;
   getReadonly(): boolean;
@@ -147,7 +149,7 @@ export class DatabaseDetailController {
     const panel = el('section', 'nb-db-detail');
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'true');
-    panel.setAttribute('aria-label', 'Record page');
+    panel.setAttribute('aria-label', this.#ctx.t('Record page'));
     const bar = el('div', 'nb-db-detail-bar');
     const nav = el('div', 'nb-db-detail-nav');
     const navigate = (direction: -1 | 1): void => {
@@ -156,17 +158,17 @@ export class DatabaseDetailController {
       const nextRow = rows[index + direction];
       if (nextRow) this.open(nextRow.id);
     };
-    const prev = iconBtn('nb-db-detail-navbtn', icon.arrowUp, 'Previous record', {
+    const prev = iconBtn('nb-db-detail-navbtn', icon.arrowUp, this.#ctx.t('Previous record'), {
       dataset: { nav: 'prev' },
     });
     prev.addEventListener('click', () => navigate(-1));
-    const next = iconBtn('nb-db-detail-navbtn', icon.arrowDown, 'Next record', {
+    const next = iconBtn('nb-db-detail-navbtn', icon.arrowDown, this.#ctx.t('Next record'), {
       dataset: { nav: 'next' },
     });
     next.addEventListener('click', () => navigate(1));
     this.#syncNav(prev, next, rowId);
     nav.append(prev, next);
-    const close = iconBtn('nb-db-detail-close', icon.x, 'Close record page');
+    const close = iconBtn('nb-db-detail-close', icon.x, this.#ctx.t('Close record page'));
     close.addEventListener('click', () => this.close());
     bar.append(nav, close);
     panel.append(bar);
@@ -182,7 +184,7 @@ export class DatabaseDetailController {
     panel.append(fields);
 
     const add = btn('nb-db-detail-add', {
-      html: `${icon.plus}<span>Add Property</span>`,
+      html: icon.plus, label: this.#ctx.t('Add Property'),
       disabled: readonly,
     });
     add.addEventListener('click', () => this.#ctx.openAddPropertyMenu(add));
@@ -266,8 +268,8 @@ export class DatabaseDetailController {
         ? formatDatabaseNumber(row.cells[titleColumn.id]?.text ?? '', titleColumn)
         : databaseCellText(row.cells[titleColumn.id], titleColumn.type)
       : '';
-    title.placeholder = 'Untitled';
-    title.setAttribute('aria-label', 'Record title');
+    title.placeholder = this.#ctx.t('Untitled');
+    title.setAttribute('aria-label', this.#ctx.t('Record title'));
     title.disabled = readonly;
     if (titleColumn) title.dataset.columnId = titleColumn.id;
     if (titleTextEditable(titleColumn)) {
@@ -311,13 +313,13 @@ export class DatabaseDetailController {
     const head = el('div', 'nb-db-detail-page-head');
     const pageIcon = document.createElement('span');
     pageIcon.innerHTML = icon.page;
-    head.append(pageIcon, el('span', undefined, 'Page'));
+    head.append(pageIcon, el('span', undefined, this.#ctx.t('Page')));
     const body = el('div', 'nb-db-page-text nb-db-rich-text');
     body.contentEditable = readonly ? 'false' : 'true';
     body.spellcheck = false;
-    body.dataset.placeholder = 'Write about this record…';
+    body.dataset.placeholder = this.#ctx.t('Write about this record…');
     body.setAttribute('role', 'textbox');
-    body.setAttribute('aria-label', 'Record page body');
+    body.setAttribute('aria-label', this.#ctx.t('Record page body'));
     this.#renderPageContent(body, row);
     if (!readonly) {
       const commitPage = (): void => {
@@ -384,10 +386,10 @@ export class DatabaseDetailController {
     column: DatabaseColumn,
     cell: DatabaseCell | undefined
   ): void {
-    if (column.type === 'files') applyFilesLabel(button, cell?.files ?? [], column.name);
-    else if (column.type === 'people') applyPeopleLabel(button, cell?.people ?? [], column.name);
+    if (column.type === 'files') applyFilesLabel(this.#ctx.t, button, cell?.files ?? [], column.name);
+    else if (column.type === 'people') applyPeopleLabel(this.#ctx.t, button, cell?.people ?? [], column.name);
     else if (isComputedColumn(column)) button.textContent = databaseCellDisplay(cell,column.type);
-    else if (column.type === 'image') applyImageLabel(button, cell?.text, column.name);
+    else if (column.type === 'image') applyImageLabel(this.#ctx.t, button, cell?.text, column.name);
   }
 
   #restoreOffsets(text: HTMLElement, maxLength: number): void {
@@ -419,7 +421,7 @@ export class DatabaseDetailController {
       select.append(option);
       optionValues.add(value);
     };
-    if (select.options.length === 0) appendOption('', 'Empty');
+    if (select.options.length === 0) appendOption('', this.#ctx.t('Empty'));
     for (const value of column.options ?? []) appendOption(value, value);
     for (const value of selected) if (value) appendOption(value, value);
     for (const option of select.options) {
@@ -545,7 +547,7 @@ export class DatabaseDetailController {
       const button = btn('nb-db-detail-picker nb-db-detail-image', {
         disabled: readonly,
       });
-      applyImageLabel(button, cell?.text, column.name);
+      applyImageLabel(this.#ctx.t, button, cell?.text, column.name);
       button.addEventListener(
         'click',
         () => this.#ctx.openImagePopover(column.id, row.id, button),
