@@ -1,3 +1,4 @@
+import { registerTableOfContents } from '@nobita/element/table-of-contents';
 import {
   NobitaEditor,
   createEditor,
@@ -311,6 +312,7 @@ function mountEditor(): void {
       onChange: (doc, meta) => handleDocChange(doc, meta.source),
       onSelectionChange: () => updateStats(),
     });
+    registerTableOfContents(editor);
     editor.setTheme(state.theme);
     (editorHost as HTMLElement & { __nobita?: NobitaEditor }).__nobita = editor;
   } else {
@@ -1476,8 +1478,10 @@ function openSearch(): void {
 const EMBED_SNIPPET = [
   '<script type="module">',
   "  import '@nobita/element';",
+  "  import { registerTableOfContents } from '@nobita/element/table-of-contents';",
   '',
   "  const editor = document.querySelector('nobita-editor');",
+  "  registerTableOfContents(editor.editor);",
   "  editor.doc = await fetch('/nobita-doc.json').then(r => r.json());",
   '',
   "  editor.addEventListener('nobita-change', event => {",
@@ -1525,6 +1529,7 @@ function openEmbed(): void {
       readonly: true,
       theme: state.theme,
     });
+    registerTableOfContents(preview);
   }
 
   backdrop.querySelector<HTMLElement>('[data-copy]')?.addEventListener('click', async () => {
