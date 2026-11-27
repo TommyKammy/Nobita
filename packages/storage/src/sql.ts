@@ -64,11 +64,13 @@ interface DocumentRow {
   title: string;
   doc: string;
   version: number;
+  created_at: number;
   updated_at: number;
 }
 
 interface VersionRow {
   version: number;
+  created_at: number;
   updated_at: number;
 }
 
@@ -78,7 +80,9 @@ const CREATE = `INSERT INTO nobita_docs
   ON CONFLICT(workspace_id, id) DO NOTHING`;
 
 const UPDATE = `UPDATE nobita_docs
-   SET title = ?, doc = ?, version = version + 1, updated_at = ?
+   SET title = ?, doc = ?, version = version + 1, updated_at =
+     CASE WHEN title <> ?1 OR json_extract(doc, '$.blocks') <> json_extract(?2, '$.blocks')
+          THEN ? ELSE updated_at END
  WHERE workspace_id = ? AND id = ? AND version = ?`;
 
 const UPSERT = `INSERT INTO nobita_docs
@@ -88,7 +92,9 @@ const UPSERT = `INSERT INTO nobita_docs
     title = excluded.title,
     doc = excluded.doc,
     version = nobita_docs.version + 1,
-    updated_at = excluded.updated_at`;
+    updated_at = CASE WHEN title <> excluded.title
+      OR json_extract(doc, '$.blocks') <> json_extract(excluded.doc, '$.blocks')
+      THEN excluded.updated_at ELSE updated_at END`;
 
 /**
  * Portable SQLite store. The same implementation runs on local SQLite and
@@ -107,7 +113,7 @@ export class SqlDocumentStore implements DocumentStore {
 
   async load(id: string): Promise<StoredDoc | null> {
     const rows = await this.#driver.all<DocumentRow>(
-      `SELECT id, title, doc, version, updated_at
+      `SELECT id, title, doc, version, created_at, updated_at
          FROM nobita_docs
         WHERE workspace_id = ? AND id = ?`,
       [this.#workspaceId, id]
@@ -117,6 +123,7 @@ export class SqlDocumentStore implements DocumentStore {
     return {
       doc: parseStoredDoc(row),
       version: row.version,
+      createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
   }
@@ -128,46 +135,22 @@ export class SqlDocumentStore implements DocumentStore {
     const serialized = JSON.stringify(doc);
     const expected = options.version;
 
-    if (expected !== undefined) {
-      const { changes } =
-        expected === 0
-          ? await this.#driver.run(CREATE, [
-              this.#workspaceId,
-              doc.id,
-              doc.title,
-              serialized,
-              now,
-              now,
-            ])
-          : await this.#driver.run(UPDATE, [
-              doc.title,
-              serialized,
-              now,
-              this.#workspaceId,
-              doc.id,
-              expected,
-            ]);
-      if (changes === 0) throw new DocumentConflictError(expected);
-      return {
-        id: doc.id,
-        title: doc.title,
-        version: expected + 1,
-        updatedAt: now,
-      };
-    }
-
-    const rows = await this.#driver.all<VersionRow>(
-      UPSERT + ' RETURNING version, updated_at',
-      [this.#workspaceId, doc.id, doc.title, serialized, now, now]
+    const statement = expected === undefined ? UPSERT : expected === 0 ? CREATE : UPDATE;
+    const params = expected === undefined || expected === 0
+      ? [this.#workspaceId, doc.id, doc.title, serialized, now, now]
+      : [doc.title, serialized, now, this.#workspaceId, doc.id, expected];
+    const [row] = await this.#driver.all<VersionRow>(
+      statement + ' RETURNING version, created_at, updated_at', params
     );
-    const row = rows[0];
     if (!row) {
+      if (expected !== undefined) throw new DocumentConflictError(expected);
       throw new DocumentStoreError(`Document ${doc.id} returned no metadata after saving`);
     }
     return {
       id: doc.id,
       title: doc.title,
       version: row.version,
+      createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
   }
@@ -177,9 +160,10 @@ export class SqlDocumentStore implements DocumentStore {
       id: string;
       title: string;
       version: number;
+      created_at: number;
       updated_at: number;
     }>(
-      `SELECT id, title, version, updated_at
+      `SELECT id, title, version, created_at, updated_at
          FROM nobita_docs
         WHERE workspace_id = ?
         ORDER BY updated_at DESC, id ASC`,
@@ -189,6 +173,7 @@ export class SqlDocumentStore implements DocumentStore {
       id: row.id,
       title: row.title,
       version: row.version,
+      createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
   }

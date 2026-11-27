@@ -38,7 +38,7 @@ export class MemoryDocumentStore implements DocumentStore {
     const entry = prepareEntry(
       doc,
       options,
-      () => this.#docs.get(doc.id)?.version ?? 0,
+      () => this.#docs.get(doc.id),
       this.#now
     );
     this.#docs.set(doc.id, entry);

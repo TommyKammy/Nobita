@@ -24,7 +24,7 @@ describe('MemoryDocumentStore', () => {
 
     const listed = await store.list();
     expect(listed).toEqual([
-      { id: 'doc-1', title: 'First', version: 1, updatedAt: 1 },
+      { id: 'doc-1', title: 'First', version: 1, createdAt: 1, updatedAt: 1 },
     ]);
   });
 

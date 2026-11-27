@@ -31,11 +31,12 @@ interface DocumentStore {
 interface StoredDoc {
   doc: Doc;
   version: number;
+  createdAt?: number;
   updatedAt: number;
 }
 ```
 
-`DocSummary` contains `id`, `title`, `version` and `updatedAt`. The port lists summaries most recently updated first.
+`DocSummary` includes `id`, `title`, `version`, `updatedAt` and optional `createdAt`. Dates are Unix milliseconds. New documents receive both dates on creation. Legacy entries can omit the creation date. Saving a changed title or block tree advances the content timestamp. The demo also advances it when page tags change. Favorites, navigation and Trash operations preserve it. The port lists summaries most recently updated first.
 
 Version rules:
 
@@ -73,7 +74,7 @@ async function persist() {
 }
 ```
 
-Each document is stored under `nobita:doc:<id>` as `{ doc, version, updatedAt }`. The prefix is configurable. Web Storage checks the version and writes the entry in separate operations. Concurrent tabs can both read the same version before either writes. The SQL adapter enforces the version condition atomically.
+Each document is stored under `nobita:doc:<id>` as `{ doc, version, createdAt, updatedAt }`. The prefix is configurable. Web Storage checks the version and writes the entry in separate operations. Concurrent tabs can both read the same version before either writes. The SQL adapter enforces the version condition atomically.
 
 ### SQLite and Cloudflare D1
 
@@ -162,8 +163,8 @@ The Worker exposes:
 | Method | Route | Body / header | Response |
 | --- | --- | --- | --- |
 | `GET` | `/docs` | — | `{ docs: DocSummary[] }` |
-| `GET` | `/docs/:id` | — | `{ doc, version, updatedAt }` or 404 |
-| `PUT` | `/docs/:id` | `{ doc }`, optional `If-Match: <version>` | `{ version, updatedAt }` |
+| `GET` | `/docs/:id` | — | `{ doc, version, createdAt, updatedAt }` or 404 |
+| `PUT` | `/docs/:id` | `{ doc }`, optional `If-Match: <version>` | `{ version, createdAt, updatedAt }` |
 | `DELETE` | `/docs/:id` | — | 204 or 404 |
 
 A successful GET of a document or PUT returns the version as a quoted ETag. On PUT, a stale version returns 409 and an invalid version header returns 400. An omitted header or `*` requests an unconditional save.

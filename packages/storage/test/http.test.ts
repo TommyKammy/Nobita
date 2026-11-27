@@ -37,7 +37,7 @@ describe('HttpDocumentStore', () => {
         });
       }
       if (url.endsWith('/docs/doc-1') && init?.method === 'PUT') {
-        return json({ version: 4, updatedAt: 43 });
+        return json({ version: 4, createdAt: 10, updatedAt: 43 });
       }
       if (url.endsWith('/docs/doc-1') && init?.method === 'DELETE') {
         return new Response(null, { status: 204 });
@@ -60,6 +60,7 @@ describe('HttpDocumentStore', () => {
       id: 'doc-1',
       title: 'Updated',
       version: 4,
+      createdAt: 10,
       updatedAt: 43,
     });
     const put = calls.find(call => call.init?.method === 'PUT');

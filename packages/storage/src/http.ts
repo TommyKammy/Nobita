@@ -19,6 +19,7 @@ export interface HttpDocumentStoreOptions {
 
 interface SummaryResponse {
   version?: unknown;
+  createdAt?: unknown;
   updatedAt?: unknown;
 }
 
@@ -26,8 +27,8 @@ interface SummaryResponse {
  * Client for the small JSON API implemented by `examples/cloudflare-d1`.
  *
  * - `GET    /docs`       -> `{ docs: DocSummary[] }`
- * - `GET    /docs/:id`   -> `{ doc, version, updatedAt }`
- * - `PUT    /docs/:id`   -> `{ version, updatedAt }` (`If-Match: <version>`)
+ * - `GET    /docs/:id`   -> `{ doc, version, createdAt, updatedAt }`
+ * - `PUT    /docs/:id`   -> `{ version, createdAt, updatedAt }` (`If-Match: <version>`)
  * - `DELETE /docs/:id`   -> `204`
  */
 export class HttpDocumentStore implements DocumentStore {
@@ -55,6 +56,7 @@ export class HttpDocumentStore implements DocumentStore {
     const body = (await response.json()) as {
       doc?: unknown;
       version?: unknown;
+      createdAt?: unknown;
       updatedAt?: unknown;
     };
     if (!isRecord(body.doc) || typeof body.version !== 'number') {
@@ -64,8 +66,9 @@ export class HttpDocumentStore implements DocumentStore {
     return {
       doc: body.doc as unknown as Doc,
       version: body.version,
+      createdAt: typeof body.createdAt === 'number' ? body.createdAt : undefined,
       updatedAt:
-        typeof body.updatedAt === 'number' ? body.updatedAt : Date.now(),
+        typeof body.updatedAt === 'number' ? body.updatedAt : 0,
     };
   }
 
@@ -96,8 +99,9 @@ export class HttpDocumentStore implements DocumentStore {
       id: doc.id,
       title: doc.title,
       version: body.version,
+      createdAt: typeof body.createdAt === 'number' ? body.createdAt : undefined,
       updatedAt:
-        typeof body.updatedAt === 'number' ? body.updatedAt : Date.now(),
+        typeof body.updatedAt === 'number' ? body.updatedAt : 0,
     };
   }
 
@@ -119,6 +123,7 @@ export class HttpDocumentStore implements DocumentStore {
         id: summary.id,
         title: summary.title,
         version: summary.version,
+        createdAt: typeof summary.createdAt === 'number' ? summary.createdAt : undefined,
         updatedAt: summary.updatedAt,
       }));
   }

@@ -155,7 +155,7 @@ async function putDocument(
         ? await store.save(doc)
         : await store.save(doc, { version: expected });
     return json(
-      { version: saved.version, updatedAt: saved.updatedAt },
+      { version: saved.version, createdAt: saved.createdAt, updatedAt: saved.updatedAt },
       200,
       { ...cors, etag: `"${saved.version}"` }
     );

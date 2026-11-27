@@ -30,7 +30,7 @@ import {
   type PageTreeNode,
 } from '@nobita/core';
 import {
-  createSeedState,
+  type DemoState,
   duplicatePageRecord,
   loadState,
   saveState,
@@ -38,14 +38,13 @@ import {
 } from './store';
 import './styles.css';
 
-const state = loadState();
-if (Object.keys(state.pages).length === 0) Object.assign(state, createSeedState());
+let state: DemoState;
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) throw new Error('App root missing');
 
 app.innerHTML = `
-  <div class="app" id="shell">
+  <div class="app" id="shell" hidden>
     <div class="sidebar-scrim" id="scrim"></div>
     <aside class="sidebar" aria-label="Workspace">
       <div class="brand-row">
@@ -104,6 +103,7 @@ app.innerHTML = `
           </div>
         </div>
         <div id="editor-host"></div>
+        <p id="page-dates" class="page-dates"></p>
         <section class="backlinks" id="backlinks" aria-label="Backlinks" hidden></section>
         <div class="empty-state" id="empty-state" hidden>
           <div class="empty-icon">${demoIcon.file}</div>
@@ -149,6 +149,8 @@ const toastElement = $('#toast') as HTMLDivElement;
 let currentView: 'all' | 'favorites' | 'trash' = 'all';
 let trashQuery = '';
 let editor: NobitaEditor | null = null;
+const changedPages = new Map<PageRecord, Pick<PageRecord, 'doc' | 'tags'>>();
+let saveFailed = false;
 let saving = false;
 let saveTimer = 0;
 let toastTimer = 0;
@@ -210,15 +212,17 @@ function createWorkspacePage(title: string, parentId: string | null): PageInfo {
   const siblings = Object.values(state.pages).filter(
     record => !isTrashed(record) && record.parentId === parentId
   );
+  const now = Date.now();
   state.pages[doc.id] = {
     doc,
     parentId,
     favorite: false,
     order: siblings.length,
-    updatedAt: Date.now(),
+    createdAt: now,
+    updatedAt: now,
   };
   if (parentId) collapsed.delete(parentId);
-  saveState(state);
+  persist();
   renderTree();
   return { id: doc.id, title: doc.title.trim() || 'Untitled' };
 }
@@ -311,12 +315,10 @@ function handleDocChange(doc: Doc, source: string): void {
   const record = state.pages[id];
   if (!record || isTrashed(record)) return;
   const titleChanged = record.doc.title !== doc.title;
+  const edited = source !== 'replace' && (source !== 'set-title' || titleChanged);
+  if (edited) rememberContent(record);
   record.doc = doc;
-  if (source !== 'replace') record.updatedAt = Date.now();
-  if (source !== 'replace' && source !== 'set-title') {
-    scheduleSave();
-    updateStats();
-  }
+  if (edited) scheduleSave();
   if (titleChanged) {
     const row = pageTree.querySelector<HTMLElement>(`[data-page-id="${CSS.escape(id)}"]`);
     const title = row?.querySelector<HTMLElement>('.page-title');
@@ -392,14 +394,65 @@ function renderBacklinks(): void {
   backlinksPanel.append(list);
 }
 
+function renderDates(): void {
+  const record = activeRecord();
+  const dates = $<HTMLElement>('#page-dates');
+  dates.textContent = record
+    ? `Created ${formatDate(record.createdAt)} · Updated ${formatDate(record.updatedAt)}`
+    : '';
+  dates.hidden = !record;
+}
+
+function formatDate(value?: number): string {
+  return value ? new Date(value).toLocaleString() : 'Unknown';
+}
+
+function rememberContent(record: PageRecord): void {
+  if (!changedPages.has(record)) changedPages.set(record, { doc: record.doc, tags: record.tags });
+}
+
+function contentChanged(record: PageRecord, before: Pick<PageRecord, 'doc' | 'tags'>): boolean {
+  if (record.doc.title !== before.doc.title) return true;
+  if (record.tags !== before.tags) {
+    const tags = record.tags ?? [];
+    const prior = before.tags ?? [];
+    if (tags.length !== prior.length || tags.some(tag => !prior.includes(tag))) return true;
+  }
+  const blocks = record.doc.blocks;
+  const prior = before.doc.blocks;
+  if (blocks === prior) return false;
+  return blocks.length !== prior.length || blocks.some((block, i) =>
+    block !== prior[i] && JSON.stringify(block) !== JSON.stringify(prior[i])
+  );
+}
+
+function persist(): void {
+  window.clearTimeout(saveTimer);
+  const previous = new Map<PageRecord, number>();
+  const now = Date.now();
+  for (const [record, before] of changedPages) {
+    if (!contentChanged(record, before)) continue;
+    previous.set(record, record.updatedAt);
+    record.updatedAt = now;
+  }
+  saveFailed = !saveState(state);
+  if (saveFailed) {
+    for (const [record, date] of previous) record.updatedAt = date;
+  } else {
+    changedPages.clear();
+  }
+  saving = false;
+  renderDates();
+  updateStats();
+}
+
 function scheduleSave(): void {
   saving = true;
   updateStats();
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
-    saveState(state);
-    saving = false;
-    updateStats();
+    saveTimer = 0;
+    persist();
   }, 420);
 }
 
@@ -407,26 +460,22 @@ function updateStats(): void {
   const doc = editor?.getDoc() ?? activeRecord()?.doc;
   const words = doc ? countWords(doc) : 0;
   const label = words === 1 ? '1 word' : `${words} words`;
-  saveStatus.dataset.state = saving ? 'saving' : 'saved';
-  saveText.textContent = saving ? 'Saving…' : `Saved · ${label}`;
+  saveStatus.dataset.state = saving ? 'saving' : saveFailed ? 'error' : 'saved';
+  saveText.textContent = saving ? 'Saving…' : saveFailed ? 'Not saved' : `Saved · ${label}`;
 }
 
 function openPage(id: string, focusBlockId?: string): void {
   const record = state.pages[id];
   if (!record) return;
-  if (saveTimer) {
-    window.clearTimeout(saveTimer);
-    saveTimer = 0;
-    saveState(state);
-    saving = false;
-  }
+  window.clearTimeout(saveTimer);
+  saveTimer = 0;
   state.activeId = id;
   if (!isTrashed(record)) {
     for (const crumb of getPageBreadcrumbs(treeInputs(), id)) {
       collapsed.delete(crumb.id);
     }
   }
-  saveState(state);
+  persist();
   if (editor) editor.setDoc(record.doc);
   else mountEditor();
   syncEditorReadonly();
@@ -449,7 +498,7 @@ function newPage(parentId: string | null = null): void {
   if (currentView === 'trash') currentView = 'all';
   const created = createWorkspacePage('', parentId);
   state.activeId = created.id;
-  saveState(state);
+  persist();
   mountEditor();
   renderTree();
   renderCrumbs();
@@ -501,7 +550,7 @@ function movePageInTree(
     if (target) target.order = index;
   });
 
-  saveState(state);
+  persist();
   renderTree();
   renderCrumbs();
   showToast('Page moved');
@@ -782,6 +831,7 @@ function separator(): HTMLElement {
 }
 
 function renderFavorite(): void {
+  renderDates();
   const record = activeRecord();
   favoriteButton.dataset.active = String(Boolean(record?.favorite));
   favoriteButton.setAttribute('aria-pressed', String(Boolean(record?.favorite)));
@@ -790,9 +840,10 @@ function renderFavorite(): void {
 function renamePage(id: string, title: string): void {
   const record = state.pages[id];
   if (!record) return;
+  if (record.doc.title === title) return;
+  rememberContent(record);
   record.doc = { ...record.doc, title };
-  record.updatedAt = Date.now();
-  saveState(state);
+  persist();
   if (state.activeId === id) editor?.setTitle(title);
   editor?.refreshPageLinks();
   renderTree();
@@ -956,6 +1007,19 @@ function openPageMenu(id: string, anchor: PopupAnchor): void {
       action: () => toggleFavorite(id),
     },
     { label: 'Move to…', icon: icon.indent, action: () => openMoveMenu(id, anchor) },
+    {
+      label: 'Edit tags',
+      action: () => {
+        const current = record.tags ?? [];
+        const input = window.prompt('Tags (comma-separated)', current.join(', '));
+        if (input === null) return;
+        const tags = [...new Set(input.split(',').map(tag => tag.trim()).filter(Boolean))];
+        if (tags.length === current.length && tags.every(tag => current.includes(tag))) return;
+        rememberContent(record);
+        record.tags = tags;
+        persist();
+      },
+    },
     { label: 'Duplicate', icon: icon.duplicate, action: () => duplicatePage(id) },
     { label: 'Export Markdown', icon: icon.copy, action: () => exportMarkdown(id) },
     { label: 'Export JSON', icon: demoIcon.file, action: () => exportJSON(id) },
@@ -976,8 +1040,7 @@ function toggleFavorite(id: string): void {
   const record = state.pages[id];
   if (!record || isTrashed(record)) return;
   record.favorite = !record.favorite;
-  record.updatedAt = Date.now();
-  saveState(state);
+  persist();
   renderFavorite();
   renderTree();
 }
@@ -987,7 +1050,7 @@ function duplicatePage(id: string): void {
   if (!record || isTrashed(record)) return;
   const copy = duplicatePageRecord(record);
   state.pages[copy.doc.id] = copy;
-  saveState(state);
+  persist();
   renderTree();
   openPage(copy.doc.id);
   showToast('Page duplicated');
@@ -1020,7 +1083,7 @@ function moveToTrash(id: string): void {
   if (state.activeId && ids.has(state.activeId)) {
     state.activeId = firstActivePageId();
   }
-  saveState(state);
+  persist();
   renderTree();
   if (!state.activeId) {
     showEmptyWorkspace();
@@ -1043,17 +1106,15 @@ function restoreFromTrash(id: string): void {
   const targetParentId = resolveRestoreParentId(inputs, id);
   const ids = collectRestoreTargetIds(inputs, id);
   if (ids.size === 0) return;
-  const now = Date.now();
   for (const targetId of ids) {
     const target = state.pages[targetId];
     if (!target) continue;
     delete target.deletedAt;
-    target.updatedAt = now;
   }
   record.parentId = targetParentId;
   if (targetParentId) collapsed.delete(targetParentId);
   if (currentView === 'trash') currentView = 'all';
-  saveState(state);
+  persist();
   openPage(id);
   editor?.refreshPageLinks();
   const label = titleOf(record);
@@ -1087,7 +1148,7 @@ function deletePermanently(id: string): void {
       state.activeId = firstActivePageId();
     }
   }
-  saveState(state);
+  persist();
   renderTree();
   if (!state.activeId) {
     showEmptyWorkspace();
@@ -1114,7 +1175,7 @@ function emptyTrash(): void {
   if (state.activeId && !state.pages[state.activeId]) {
     state.activeId = firstActivePageId();
   }
-  saveState(state);
+  persist();
   renderTree();
   if (!state.activeId) {
     showEmptyWorkspace();
@@ -1472,7 +1533,7 @@ function initEvents(): void {
 
   $('#theme-toggle').addEventListener('click', () => {
     state.theme = state.theme === 'dark' ? 'light' : 'dark';
-    saveState(state);
+    persist();
     applyTheme();
   });
 
@@ -1497,6 +1558,7 @@ function initEvents(): void {
     movePageInTree(sourceId, null);
   });
 
+  window.addEventListener('pagehide', () => { if (changedPages.size) persist(); });
   window.addEventListener('keydown', event => {
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key.toLowerCase() === 'k') {
@@ -1529,13 +1591,21 @@ function initEvents(): void {
 
 /* ---------------- boot ---------------- */
 
-if (!state.activeId) {
-  state.activeId = firstActivePageId();
+async function start(): Promise<void> {
+  const loaded = await loadState();
+  state = loaded.state;
+  saveFailed = !loaded.saved;
+  if (!state.activeId) {
+    state.activeId = firstActivePageId();
+  }
+  applyTheme();
+  initEvents();
+  shell.removeAttribute('hidden');
+  mountEditor();
+  renderTree();
+  renderCrumbs();
+  renderFavorite();
+  updateStats();
 }
-applyTheme();
-initEvents();
-mountEditor();
-renderTree();
-renderCrumbs();
-renderFavorite();
-updateStats();
+
+void start();
