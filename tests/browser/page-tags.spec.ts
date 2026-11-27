@@ -167,3 +167,20 @@ test('filtering and duplicate tags preserve dates, and a failed tag removal retr
   expect((await saved()).tags).toEqual([]);
   expect((await saved()).updatedAt).toBeGreaterThan(previous.updatedAt);
 });
+
+test('saving tags for a sidebar note restores focus to its own actions', async ({ page }) => {
+  await page.goto(url);
+  await newPage(page, 'Active note');
+  const row = page.locator('#page-tree [data-page-id="getting-started"]').first();
+  const actions = row.getByRole('button', { name: 'Page actions' });
+  await row.hover();
+  await actions.click();
+  await page.getByRole('menuitem', { name: 'Edit tags' }).click();
+  await page.getByRole('textbox', { name: 'Tag name' }).fill('sidebar');
+  await page.getByRole('button', { name: 'Save tags' }).click();
+  await expect(actions).toBeFocused();
+  await expect(page.locator('.nb-title')).toHaveText('Active note');
+  await expect(page.locator('#note-tags')).toBeHidden();
+  await row.locator('.page-title').click();
+  await expect(page.locator('#tag-chips')).toHaveText('sidebar');
+});

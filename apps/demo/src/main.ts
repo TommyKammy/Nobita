@@ -642,8 +642,14 @@ function editTags(record: PageRecord, anchor: PopupAnchor): void {
   dialog.onkeydown = event => event.stopPropagation();
   dialog.onclose = () => {
     dialog.remove();
-    if (anchor instanceof HTMLElement && anchor.isConnected) anchor.focus();
-    else pageMenuButton.focus();
+    if (anchor instanceof HTMLElement && anchor.isConnected) {
+      anchor.focus();
+      return;
+    }
+    const rowAction = pageTree.querySelector<HTMLButtonElement>(
+      `[data-page-id="${CSS.escape(record.doc.id)}"] [aria-label="Page actions"]`
+    );
+    (rowAction ?? pageMenuButton).focus();
   };
   render();
   modalRoot.append(dialog);
