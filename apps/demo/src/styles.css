@@ -1446,3 +1446,47 @@ svg {
   font-size: 0.8125rem;
   color: var(--text-2);
 }
+
+.note-tags, .tag-chips, #tag-form, .tag-chip, .tag-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.note-tags {
+  max-width: 760px;
+  margin: 1rem auto;
+  padding-inline: clamp(1rem, 5vw, 44px);
+  flex-wrap: wrap;
+}
+
+.note-tags, .tag-filter {
+  font-size: 0.8125rem;
+  color: var(--text-2);
+}
+
+.tag-chips { flex-wrap: wrap; min-width: 0; }
+.tag-chips:empty { display: none; }
+.tag-chip {
+  max-width: 100%;
+  padding-inline: 0.5rem;
+  min-height: 1.75rem;
+  border-radius: 0.4rem;
+  background: var(--surface-2);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.tag-chip button { background: transparent; color: var(--text-2); padding: 0.25rem; }
+#tag-form { max-width: 100%; }
+#tag-form input, #tag-form button, .tag-filter select {
+  border: 1px solid var(--border-strong);
+  border-radius: 0.375rem;
+  padding: 0.3rem 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+#tag-form input { width: 9rem; min-width: 0; }
+#tag-form button { white-space: nowrap; }
+.tag-filter { margin: 0.3rem 0.75rem 0.6rem; }
+.tag-filter select { flex: 1; min-width: 0; }
