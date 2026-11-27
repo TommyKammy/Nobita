@@ -40,9 +40,9 @@ rows. See [Priorities](#9-priorities).
 
 ## 1. Slash menu (`/`) commands
 
-AFFiNE's `/` menu is broad because it also exposes formatting and line actions.
-Nobita keeps `/` focused on block insertion; some AFFiNE entries already exist
-in Nobita's toolbar or block menu.
+Nobita’s built-in slash menu includes block conversion, insertion and actions such as alignment and moving a block. Hosts can add insertion commands to an individual editor with `editor.registerSlashBlock()`.
+
+In the ticket card example, type `/案件` or `/ticket` in an empty paragraph with no children, then select **案件カード**. The editor inserts a `custom:ticket` block and places the caret in the empty paragraph after the card. One Undo restores the original empty paragraph. [Runnable ticket card example](../examples/ticket-card/README.md)
 
 ### 1.1 Basic blocks and conversion
 

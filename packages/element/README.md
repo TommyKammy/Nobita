@@ -22,9 +22,33 @@ editor.focus();
 
 Use `getDoc()` to read the current document, `setDoc(doc)` to replace it and `destroy()` when disposing of the host. For declarative markup, importing `@nobita/element` in a browser registers `<nobita-editor>`. Its `doc` property accepts a document or JSON string and its `nobita-change` event carries `detail.doc`. The `@nobita/element/styles` entry exports the editor CSS as the string `styles`.
 
-Register a renderer for a host-defined block with `editor.registerCustomBlock()`. Clients without that renderer preserve the block’s type and JSON data. See [host-defined blocks](../../docs/public-api.md#host-defined-blocks) for an example.
-
 See the [public API](../../docs/public-api.md) for editor options, events and methods.
+
+## Insert a host-defined block
+
+On the editor mounted above, register a renderer for the saved block type and a slash command for inserting it. The command’s synchronous `create` function runs when the user selects the item and returns a fresh block each time.
+
+```ts
+import { createBlock } from '@nobita/core';
+
+editor.registerCustomBlock('custom:ticket', block =>
+  block.text.map(run => run.text).join('')
+);
+
+const unregister = editor.registerSlashBlock({
+  id: 'acme.insert-ticket',
+  label: '案件カード',
+  keywords: ['案件', 'ticket'],
+  create: () => createBlock('custom:ticket', {
+    text: '案件（未採番）',
+    props: { data: { version: 1, number: '未採番', status: 'open' } },
+  }),
+});
+```
+
+Type `/案件` or `/ticket` in an empty paragraph with no children and choose **案件カード**. Continue typing in the paragraph after the card, or undo the insertion to return to the original empty paragraph. Call `unregister()` to remove the command from this editor.
+
+The runnable example adds a form for the ticket number and status, saves edits as Nobita JSON and reloads them. A client without the renderer can edit adjacent text and resave the document while preserving the card’s type and data. [Run the ticket card example](../../examples/ticket-card/README.md) · [Host code](../../examples/ticket-card/host.js) · [Host-defined block API](../../docs/public-api.md#host-defined-blocks)
 
 ## Customize UI messages
 
