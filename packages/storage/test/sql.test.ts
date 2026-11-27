@@ -46,6 +46,7 @@ describe('SqlDocumentStore', () => {
       id: 'doc-1',
       title: 'First',
       version: 1,
+      createdAt: 101,
       updatedAt: 101,
     });
 
@@ -68,6 +69,27 @@ describe('SqlDocumentStore', () => {
     expect(updated.version).toBe(2);
     expect((await store.load('doc-1'))?.doc.title).toBe('Second');
     db.close();
+  });
+
+  it('preserves creation and only dates content changes on conditional and unconditional saves', async () => {
+    const { db, sql } = await setup();
+    let clock = 100;
+    const store = new SqlDocumentStore(sql, { now: () => ++clock });
+    try {
+      const original = doc('First');
+      const created = await store.save(original);
+      const identical = await store.save(original, { version: 1 });
+      const icon = await store.save({ ...original, icon: 'A' });
+      expect(identical.updatedAt).toBe(created.updatedAt);
+      expect(icon.updatedAt).toBe(created.updatedAt);
+      const edited = await store.save({ ...original, blocks: [] }, { version: 3 });
+      expect(edited.updatedAt).toBe(104);
+      expect(edited.createdAt).toBe(101);
+      expect(await store.list()).toEqual([edited]);
+      expect(await store.load(original.id)).toMatchObject({ createdAt: 101, updatedAt: 104 });
+    } finally {
+      db.close();
+    }
   });
 
   it('does not create a document with a non-zero expected version', async () => {

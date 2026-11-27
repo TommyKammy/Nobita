@@ -58,6 +58,16 @@ describe('LocalStorageDocumentStore', () => {
     ]);
   });
 
+  it('keeps legacy creation unknown across no-op and content saves', async () => {
+    const storage = new FakeStorage();
+    const value = doc('Legacy');
+    storage.setItem('nobita:doc:doc-1', JSON.stringify({ doc: value, updatedAt: 10, version: 1 }));
+    const store = new LocalStorageDocumentStore({ storage, now: () => 100 });
+    expect((await store.save(value)).updatedAt).toBe(10);
+    expect((await store.save({ ...value, title: 'Revised' })).updatedAt).toBe(100);
+    expect((await store.load(value.id))?.createdAt).toBeUndefined();
+  });
+
   it('enforces optimistic concurrency', async () => {
     const store = new LocalStorageDocumentStore({ storage: new FakeStorage() });
     await store.save(doc('First'), { version: 0 });

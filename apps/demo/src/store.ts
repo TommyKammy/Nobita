@@ -21,6 +21,8 @@ export interface PageRecord {
   parentId: string | null;
   favorite: boolean;
   order?: number;
+  tags?: string[] | undefined;
+  createdAt?: number | undefined;
   updatedAt: number;
   deletedAt?: number | null;
 }
@@ -110,11 +112,13 @@ function page(
   blocks: Block[],
   favorite = false
 ): PageRecord {
+  const now = Date.now();
   return {
     doc: createDoc({ id, title, icon, blocks }),
     parentId,
     favorite,
-    updatedAt: Date.now(),
+    createdAt: now,
+    updatedAt: now,
   };
 }
 
@@ -409,7 +413,11 @@ export function loadState(): DemoState {
   if (typeof localStorage === 'undefined') return createSeedState();
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return createSeedState();
+    if (!raw) {
+      const seed = createSeedState();
+      saveState(seed);
+      return seed;
+    }
     const parsed = JSON.parse(raw) as {
       pages?: Record<
         string,
@@ -418,6 +426,8 @@ export function loadState(): DemoState {
           parentId?: string | null;
           favorite?: boolean;
           order?: number;
+          tags?: string[] | undefined;
+          createdAt?: number | undefined;
           updatedAt?: number;
           deletedAt?: number | null;
         }
@@ -436,7 +446,9 @@ export function loadState(): DemoState {
         ...(typeof record.order === 'number' && Number.isFinite(record.order)
           ? { order: record.order }
           : {}),
-        updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : Date.now(),
+        tags: Array.isArray(record.tags) ? record.tags.filter(tag => typeof tag === 'string') : undefined,
+        createdAt: record.createdAt,
+        updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : 0,
         ...(typeof record.deletedAt === 'number' && Number.isFinite(record.deletedAt)
           ? { deletedAt: record.deletedAt }
           : {}),
@@ -461,11 +473,12 @@ export function loadState(): DemoState {
   }
 }
 
-export function saveState(state: DemoState): void {
+export function saveState(state: DemoState): boolean {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    return true;
   } catch {
-    // A full quota should not break editing.
+    return false;
   }
 }
 
@@ -476,10 +489,13 @@ export function duplicatePageRecord(record: PageRecord, parentId = record.parent
     title: record.doc.title ? `${record.doc.title} copy` : 'Untitled',
     blocks: record.doc.blocks.map(duplicateBlockTree),
   };
+  const now = Date.now();
   return {
     doc,
+    tags: record.tags?.slice(),
     parentId,
     favorite: false,
-    updatedAt: Date.now(),
+    createdAt: now,
+    updatedAt: now,
   };
 }

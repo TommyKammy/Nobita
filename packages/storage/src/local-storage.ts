@@ -61,7 +61,7 @@ export class LocalStorageDocumentStore implements DocumentStore {
     const entry = prepareEntry(
       doc,
       options,
-      () => this.#read(doc.id)?.version ?? 0,
+      () => this.#read(doc.id),
       this.#now
     );
     try {
@@ -129,6 +129,7 @@ export class LocalStorageDocumentStore implements DocumentStore {
     return {
       doc: stored,
       version: value.version,
+      createdAt: typeof value.createdAt === 'number' ? value.createdAt : undefined,
       updatedAt:
         typeof value.updatedAt === 'number' ? value.updatedAt : 0,
     };

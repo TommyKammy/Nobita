@@ -6,6 +6,7 @@ export interface DocSummary {
   title: string;
   /** Monotonic per-document version used for optimistic concurrency. */
   version: number;
+  createdAt?: number | undefined;
   updatedAt: number;
 }
 
@@ -13,6 +14,7 @@ export interface DocSummary {
 export interface StoredDoc {
   doc: Doc;
   version: number;
+  createdAt?: number | undefined;
   updatedAt: number;
 }
 
