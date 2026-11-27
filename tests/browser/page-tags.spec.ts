@@ -1,19 +1,15 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const url = process.env.NOBITA_DEMO_URL ?? '/demo.html';
+import { openTags, addTag, removeTag } from './tag-actions';
 
-async function addTag(page: Page, tag: string) {
-  const input = page.getByRole('textbox', { name: 'Tag name' });
-  await input.fill(tag);
-  await input.press('Enter');
-}
+const url = process.env.NOBITA_DEMO_URL ?? '/demo.html';
 
 async function newPage(page: Page, title: string) {
   await page.locator('#new-page').click();
   await page.getByRole('textbox', { name: 'Document title' }).fill(title);
 }
 
-test('inline tags preserve editor history, dates and persisted content', async ({ page }) => {
+test('menu tags preserve editor history, dates and persisted content', async ({ page }) => {
   await page.goto(url);
   await newPage(page, 'Tagged note');
   const body = page.locator('.nb-text').first();
@@ -21,9 +17,10 @@ test('inline tags preserve editor history, dates and persisted content', async (
   await page.keyboard.type('Draft');
   await addTag(page, '  企画  ');
   await addTag(page, '企画');
-  const chip = page.getByRole('button', { name: 'Remove tag 企画' });
+  const chip = page.locator('#tag-chips .tag-chip').filter({ hasText: '企画' });
   await expect(chip).toHaveCount(1);
-  await expect(page.getByRole('textbox', { name: 'Tag name' })).toBeFocused();
+  await expect(page.locator('#page-menu')).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'Tag name' })).toHaveCount(0);
   await body.click();
   await page.keyboard.press('End');
   await page.keyboard.press('Enter');
@@ -35,7 +32,7 @@ test('inline tags preserve editor history, dates and persisted content', async (
   await page.reload();
   await expect(chip).toBeVisible();
   await expect(page.locator('.nb-title')).toHaveText('Tagged note');
-  await chip.click();
+  await removeTag(page, '企画');
   await expect(chip).toHaveCount(0);
   await page.reload();
   await expect(page.locator('#tag-chips')).toBeEmpty();
@@ -60,12 +57,12 @@ test('filter includes nested pages, intersects favorites and can recover from ze
   await page.locator('[data-view="favorites"]').click();
   await expect(titles).toHaveText(['Tagged child']);
   await titles.click();
-  await page.getByRole('button', { name: 'Remove tag release' }).click();
+  await removeTag(page, 'release');
   await expect(page.locator('#page-tree')).toHaveText('No pages with this tag.');
   await page.locator('[data-view="all"]').click();
   await expect(titles).toHaveText(['Tagged peer']);
   await titles.click();
-  await page.getByRole('button', { name: 'Remove tag release' }).click();
+  await removeTag(page, 'release');
   await expect(filter).toHaveValue('release');
   await filter.selectOption('');
   await expect(titles.filter({ hasText: 'Parent' })).toBeVisible();
@@ -76,9 +73,16 @@ test('switching notes clears the tag draft and trash renders existing tags read-
   await newPage(page, 'Tagged for trash');
   await addTag(page, '分類');
   const input = page.getByRole('textbox', { name: 'Tag name' });
+  await openTags(page);
+  await page.getByRole('button', { name: 'Remove tag 分類' }).click();
   await input.fill('unfinished');
+  await input.press('Enter');
+  await input.press('Escape');
+  await expect(page.locator('#tag-chips')).toHaveText('分類');
   await page.locator('[data-page-id="getting-started"] .page-title').first().click();
+  await openTags(page);
   await expect(input).toHaveValue('');
+  await page.getByRole('button', { name: 'Cancel' }).click();
   await page.locator('#page-tree .page-title').filter({ hasText: 'Tagged for trash' }).click();
   await page.locator('#page-menu').click();
   await page.getByRole('menuitem', { name: 'Move to Trash' }).click();
@@ -88,6 +92,7 @@ test('switching notes clears the tag draft and trash renders existing tags read-
   await expect(input).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Remove tag 分類' })).toHaveCount(0);
   await page.locator('#banner-restore').click();
+  await openTags(page);
   await expect(page.getByRole('button', { name: 'Remove tag 分類' })).toBeVisible();
 });
 
@@ -96,10 +101,14 @@ test('a narrow viewport can add and remove long tags without horizontal overflow
   await page.goto(url);
   const tag = '長'.repeat(100);
   await addTag(page, tag);
+  await openTags(page);
   const remove = page.getByRole('button', { name: 'Remove tag ' + tag });
   await expect(remove).toBeVisible();
   expect(await page.locator('#editor-scroll').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(await page.getByRole('dialog').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
   await remove.click();
+  await page.getByRole('button', { name: 'Save tags' }).click();
+  await expect(page.locator('#tag-chips')).toBeEmpty();
   await expect(remove).toHaveCount(0);
 });
 
@@ -117,7 +126,7 @@ test('new pages remain visible when created from a tag-filtered list', async ({ 
 test('Japanese composition stays in the tag input until submission', async ({ page }) => {
   await page.goto(url);
   const input = page.getByRole('textbox', { name: 'Tag name' });
-  await input.focus();
+  await openTags(page);
   const client = await page.context().newCDPSession(page);
   await client.send('Input.imeSetComposition', { text: 'にほん', selectionStart: 3, selectionEnd: 3 });
   await expect(input).toHaveValue('にほん');
@@ -125,8 +134,10 @@ test('Japanese composition stays in the tag input until submission', async ({ pa
   await client.send('Input.insertText', { text: '日本' });
   await expect(input).toHaveValue('日本');
   await expect(page.locator('#tag-chips')).toBeEmpty();
-  await page.getByRole('button', { name: 'Add tag', exact: true }).click();
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Remove tag 日本' })).toBeVisible();
+  await page.getByRole('button', { name: 'Save tags' }).click();
+  await expect(page.locator('#tag-chips')).toHaveText('日本');
 });
 
 test('filtering and duplicate tags preserve dates, and a failed tag removal retries safely', async ({ page }) => {
@@ -149,7 +160,7 @@ test('filtering and duplicate tags preserve dates, and a failed tag removal retr
       throw new DOMException('Storage full', 'QuotaExceededError');
     };
   });
-  await page.getByRole('button', { name: 'Remove tag review' }).click();
+  await removeTag(page, 'review');
   await expect(page.locator('#save-text')).toHaveText('Not saved');
   expect(await saved()).toEqual(previous);
   await page.locator('#favorite').click();
