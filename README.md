@@ -32,7 +32,7 @@ Nobita is a from-scratch block editor built with **TypeScript 7.0.2**. It takes 
 | Tables | Separate `table` block with AFFiNE-style hover handles, row/column drag reorder, cell merging and splitting, rich-text cells (`cell.runs`), drag cell selection (copy/cut/paste/clear), hover add controls, row/column background colors, cell & handle right-click context menus, and HTML/Markdown table import |
 | Data views | Multiple named table and board views per database, AFFiNE-style view settings (`⋯`), per-view column order/widths/visibility, nested AND/OR filters, multi-sort, container-aware expandable search (auto-hidden below `560px`), footer statistics, sticky add-column/new-record controls, table grouping/collapse with persisted group state; rich-text cells (`B`/`I`/`U`/`S`/code toolbar & shortcuts, highlight/color rendering, IME & plain-text paste safe), editable record pages (`row.page.content`), board card covers (`coverColumnId`), board card add/open/drag-reorder/group actions (preserving multi-select tags), right-click menus on rows/columns/board cards, drag cell selection & fill, TSV copy/paste, readonly view switching & record-page viewing; 13 column types including formulas and bidirectional relations |
 | Menus | Slash menu with fuzzy search and block/page actions (move/copy/link/new page), block handle & Notion-style right-click context menus (single/multi-block, simple tables, database rows/columns/board cards; `Shift+Right-click` preserves native menu), selection toolbar with Turn into / Align / format / Color, link popover, `@` mention picker, `[[` page link picker |
-| Host extensions | [Custom block renderers](#host-defined-blocks) with portable JSON payloads, [per-editor UI dictionaries](#ui-dictionaries) and an optional Japanese locale |
+| Host extensions | [Custom block renderers and slash commands](#host-defined-blocks) with portable JSON payloads, [per-editor UI dictionaries](#ui-dictionaries) and an optional Japanese locale |
 | Workspace | Pure DOM-free `@nobita/core` primitives for backlinks, cycle-safe page trees, breadcrumbs, reparenting, full-text search, and soft-delete Trash; wired into `apps/demo` with drag-and-drop sidebar tree, collapsible backlinks panel, Trash view (search, read-only preview banner, Undo toast, restore & permanent delete), and sidebar right-click menus |
 | Drag | Reorder blocks, drop between blocks or nest into a block |
 | Markdown | `# `, `- `, `1. `, `[] `, `> `, ` ``` `, `--- `, Markdown tables; inline `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[links](url)` |
@@ -321,30 +321,40 @@ Options include `dictionary`, `virtualize`, `collaboration`, `databaseProvider`,
 
 ### Host-defined blocks
 
-Give the block a stable `custom:` type, put its JSON payload in `props.data`, and register a renderer on the editor that will display it. This example mounts a ticket block in `<div id="tickets"></div>`.
+Use `registerCustomBlock` to render a saved block and `registerSlashBlock` to let users insert a new one. Both registrations belong to one editor. This example adds a ticket card command labeled 案件カード to an editor mounted in `<div id="tickets"></div>`.
 
 ```ts
 import { createBlock, createDoc } from '@nobita/core';
 import { createEditor } from '@nobita/element';
 
-const ticket = createBlock('custom:ticket', {
-  text: 'Ticket #42',
-  props: { data: { number: 42 } },
-});
 const editor = createEditor(document.querySelector<HTMLElement>('#tickets')!, {
-  doc: createDoc({ blocks: [ticket] }),
+  doc: createDoc({ blocks: [createBlock('paragraph')] }),
 });
 
 editor.registerCustomBlock('custom:ticket', block => {
   const data = block.props.data;
-  if (data && typeof data === 'object' && 'number' in data && typeof data.number === 'number') {
-    return `Ticket #${data.number}`;
+  if (data && typeof data === 'object' && 'number' in data && typeof data.number === 'string') {
+    return `案件（${data.number}）`;
   }
-  return 'Ticket';
+  return '案件カード';
+});
+
+const unregister = editor.registerSlashBlock({
+  id: 'acme.insert-ticket',
+  label: '案件カード',
+  keywords: ['案件', 'ticket'],
+  create: () => createBlock('custom:ticket', {
+    text: '案件（未採番）',
+    props: { data: { version: 1, number: '未採番', status: 'open' } },
+  }),
 });
 ```
 
-The renderer receives the block and the editor’s read-only flag and can return a DOM node or plain text. Pass `null` as the renderer to unregister it. On a client with custom-block support but no matching renderer, the editor displays the type name. Editing another block and saving as Nobita JSON preserves the custom type, payload, text and children. Use JSON for this round trip. [Custom block API](docs/public-api.md#host-defined-blocks)
+Type `/案件` or `/ticket` in an empty paragraph with no children and select **案件カード**. The synchronous factory creates a fresh block on selection. The caret moves to the empty paragraph after the card, ready for typing. One Undo restores the original empty paragraph. To remove the command, call `unregister()`. Registering the same command ID replaces it, and an earlier disposer leaves the replacement active.
+
+The renderer receives the block and the editor’s read-only flag and can return a DOM node or plain text. Pass `null` as the renderer to unregister it. On a client with custom-block support but no matching renderer, the editor displays the type name. Editing another block and saving as Nobita JSON preserves the custom type, payload, text and children. [Custom block API](docs/public-api.md#host-defined-blocks)
+
+The runnable ticket-card example adds a form for the ticket number and status. Submitting the form commits both fields in one undoable store update. It saves Nobita JSON to localStorage and includes read-only and unregistered modes so you can try the round trip. [Run the example](examples/ticket-card/README.md) · [Host code](examples/ticket-card/host.js)
 
 ### UI dictionaries
 
@@ -450,7 +460,7 @@ Dark mode is built in (`theme="dark"` or `auto`). The shadow root uses `color-sc
 
 ## Testing
 
-All 591 tests passed on `f98148c`: 165 core, 16 storage, 112 collaboration and 298 Playwright browser tests. CI also checks TypeScript, the public API, bundle sizes and browser performance. [Verified CI run](https://github.com/TommyKammy/Nobita/actions/runs/45914333320)
+On `e9458f0`, all 598 tests passed locally (165 core, 16 storage, 112 collaboration and 305 Playwright browser tests against the production bundle). CI also checks TypeScript, the public API, bundle sizes and browser performance. [PR #30 CI run](https://github.com/TommyKammy/Nobita/actions/runs/45928697279)
 
 ```bash
 pnpm typecheck
@@ -463,33 +473,35 @@ pnpm bench --strict
 
 ## Performance
 
-In a headless Chromium CI run with the production bundle, setting a document and rendering its initial viewport took the following times (median of five runs). Documents below the default 300-block threshold render in full. [Benchmark run](https://github.com/TommyKammy/Nobita/actions/runs/45914333320)
+Measured locally on `e9458f0` in headless Chromium with the production bundle and a 1440 × 1000 viewport. Initial render measures setting the document and rendering its viewport (median of five runs). Documents below the default 300-block threshold render in full. [Benchmark script](scripts/benchmark.mjs)
 
 | Top-level blocks | 200 | 1,000 | 3,000 | 10,000 |
 | --- | ---: | ---: | ---: | ---: |
-| Initial render | 1.0 ms | 1.1 ms | 2.2 ms | 4.5 ms |
+| Initial render | 0.4 ms | 0.7 ms | 1.2 ms | 3.3 ms |
 
-On the same CI runner, editing and scrolling a 10,000-block document took at most 5.7 ms and 7.5 ms respectively over 15 frames, with at most 86 top-level blocks mounted. Evaluating five formulas across 100 database rows took 0.30 ms (median of 15 evaluations). [CI measurements](https://github.com/TommyKammy/Nobita/actions/runs/45914333320)
+Over 15 frames in the 10,000-block document, input took at most 2.5 ms and scrolling took at most 4.4 ms, with at most 86 top-level blocks mounted. Evaluating five formulas across 100 database rows took 0.30 ms (median of 15 evaluations).
+
+Opening the slash menu took 0.90 ms and filtering by `h1` took 0.20 ms both with and without a registered host command. Selecting and inserting the registered ticket card took 0.10 ms. Each figure is the median of seven round medians, with three warmups and 20 measured operations per round. [Slash menu benchmark](scripts/benchmark-slash-block.mjs)
 
 A separate local Chromium benchmark on the same revision measured a 40-row, four-column database mount and its block menu. Values are medians of nine run medians, including synchronous layout. Locale download time is excluded. [Dictionary benchmark procedure](docs/testing.md#dictionary-benchmark)
 
 | Operation | Default English | Japanese dictionary |
 | --- | ---: | ---: |
-| Mount database | 5.9 ms | 6.9 ms |
-| Open block menu | 0.8 ms | 1.8 ms |
+| Mount database | 5.8 ms | 6.3 ms |
+| Open block menu | 0.7 ms | 1.6 ms |
 
 For earlier before/after comparisons, see the [single-block virtualization benchmark](https://github.com/TommyKammy/Nobita/pull/26) and the [bulk relation update benchmark](https://github.com/TommyKammy/Nobita/pull/25).
 
-The following sizes are in bytes, measured on Node.js 22.23.5 using level-9 gzip. CI runs `pnpm size --strict`; the optional Japanese module was measured separately from the same build revision. The core measurement bundles its public ESM entry and its imports. The standalone editor already includes the core code it uses. The collaboration module loads on demand and its size excludes the host's chosen CRDT adapter and library. [Bundle size report](https://github.com/TommyKammy/Nobita/actions/runs/45914333320)
+The following sizes are in bytes, measured on Node.js 22.23.5 using level-9 gzip. CI runs `pnpm size --strict`; the optional Japanese module was measured separately from the same build revision. The core measurement bundles its public ESM entry and its imports. The standalone editor already includes the core code it uses. The collaboration module loads on demand and its size excludes the host's chosen CRDT adapter and library. [Size measurement script](scripts/size-report.mjs)
 
 | Artifact | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Core public entry (bundled ESM) | 145,968 | 38,228 |
-| Editor ESM (`nobita.js`) | 421,024 | 114,633 |
-| Editor IIFE (`nobita.global.js`) | 421,344 | 114,790 |
+| Core public entry (bundled ESM) | 146,023 | 38,252 |
+| Editor ESM (`nobita.js`) | 419,931 | 114,636 |
+| Editor IIFE (`nobita.global.js`) | 420,251 | 114,793 |
 | On-demand editor collaboration module | 8,362 | 3,314 |
-| Optional Japanese dictionary (`locales/ja.js`) | 16,730 | 4,931 |
-| Demo app main JavaScript bundle | 477,788 | 132,639 |
+| Optional Japanese dictionary (`locales/ja.js`) | 16,730 | 4,970 |
+| Demo app main JavaScript bundle | 476,312 | 132,463 |
 
 ## Repository layout
 
@@ -508,7 +520,7 @@ The following sizes are in bytes, measured on Node.js 22.23.5 using level-9 gzip
 
 ```
 apps/demo                  Notion-like demo: drag-and-drop page tree, [[ links, backlinks, full-text search, Trash, right-click menus, export, embed dialog
-examples/                  Optional integrations, including the Cloudflare D1 Worker
+examples/                  Ticket card with a custom slash command, and optional integrations including the Cloudflare D1 Worker
 docs/                      AFFiNE analysis, architecture, public API, command comparison, testing and storage notes
 ```
 
