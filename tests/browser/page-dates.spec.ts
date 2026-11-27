@@ -1,3 +1,4 @@
+import { addTag } from './tag-actions';
 import { expect, test, type Page } from '@playwright/test';
 
 const url = process.env.NOBITA_DEMO_URL ?? '/demo.html';
@@ -34,11 +35,11 @@ test('dates follow successful content saves across page actions and reloads', as
   await page.keyboard.type('Body');
   await expect.poll(async () => (await active(page)).updatedAt).toBeGreaterThan(titleDate);
   const bodyDate = (await active(page)).updatedAt;
-  await menu(page, 'Edit tags', 'alpha, beta');
+  await addTag(page, 'alpha, beta');
   const tagged = await active(page);
   expect(tagged.tags).toEqual(['alpha', 'beta']);
   expect(tagged.updatedAt).toBeGreaterThan(bodyDate);
-  await menu(page, 'Edit tags', 'beta, alpha');
+  await addTag(page, 'beta, alpha');
   await menu(page, 'Rename', 'Dated note');
   await page.locator('#favorite').click();
   await page.locator('[data-page-id="getting-started"] .page-title').first().click();

@@ -110,10 +110,6 @@ app.innerHTML = `
         <section id="note-tags" class="note-tags" aria-label="Note tags" hidden>
           <span class="tags-label">Tags</span>
           <div id="tag-chips" class="tag-chips"></div>
-          <form id="tag-form" aria-label="Add a tag">
-            <input id="tag-input" name="tag" aria-label="Tag name" placeholder="Tag name" autocomplete="off">
-            <button type="submit">Add tag</button>
-          </form>
         </section>
         <p id="page-dates" class="page-dates"></p>
         <section class="backlinks" id="backlinks" aria-label="Backlinks" hidden></section>
@@ -146,8 +142,6 @@ const emptyTrashButton = $('#empty-trash') as HTMLButtonElement;
 const trashFilter = $('#trash-filter') as HTMLDivElement;
 const trashSearch = $('#trash-search') as HTMLInputElement;
 const filterTag = $<HTMLSelectElement>('#filter-tag');
-const tagInput = $<HTMLInputElement>('#tag-input');
-const tagForm = $<HTMLFormElement>('#tag-form');
 const tagChips = $<HTMLElement>('#tag-chips');
 const noteTags = $<HTMLElement>('#note-tags');
 const tagFilter = $<HTMLElement>('#tag-filter');
@@ -583,30 +577,83 @@ function movePageInTree(
 
 function displayTags(): void {
   const record = activeRecord();
-  const readonly = !record || isTrashed(record);
-  noteTags.hidden = !record || (readonly && !record.tags?.length);
-  tagForm.hidden = readonly;
-  if (noteTags.dataset.page !== state.activeId || readonly) tagInput.value = '';
-  noteTags.dataset.page = state.activeId ?? '';
-  tagChips.replaceChildren();
-  if (!record) return;
-  for (const tag of record.tags ?? []) {
-    const chip = document.createElement('span');
-    chip.className = 'tag-chip';
-    chip.textContent = tag;
-    if (!readonly) {
+  const tags = record?.tags ?? [];
+  noteTags.hidden = !tags.length;
+  tagChips.replaceChildren(...tags.map(tag => tagChip(tag)));
+}
+
+function tagChip(tag: string): HTMLSpanElement {
+  const chip = document.createElement('span');
+  chip.className = 'tag-chip';
+  chip.textContent = tag;
+  return chip;
+}
+
+function editTags(record: PageRecord, anchor: PopupAnchor): void {
+  const draft = new Set(record.tags ?? []);
+  const dialog = document.createElement('dialog');
+  dialog.className = 'tag-dialog';
+  dialog.setAttribute('aria-labelledby', 'edit-tags-title');
+  dialog.innerHTML = `
+    <h2 id="edit-tags-title">${demoIcon.tag} Edit tags</h2>
+    <form class="tag-entry">
+      <input aria-label="Tag name" placeholder="Tag name" autocomplete="off" autofocus>
+      <button type="submit">Add</button>
+    </form>
+    <div class="tag-chips"></div>
+    <footer><button type="button" data-cancel>Cancel</button>
+      <button type="button" class="primary-btn" data-save>Save tags</button></footer>`;
+  const input = dialog.querySelector('input')!;
+  const chips = dialog.querySelector('.tag-chips')!;
+  function render(): void {
+    chips.replaceChildren(...Array.from(draft, tag => {
+      const chip = tagChip(tag);
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = '×';
       remove.setAttribute('aria-label', `Remove tag ${tag}`);
-      remove.addEventListener('click', () => {
-        saveTags(record, (record.tags ?? []).filter(value => value !== tag));
-        tagInput.focus();
-      });
+      remove.onclick = () => {
+        draft.delete(tag);
+        render();
+        input.focus();
+      };
       chip.append(remove);
-    }
-    tagChips.append(chip);
+      return chip;
+    }));
   }
+  function add(): void {
+    for (const tag of input.value.split(',').map(value => value.trim())) {
+      if (tag) draft.add(tag);
+    }
+    input.value = '';
+  }
+  dialog.querySelector('form')!.onsubmit = event => {
+    event.preventDefault();
+    add();
+    render();
+    input.focus();
+  };
+  dialog.querySelector<HTMLButtonElement>('[data-save]')!.onclick = () => {
+    add();
+    saveTags(record, [...draft]);
+    dialog.close();
+  };
+  dialog.querySelector<HTMLButtonElement>('[data-cancel]')!.onclick = () => dialog.close();
+  dialog.onkeydown = event => event.stopPropagation();
+  dialog.onclose = () => {
+    dialog.remove();
+    if (anchor instanceof HTMLElement && anchor.isConnected) {
+      anchor.focus();
+      return;
+    }
+    const rowAction = pageTree.querySelector<HTMLButtonElement>(
+      `[data-page-id="${CSS.escape(record.doc.id)}"] [aria-label="Page actions"]`
+    );
+    (rowAction ?? pageMenuButton).focus();
+  };
+  render();
+  modalRoot.append(dialog);
+  dialog.showModal();
 }
 
 function saveTags(record: PageRecord, values: string[]): void {
@@ -1083,12 +1130,8 @@ function openPageMenu(id: string, anchor: PopupAnchor): void {
     { label: 'Move to…', icon: icon.indent, action: () => openMoveMenu(id, anchor) },
     {
       label: 'Edit tags',
-      action: () => {
-        const current = record.tags ?? [];
-        const input = window.prompt('Tags (comma-separated)', current.join(', '));
-        if (input === null) return;
-        saveTags(record, input.split(','));
-      },
+      icon: demoIcon.tag,
+      action: () => editTags(record, anchor),
     },
     { label: 'Duplicate', icon: icon.duplicate, action: () => duplicatePage(id) },
     { label: 'Export Markdown', icon: icon.copy, action: () => exportMarkdown(id) },
@@ -1561,14 +1604,6 @@ function applyTheme(): void {
 
 function initEvents(): void {
   filterTag.addEventListener('change', renderTree);
-  tagForm.addEventListener('submit', event => {
-    event.preventDefault();
-    const record = activeRecord();
-    if (!record || isTrashed(record)) return;
-    saveTags(record, [...(record.tags ?? []), ...tagInput.value.split(',')]);
-    tagInput.value = '';
-    tagInput.focus();
-  });
   for (const button of document.querySelectorAll<HTMLElement>('.nav-item')) {
     button.addEventListener('click', () => {
       const view = button.dataset.view;
